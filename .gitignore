@@ -1,0 +1,89 @@
+# Ignore everything by default. This repository should track code and docs only,
+# not raw genotype/phenotype/environment datasets or generated matrices.
+*
+
+# Repository metadata and documentation
+!.gitignore
+!.gitattributes
+!README.md
+!DATA_POLICY.md
+!LICENSE
+
+# Root-level pipeline scripts
+!*.py
+!*.sh
+
+# Server pipeline code
+!server_80k_pipeline/
+!server_80k_pipeline/**
+
+# Keep generated/cache artifacts out of Git even inside tracked code folders
+__pycache__/
+*.py[cod]
+*.log
+*.out
+*.err
+*.tmp
+*.swp
+.DS_Store
+
+# Large or restricted data/output directories
+.codex_deps/
+80k/
+GBS/
+genotype_panels/
+phenotypes/
+environment/
+metadata_outputs/
+functional_annotation/
+integrated_database/
+multi_omics_data/
+
+# Common heavy scientific data formats
+*.parquet
+*.npy
+*.npz
+*.h5
+*.hdf5
+*.rds
+*.RData
+*.Rdata
+*.bw
+*.bed
+*.bed.gz
+*.bigWig
+*.vcf
+*.vcf.gz
+*.hmp.txt
+*.flapjack
+*.fq
+*.fastq
+*.fastq.gz
+*.fa
+*.fasta
+*.fa.gz
+*.fasta.gz
+*.gff
+*.gff3
+*.gtf
+*.gfa
+*.vg
+*.gbz
+
+# Raw trial spreadsheets and archives
+*.xls
+*.xlsx
+*.csv
+*.tsv
+*.tab
+*.txt
+*.7z
+*.zip
+*.gz
+
+# Allow explicit docs despite the generic text/data ignores
+!README.md
+!DATA_POLICY.md
+!server_80k_pipeline/README_80k_server_pipeline.md
+!server_80k_pipeline/requirements_server.txt
+!server_80k_pipeline/run_80k_pipeline.slurm
