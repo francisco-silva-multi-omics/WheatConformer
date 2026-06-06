@@ -144,7 +144,7 @@ Run:
 ```bash
 python server_80k_pipeline/build_observation_hadamard_kernels.py \
   --phenotypes phenotypes/model_input_phenotypes.tsv \
-  --geno-kernel genotype_panels/hmp/K_HMP.QCfiltered.npy \
+  --geno-kernel genotype_panels/hmp/K_HMP.QCfiltered.meanDiag1.npy \
   --geno-order genotype_panels/hmp/hmp_K_sample_order.QCfiltered.tsv \
   --env-kernel environment/K_E.npy \
   --env-order environment/env_kernel_sample_order.tsv \

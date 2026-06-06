@@ -92,7 +92,7 @@ def main() -> None:
     parser.add_argument(
         "--geno-kernel",
         type=Path,
-        default=BASE / "genotype_panels" / "hmp" / "K_HMP.QCfiltered.npy",
+        default=BASE / "genotype_panels" / "hmp" / "K_HMP.QCfiltered.meanDiag1.npy",
     )
     parser.add_argument(
         "--geno-order",

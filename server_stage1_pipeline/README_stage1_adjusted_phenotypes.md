@@ -130,7 +130,7 @@ After `stage1_adjusted_phenotypes.parquet` exists, build the model-ready dataset
 ```bash
 python build_stage1_model_kernels.py \
   --stage1-phenotypes phenotypes/stage1_adjusted_phenotypes.parquet \
-  --geno-kernel genotype_panels/hmp/K_HMP.QCfiltered.npy \
+  --geno-kernel genotype_panels/hmp/K_HMP.QCfiltered.meanDiag1.npy \
   --geno-order genotype_panels/hmp/hmp_K_sample_order.QCfiltered.tsv \
   --env-kernel environment/K_E.npy \
   --env-order environment/env_kernel_sample_order.tsv \

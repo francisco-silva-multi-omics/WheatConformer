@@ -6,7 +6,7 @@ from pathlib import Path
 CHECKS = [
     ("canonical_database", "integrated_database/canonical_trial_genotype_environment_plot_table.parquet", "implemented"),
     ("stage1_adjusted_phenotypes", "phenotypes/stage1_adjusted_phenotypes.parquet", "implemented"),
-    ("hmp_kernel", "genotype_panels/hmp/K_HMP.QCfiltered.npy", "implemented"),
+    ("hmp_kernel", "genotype_panels/hmp/K_HMP.QCfiltered.meanDiag1.npy", "implemented"),
     ("environment_kernel", "environment/K_E.npy", "implemented"),
     ("environment_geo_kernel", "environment/K_geo.npy", "implemented"),
     ("environment_weather_kernel", "environment/K_weather.npy", "implemented"),

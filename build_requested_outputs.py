@@ -253,6 +253,11 @@ def build_hmp_qcfiltered_outputs() -> None:
 
     K = (Z.to_numpy(dtype=np.float32) @ Z.to_numpy(dtype=np.float32).T) / denom
     K = K.astype(np.float32)
+    mean_diag = float(np.mean(np.diag(K)))
+    if np.isfinite(mean_diag) and mean_diag > 0:
+        K_mean_diag1 = (K / mean_diag).astype(np.float32)
+    else:
+        K_mean_diag1 = K
 
     X_filt = pd.concat(
         [
@@ -264,6 +269,7 @@ def build_hmp_qcfiltered_outputs() -> None:
 
     X_filt.to_parquet(out / "hmp_sample_by_marker.QCfiltered.parquet", index=False)
     np.save(out / "K_HMP.QCfiltered.npy", K)
+    np.save(out / "K_HMP.QCfiltered.meanDiag1.npy", K_mean_diag1)
     pd.DataFrame({"sample_id": sample_ids_filt}).to_csv(
         out / "hmp_K_sample_order.QCfiltered.tsv",
         sep="\t",
@@ -279,7 +285,8 @@ def build_hmp_qcfiltered_outputs() -> None:
     print("Removed high-het samples:", int((~keep_samples).sum()))
     print("Filtered matrix:", X_filt.shape)
     print("K shape:", K.shape)
-    print("K mean diagonal:", float(np.mean(np.diag(K))))
+    print("K mean diagonal:", mean_diag)
+    print("K mean diagonal after meanDiag1 scaling:", float(np.mean(np.diag(K_mean_diag1))))
 
 
 def build_dartag_outputs() -> pd.DataFrame:

@@ -105,6 +105,7 @@ The pangenome graph layer requires external genome assemblies and graph tools. S
 
 ```text
 docs/PANGENOME_GRAPH_INSTRUCTIONS.md
+docs/CODE_AND_METHODS_EXPLANATION.md
 ```
 
 This step is documented but not run by the default core pipeline.

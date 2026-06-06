@@ -142,7 +142,7 @@ def main() -> None:
     model = build_enformer_lite(window_size, bins, tracks, args.channels, args.layers, args.heads, args.dropout)
     model.compile(
         optimizer=tf.keras.optimizers.Adam(learning_rate=args.lr),
-        loss=lambda y_true, y_pred: tf.reduce_mean(tf.square(tf.math.log1p(y_pred) - tf.math.log1p(y_true))),
+        loss=tf.keras.losses.MeanSquaredError(),
         metrics=[tf.keras.metrics.MeanSquaredError(name="mse")],
     )
     callbacks = [

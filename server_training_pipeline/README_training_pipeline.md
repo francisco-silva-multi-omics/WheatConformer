@@ -24,7 +24,7 @@ Run this first if not already done:
 ```bash
 python build_stage1_model_kernels.py \
   --stage1-phenotypes phenotypes/stage1_adjusted_phenotypes.parquet \
-  --geno-kernel genotype_panels/hmp/K_HMP.QCfiltered.npy \
+  --geno-kernel genotype_panels/hmp/K_HMP.QCfiltered.meanDiag1.npy \
   --geno-order genotype_panels/hmp/hmp_K_sample_order.QCfiltered.tsv \
   --env-kernel environment/K_E.npy \
   --env-order environment/env_kernel_sample_order.tsv \
@@ -99,7 +99,7 @@ reference/IWGSC_RefSeq_v1.0.fa.fai
 
 If your FASTA path differs, edit `run_enformer_like_training.slurm` or pass `--reference-fasta`.
 
-The `.bw` and `.bed` files are used directly for sequence-to-signal training. The FPKM/count `.txt` file is cataloged in the manifest as a gene-expression matrix, but it is not used by the window-level Enformer-like trainer yet. It is useful for a later gene-level expression head once gene coordinates are added.
+The `.bw` and `.bed` files are used for sequence-to-signal training after coordinate/signal QC. The FPKM/count `.txt` file is cataloged in the manifest as a gene-expression matrix, but it is not used by the window-level Enformer-like trainer yet. It is useful for a later gene-level expression head once gene coordinates are added.
 
 Create manifest:
 
@@ -107,6 +107,15 @@ Create manifest:
 python server_training_pipeline/build_multiomics_manifest.py \
   --omics-dir multi_omics_data \
   --out functional_annotation/multiomics_file_manifest.tsv
+```
+
+Validate BED/narrowPeak and bigWig compatibility with the RefSeq v1.0 FASTA:
+
+```bash
+python server_training_pipeline/validate_multiomics_tracks.py \
+  --manifest functional_annotation/multiomics_file_manifest.tsv \
+  --reference-fasta reference/IWGSC_RefSeq_v1.0.fa \
+  --out-dir functional_annotation/multiomics_qc
 ```
 
 Build windows:
@@ -117,10 +126,15 @@ python server_training_pipeline/build_enformer_training_windows.py \
   --reference-fasta reference/IWGSC_RefSeq_v1.0.fa \
   --out-h5 regulatory_model/enformer_windows.h5 \
   --out-intervals regulatory_model/enformer_windows.tsv \
-  --window-size 4096 \
+  --window-size 16384 \
   --bin-size 128 \
-  --max-windows 200000
+  --max-windows 200000 \
+  --max-n-fraction 0.25 \
+  --negative-ratio 0.25 \
+  --track-scale p95
 ```
+
+With these wheat defaults, the model uses 128 bins per window (`16384 / 128`). The window file also stores chromosome, A/B/D subgenome label when detectable, peak/control label, and N fraction.
 
 For a first server smoke test, use fewer windows and optionally fewer tracks:
 
@@ -130,10 +144,12 @@ python server_training_pipeline/build_enformer_training_windows.py \
   --reference-fasta reference/IWGSC_RefSeq_v1.0.fa \
   --out-h5 regulatory_model/enformer_windows_smoke.h5 \
   --out-intervals regulatory_model/enformer_windows_smoke.tsv \
-  --window-size 4096 \
+  --window-size 16384 \
   --bin-size 128 \
   --max-windows 10000 \
-  --max-tracks 16
+  --max-tracks 16 \
+  --negative-ratio 0.25 \
+  --track-scale p95
 ```
 
 Useful track filters:
@@ -160,7 +176,7 @@ python server_training_pipeline/train_enformer_like_tf.py \
   --layers 4 \
   --heads 6 \
   --epochs 50 \
-  --batch-size 16
+  --batch-size 8
 ```
 
 SLURM:

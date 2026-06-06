@@ -77,12 +77,14 @@ bash scripts/04_run_regulatory_enformer_tf.sh
 ## Main Outputs
 
 ```text
-genotype_panels/hmp/K_HMP.QCfiltered.npy
+genotype_panels/hmp/K_HMP.QCfiltered.meanDiag1.npy
 environment/K_E.npy
 phenotypes/stage1_adjusted_phenotypes.parquet
 integrated_database/canonical_trial_genotype_environment_plot_table.parquet
 model_kernels/stage1_hmp_env/
 trained_models/stage1_mkl/
+functional_annotation/multiomics_qc/
+regulatory_model/enformer_windows.h5
 ```
 
 Optional external panels:
@@ -104,6 +106,7 @@ docs/ENVIRONMENT_KERNEL_FIX.md
 docs/PANGENOME_GRAPH_INSTRUCTIONS.md
 docs/SERVER_FROM_NAIVE_DATA.md
 docs/MODEL_IMPLEMENTATION_STATUS.md
+docs/CODE_AND_METHODS_EXPLANATION.md
 server_80k_pipeline/README_80k_server_pipeline.md
 server_stage1_pipeline/README_stage1_adjusted_phenotypes.md
 server_gbs_pipeline/README_GBS_SAWYT_pipeline.md
