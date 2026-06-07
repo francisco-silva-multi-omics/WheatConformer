@@ -13,8 +13,24 @@ from scipy.optimize import minimize
 def read_table(path: Path) -> pd.DataFrame:
     suffix = "".join(path.suffixes).lower()
     if suffix.endswith(".parquet"):
-        return pd.read_parquet(path)
+        try:
+            return pd.read_parquet(path)
+        except ImportError:
+            fallback = path.with_suffix(".tsv.gz")
+            if fallback.exists():
+                return pd.read_csv(fallback, sep="\t", low_memory=False)
+            raise
     return pd.read_csv(path, sep="\t", low_memory=False)
+
+
+def write_table(df: pd.DataFrame, parquet_path: Path) -> Path:
+    try:
+        df.to_parquet(parquet_path, index=False)
+        return parquet_path
+    except ImportError:
+        fallback = parquet_path.with_suffix(".tsv.gz")
+        df.to_csv(fallback, sep="\t", index=False)
+        return fallback
 
 
 def clean(s: pd.Series) -> pd.Series:
@@ -93,6 +109,8 @@ def main() -> None:
     parser.add_argument("--observations", type=Path, required=True)
     parser.add_argument("--k-g", type=Path, required=True)
     parser.add_argument("--k-g-order", type=Path, required=True)
+    parser.add_argument("--k-g-rbf", type=Path)
+    parser.add_argument("--k-g-rbf-order", type=Path)
     parser.add_argument("--k-e", type=Path, required=True)
     parser.add_argument("--k-e-order", type=Path, required=True)
     parser.add_argument("--k-a", type=Path)
@@ -109,6 +127,7 @@ def main() -> None:
     parser.add_argument("--weight-col", default="weight_g_e")
     parser.add_argument("--fixed-effect-col", action="append", default=[])
     parser.add_argument("--include-ge", action="store_true")
+    parser.add_argument("--include-rbf-e", action="store_true")
     parser.add_argument("--include-ae", action="store_true")
     parser.add_argument("--include-ze", action="store_true")
     parser.add_argument("--max-observations", type=int, default=12000)
@@ -144,6 +163,19 @@ def main() -> None:
     ]
     if args.include_ge:
         kernels.append(("K_GE", kernels[0][1] * kernels[1][1]))
+
+    if args.k_g_rbf:
+        KGRBF = np.load(args.k_g_rbf).astype(np.float64)
+        rbf_order = load_order(args.k_g_rbf_order or args.k_g_order)
+        ri = (
+            compact_index_from_order(obs, "geno_kernel_index", rbf_order)
+            if "geno_kernel_index" in obs
+            else id_index(obs[args.geno_id_col], rbf_order, "sample_id")
+        )
+        KGRBF_obs = KGRBF[np.ix_(ri, ri)]
+        kernels.append(("K_G_RBF", KGRBF_obs))
+        if args.include_rbf_e:
+            kernels.append(("K_G_RBF_E", KGRBF_obs * kernels[1][1]))
 
     if args.k_a:
         if not args.k_a_order:
@@ -203,7 +235,7 @@ def main() -> None:
     obs_out = obs.copy()
     obs_out["reml_predicted"] = pred_scaled * y_sd + y_mu
     obs_out["reml_residual"] = y_raw - obs_out["reml_predicted"]
-    obs_out.to_parquet(args.out_dir / f"{args.prefix}_fitted_observations.parquet", index=False)
+    fitted_path = write_table(obs_out, args.out_dir / f"{args.prefix}_fitted_observations.parquet")
 
     vc = pd.DataFrame(
         [{"component": name, "variance_scaled": float(v)} for (name, _), v in zip(kernels, variances[:-1])]
@@ -223,6 +255,7 @@ def main() -> None:
                 "response_mean": y_mu,
                 "response_sd": y_sd,
                 "kernels": [name for name, _ in kernels],
+                "fitted_observations": str(fitted_path),
             },
             handle,
             indent=2,

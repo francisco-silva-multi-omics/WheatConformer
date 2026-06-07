@@ -134,6 +134,17 @@ def validate_kernel(
         max_abs = float(np.nanmax(np.abs(block - block.T)))
         status = "PASS" if math.isfinite(max_abs) and max_abs <= 1e-4 else ("FAIL" if required else "WARN")
         add_report(rows, f"{component}_kernel_sample_symmetry", status, kernel_path, f"sampled_n={len(sym_idx)} max_abs_diff={max_abs:.6g}", required)
+        symmetric_block = (block + block.T) / 2.0
+        min_eigenvalue = float(np.linalg.eigvalsh(symmetric_block)[0])
+        psd_status = "PASS" if math.isfinite(min_eigenvalue) and min_eigenvalue >= -1e-4 else ("FAIL" if required else "WARN")
+        add_report(
+            rows,
+            f"{component}_kernel_sample_psd",
+            psd_status,
+            kernel_path,
+            f"sampled_n={len(sym_idx)} min_eigenvalue={min_eigenvalue:.6g}",
+            required,
+        )
 
     return {"path": str(kernel_path), "shape": list(K.shape), "dtype": str(K.dtype), "order_path": str(order_path), "order_col": selected_col}
 
@@ -219,13 +230,17 @@ def validate_compact_orders(
 ) -> dict[str, Any]:
     manifest: dict[str, Any] = {}
     kg = validate_kernel(args.compact_g_kernel, args.compact_g_order, None, "compact_K_G", rows, True, sample_n)
+    kg_rbf = validate_kernel(args.compact_g_rbf_kernel, args.compact_g_order, None, "compact_K_G_RBF", rows, True, sample_n)
     ke = validate_kernel(args.compact_e_kernel, args.compact_e_order, None, "compact_K_E", rows, True, sample_n)
     if kg:
         manifest["compact_K_G"] = kg
+    if kg_rbf:
+        manifest["compact_K_G_RBF"] = kg_rbf
     if ke:
         manifest["compact_K_E"] = ke
     for label, kernel, order, expected_unique in [
         ("compact_K_G", kg, args.compact_g_order, "unique_genotypes"),
+        ("compact_K_G_RBF", kg_rbf, args.compact_g_order, "unique_genotypes"),
         ("compact_K_E", ke, args.compact_e_order, "unique_environments"),
     ]:
         if kernel and obs_summary:
@@ -259,6 +274,36 @@ def validate_optional_kernel(
     return info
 
 
+def validate_gaussian_qc(path: Path, rows: list[dict[str, Any]]) -> dict[str, Any] | None:
+    if not path_status(rows, "full_K_G_RBF_qc_file", path, True):
+        return None
+    try:
+        qc = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        add_report(rows, "full_K_G_RBF_qc_read", "FAIL", path, f"could not parse JSON: {exc}", True)
+        return None
+    gamma = float(qc.get("gamma", float("nan")))
+    median_d2 = float(qc.get("sampled_median_squared_distance", float("nan")))
+    min_eigenvalue = float(qc.get("sampled_min_eigenvalue", float("nan")))
+    valid = (
+        math.isfinite(gamma)
+        and gamma > 0
+        and math.isfinite(median_d2)
+        and median_d2 > 0
+        and math.isfinite(min_eigenvalue)
+        and min_eigenvalue >= -1e-4
+    )
+    add_report(
+        rows,
+        "full_K_G_RBF_qc_values",
+        "PASS" if valid else "FAIL",
+        path,
+        f"gamma={gamma:.6g}; median_d2={median_d2:.6g}; sampled_min_eigenvalue={min_eigenvalue:.6g}",
+        True,
+    )
+    return qc
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Validate model-ready matrices against the thesis multikernel methodology.")
     parser.add_argument("--root", type=Path, default=Path("."))
@@ -269,10 +314,13 @@ def main() -> None:
     parser.add_argument("--observations", type=Path)
     parser.add_argument("--indices", type=Path)
     parser.add_argument("--geno-kernel", type=Path, default=Path("genotype_panels/hmp/K_HMP.QCfiltered.meanDiag1.npy"))
+    parser.add_argument("--geno-rbf-kernel", type=Path, default=Path("genotype_panels/hmp/K_HMP.QCfiltered.gaussian.npy"))
+    parser.add_argument("--geno-rbf-qc", type=Path, default=Path("genotype_panels/hmp/K_HMP.QCfiltered.gaussian.qc.json"))
     parser.add_argument("--geno-order", type=Path, default=Path("genotype_panels/hmp/hmp_K_sample_order.QCfiltered.tsv"))
     parser.add_argument("--env-kernel", type=Path, default=Path("environment/K_E.npy"))
     parser.add_argument("--env-order", type=Path, default=Path("environment/env_kernel_sample_order.tsv"))
     parser.add_argument("--compact-g-kernel", type=Path)
+    parser.add_argument("--compact-g-rbf-kernel", type=Path)
     parser.add_argument("--compact-g-order", type=Path)
     parser.add_argument("--compact-e-kernel", type=Path)
     parser.add_argument("--compact-e-order", type=Path)
@@ -293,6 +341,7 @@ def main() -> None:
             args.observations = fallback_observations
     args.indices = args.indices or args.model_dir / f"{args.prefix}_observation_kernel_indices.npz"
     args.compact_g_kernel = args.compact_g_kernel or args.model_dir / f"{args.prefix}_K_G_unique.npy"
+    args.compact_g_rbf_kernel = args.compact_g_rbf_kernel or args.model_dir / f"{args.prefix}_K_G_RBF_unique.npy"
     args.compact_g_order = args.compact_g_order or args.model_dir / f"{args.prefix}_K_G_unique_order.tsv"
     args.compact_e_kernel = args.compact_e_kernel or args.model_dir / f"{args.prefix}_K_E_unique.npy"
     args.compact_e_order = args.compact_e_order or args.model_dir / f"{args.prefix}_K_E_unique_order.tsv"
@@ -301,10 +350,13 @@ def main() -> None:
         "observations",
         "indices",
         "geno_kernel",
+        "geno_rbf_kernel",
+        "geno_rbf_qc",
         "geno_order",
         "env_kernel",
         "env_order",
         "compact_g_kernel",
+        "compact_g_rbf_kernel",
         "compact_g_order",
         "compact_e_kernel",
         "compact_e_order",
@@ -322,9 +374,15 @@ def main() -> None:
     manifest: dict[str, Any] = {"root": str(args.root), "methodology": "non-pangenome model matrices; pangenome external"}
 
     full_g = validate_kernel(args.geno_kernel, args.geno_order, "sample_id", "full_K_G", rows, True, args.sample_n)
+    full_g_rbf = validate_kernel(args.geno_rbf_kernel, args.geno_order, "sample_id", "full_K_G_RBF", rows, True, args.sample_n)
     full_e = validate_kernel(args.env_kernel, args.env_order, "env_id", "full_K_E", rows, True, args.sample_n)
     if full_g:
         manifest["full_K_G"] = full_g
+    if full_g_rbf:
+        manifest["full_K_G_RBF"] = full_g_rbf
+    gaussian_qc = validate_gaussian_qc(args.geno_rbf_qc, rows)
+    if gaussian_qc:
+        manifest["full_K_G_RBF_qc"] = gaussian_qc
     if full_e:
         manifest["full_K_E"] = full_e
 

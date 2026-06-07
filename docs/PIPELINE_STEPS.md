@@ -74,6 +74,8 @@ sbatch server_80k_pipeline/run_80k_pipeline.slurm
 bash scripts/02_run_model_inputs.sh
 ```
 
+The core pipeline builds both the additive VanRaden genomic kernel and a Gaussian/RBF genomic kernel. The Gaussian bandwidth defaults to the inverse median sampled squared genomic distance and can be adjusted with `GAUSSIAN_GAMMA_MULTIPLIER`.
+
 ## Phase 4: TensorFlow Baseline Training
 
 ```bash

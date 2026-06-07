@@ -7,13 +7,14 @@ This file separates implemented reproducible steps from thesis-level components 
 ```text
 Canonical integrated database
 HMP dosage/QC-filtered genomic kernel
+Gaussian/RBF genomic kernel with median-distance bandwidth
 GBS SAWYT genomic kernel, when GBS raw data are present
 DArTseq landrace diversity QC
 80k external diversity marker-prior context
 Environment component kernels: K_geo, K_weather, K_stress, K_mgmt, K_E
 Stage-1 adjusted phenotype table
-Model-ready TensorFlow inputs with compact genotype/environment indices
-TensorFlow low-rank multikernel GxE predictive baseline
+Model-ready TensorFlow inputs with compact additive/Gaussian genotype and environment kernels
+TensorFlow low-rank additive, Gaussian, GxE, and Gaussian-by-environment predictive baseline
 Reference-based TensorFlow CNN+Transformer regulatory pretraining prototype
 ```
 
@@ -33,12 +34,12 @@ Attribution-supported prioritized loci/haplotypes
 
 ## Practical Baseline Interpretation
 
-The current TensorFlow multikernel script is a scalable predictive baseline. It uses low-rank factors of `K_G` and `K_E` and a bilinear GxE term. It is not yet a formal REML mixed model with variance components.
+The current TensorFlow multikernel script is a scalable predictive baseline. It uses low-rank factors of `K_G`, `K_G_RBF`, and `K_E`, with additive and Gaussian genomic reaction-norm terms. It is not yet a formal REML mixed model with variance components.
 
 Use it as:
 
 ```text
-baseline: K_G + K_E + low-rank GxE
+baseline: K_G + K_G_RBF + K_E + low-rank GxE + low-rank K_G_RBF-by-E
 ```
 
 Do not describe it as:

@@ -186,6 +186,31 @@ This is a VanRaden-like additive genomic relationship matrix. It measures expect
 
 Before model fitting, the kernel is divided by its mean diagonal. This preserves relative relationships while placing genomic, environmental, and derived kernels on a comparable scale.
 
+### Gaussian Genomic Kernel K_G_RBF
+
+The additive VanRaden kernel is retained, but it is complemented by:
+
+```text
+genotype_panels/hmp/K_HMP.QCfiltered.gaussian.npy
+```
+
+The Gaussian kernel is built from squared distances in the additive genomic feature space:
+
+```text
+d_G(i,j)^2 = K_G(i,i) + K_G(j,j) - 2 K_G(i,j)
+K_G_RBF(i,j) = exp(-gamma d_G(i,j)^2)
+```
+
+By default:
+
+```text
+gamma = 1 / median(sampled positive d_G^2)
+```
+
+This median-distance heuristic prevents the kernel from collapsing toward either an identity matrix or an all-ones matrix. `GAUSSIAN_GAMMA_MULTIPLIER` can be varied and selected using held-out validation.
+
+`K_G_RBF` captures nonlinear similarity in the genome-wide marker feature space and can improve prediction when the genotype-to-phenotype relationship is nonadditive. It can represent epistatic-like predictive patterns, but it does not identify individual marker-by-marker epistatic effects. For that reason, `K_G` and `K_G_RBF` are kept as separate model components and compared through ablation.
+
 ## 7. DArTAG, MAS, DArTseq Landrace, GBS, And 80k Panels
 
 Main scripts:
@@ -331,6 +356,7 @@ Instead, the script stores:
 
 ```text
 unique genotype kernel
+unique Gaussian genotype kernel
 unique environment kernel
 observation-to-genotype index
 observation-to-environment index
@@ -396,23 +422,25 @@ Main script:
 server_training_pipeline/train_multikernel_gxe_tf.py
 ```
 
-The scalable TensorFlow model uses low-rank factors of `K_G` and `K_E`:
+The scalable TensorFlow model uses low-rank factors of `K_G`, `K_G_RBF`, and `K_E`:
 
 ```text
 K_G approx F_G F_G'
+K_G_RBF approx F_RBF F_RBF'
 K_E approx F_E F_E'
 ```
 
 The model form is:
 
 ```text
-y = intercept + F_G(g)b_G + F_E(e)b_E + F_G(g)B_GE F_E(e)
+y = intercept + F_G(g)b_G + F_RBF(g)b_RBF + F_E(e)b_E
+    + F_G(g)B_GE F_E(e) + F_RBF(g)B_RBFE F_E(e)
 ```
 
 This is a scalable predictive approximation to:
 
 ```text
-K_G + K_E + K_GE
+K_G + K_G_RBF + K_E + K_GE + K_G_RBF_E
 ```
 
 It is intended for large-scale prediction. It is not a formal REML variance-component model.
@@ -428,15 +456,18 @@ server_training_pipeline/fit_multikernel_reml.py
 This script fits a dense REML model for filtered subsets:
 
 ```text
-y = X beta + u_G + u_E + u_GE + optional u_A + optional u_AE + optional u_z + optional u_zE + residual
+y = X beta + u_G + u_G_RBF + u_E + u_GE + optional u_G_RBF_E
+    + optional u_A + optional u_AE + optional u_z + optional u_zE + residual
 ```
 
 Supported kernels:
 
 ```text
 K_G
+K_G_RBF
 K_E
 K_GE = K_G o K_E
+K_G_RBF_E = K_G_RBF o K_E
 K_A
 K_AE = K_A o K_E
 K_z
@@ -471,9 +502,12 @@ G
 E
 G+E
 G+E+GE
+RBF
+G+RBF+E
+G+RBF+E+GE+RBFE
 ```
 
-The reason for ablations is to quantify what each kernel contributes. A serious model should show whether prediction gains come from genotype, environment, interaction, or added functional/pedigree information.
+The reason for ablations is to quantify what each kernel contributes. In particular, the Gaussian kernel should be retained only when held-out validation shows improvement beyond the additive genomic kernel.
 
 ## 15. Pedigree Kernel K_A
 

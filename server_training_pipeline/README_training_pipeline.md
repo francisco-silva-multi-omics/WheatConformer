@@ -15,7 +15,7 @@ For the current stage-1 table, hundreds of thousands of observations imply an ob
 N x N
 ```
 
-At `N = 433,000`, one float32 matrix would be roughly 700 GiB. Four matrices (`K_G`, `K_E`, `K_GE`, `K_total`) would be several TiB. The methodology therefore uses indexed operators, Hadamard products at observation level, and low-rank factors.
+At `N = 433,000`, one float32 matrix would be roughly 700 GiB. The additive, Gaussian, environment, interaction, and combined observation kernels would require several TiB. The methodology therefore uses indexed operators, Hadamard products at observation level, and low-rank factors.
 
 ## 1. Prepare Model-Ready Stage-1 Kernel Inputs
 
@@ -25,6 +25,8 @@ Run this first if not already done:
 python build_stage1_model_kernels.py \
   --stage1-phenotypes phenotypes/stage1_adjusted_phenotypes.parquet \
   --geno-kernel genotype_panels/hmp/K_HMP.QCfiltered.meanDiag1.npy \
+  --geno-rbf-kernel genotype_panels/hmp/K_HMP.QCfiltered.gaussian.npy \
+  --require-geno-rbf \
   --geno-order genotype_panels/hmp/hmp_K_sample_order.QCfiltered.tsv \
   --env-kernel environment/K_E.npy \
   --env-order environment/env_kernel_sample_order.tsv \
@@ -49,12 +51,14 @@ Run:
 python server_training_pipeline/train_multikernel_gxe_tf.py \
   --observations model_kernels/stage1_hmp_env/stage1_hmp_env_model_ready_stage1_observations.parquet \
   --k-g-unique model_kernels/stage1_hmp_env/stage1_hmp_env_K_G_unique.npy \
+  --k-g-rbf-unique model_kernels/stage1_hmp_env/stage1_hmp_env_K_G_RBF_unique.npy \
   --k-e-unique model_kernels/stage1_hmp_env/stage1_hmp_env_K_E_unique.npy \
   --k-g-order model_kernels/stage1_hmp_env/stage1_hmp_env_K_G_unique_order.tsv \
   --k-e-order model_kernels/stage1_hmp_env/stage1_hmp_env_K_E_unique_order.tsv \
   --out-dir trained_models/stage1_mkl \
   --prefix stage1_hmp_env_mkl_gxe_tf \
   --rank-g 128 \
+  --rank-g-rbf 128 \
   --rank-e 64 \
   --split loeo \
   --epochs 200 \
@@ -80,10 +84,11 @@ trained_models/stage1_mkl/*_summary.tsv
 Model form:
 
 ```text
-y = intercept + f_G(g)'b_G + f_E(e)'b_E + f_G(g)'B_GE f_E(e)
+y = intercept + f_G(g)'b_G + f_RBF(g)'b_RBF + f_E(e)'b_E
+    + f_G(g)'B_GE f_E(e) + f_RBF(g)'B_RBFE f_E(e)
 ```
 
-where `f_G` and `f_E` are low-rank factors of `K_G` and `K_E`. The bilinear term is the scalable equivalent of the Hadamard `K_G o K_E` interaction.
+where `f_G`, `f_RBF`, and `f_E` are low-rank factors of the additive genomic, Gaussian genomic, and environment kernels. The Gaussian kernel captures nonlinear genomic similarity; it complements rather than replaces VanRaden's additive relationship kernel.
 
 ## 3. Train Enformer-Like Regulatory Module
 
@@ -200,10 +205,12 @@ python server_training_pipeline/fit_multikernel_reml.py \
   --observations model_kernels/stage1_hmp_env/stage1_hmp_env_model_ready_stage1_observations.parquet \
   --k-g model_kernels/stage1_hmp_env/stage1_hmp_env_K_G_unique.npy \
   --k-g-order model_kernels/stage1_hmp_env/stage1_hmp_env_K_G_unique_order.tsv \
+  --k-g-rbf model_kernels/stage1_hmp_env/stage1_hmp_env_K_G_RBF_unique.npy \
   --k-e model_kernels/stage1_hmp_env/stage1_hmp_env_K_E_unique.npy \
   --k-e-order model_kernels/stage1_hmp_env/stage1_hmp_env_K_E_unique_order.tsv \
   --trait GRAIN_YIELD \
   --include-ge \
+  --include-rbf-e \
   --fixed-effect-col cycle \
   --out-dir trained_models/reml_grain_yield \
   --prefix grain_yield_KG_KE_KGE \
@@ -217,6 +224,7 @@ python server_training_pipeline/fit_multikernel_reml.py \
   --observations model_kernels/stage1_hmp_env/stage1_hmp_env_model_ready_stage1_observations.parquet \
   --k-g model_kernels/stage1_hmp_env/stage1_hmp_env_K_G_unique.npy \
   --k-g-order model_kernels/stage1_hmp_env/stage1_hmp_env_K_G_unique_order.tsv \
+  --k-g-rbf model_kernels/stage1_hmp_env/stage1_hmp_env_K_G_RBF_unique.npy \
   --k-e model_kernels/stage1_hmp_env/stage1_hmp_env_K_E_unique.npy \
   --k-e-order model_kernels/stage1_hmp_env/stage1_hmp_env_K_E_unique_order.tsv \
   --k-a genotype_panels/pedigree/K_A.npy \
@@ -225,6 +233,7 @@ python server_training_pipeline/fit_multikernel_reml.py \
   --k-z-order model_kernels/K_z_sample_order.tsv \
   --trait GRAIN_YIELD \
   --include-ge \
+  --include-rbf-e \
   --include-ae \
   --include-ze \
   --out-dir trained_models/reml_grain_yield_full \
@@ -265,6 +274,7 @@ python server_training_pipeline/build_Kz_from_embeddings.py \
 python server_training_pipeline/run_validation_ablation_suite.py \
   --observations model_kernels/stage1_hmp_env/stage1_hmp_env_model_ready_stage1_observations.parquet \
   --k-g-unique model_kernels/stage1_hmp_env/stage1_hmp_env_K_G_unique.npy \
+  --k-g-rbf-unique model_kernels/stage1_hmp_env/stage1_hmp_env_K_G_RBF_unique.npy \
   --k-e-unique model_kernels/stage1_hmp_env/stage1_hmp_env_K_E_unique.npy \
   --k-g-order model_kernels/stage1_hmp_env/stage1_hmp_env_K_G_unique_order.tsv \
   --k-e-order model_kernels/stage1_hmp_env/stage1_hmp_env_K_E_unique_order.tsv \
@@ -278,5 +288,7 @@ This runs:
 
 ```text
 CV2, LOEO, LOYO, LOTO, LOCO, LOFO
-G, E, G+E, G+E+GE
+G, E, G+E, G+E+GE, RBF, G+RBF+E, G+RBF+E+GE+RBFE
 ```
+
+The Gaussian bandwidth is a hyperparameter. The default median-distance heuristic is a stable starting point, but final reporting should compare `GAUSSIAN_GAMMA_MULTIPLIER` values such as `0.25`, `0.5`, `1`, `2`, and `4` under the same held-out splits.

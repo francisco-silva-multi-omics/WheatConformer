@@ -7,6 +7,8 @@ echo "[1/2] HMP + environment model-ready stage-1 inputs"
 python build_stage1_model_kernels.py \
   --stage1-phenotypes phenotypes/stage1_adjusted_phenotypes.parquet \
   --geno-kernel genotype_panels/hmp/K_HMP.QCfiltered.meanDiag1.npy \
+  --geno-rbf-kernel genotype_panels/hmp/K_HMP.QCfiltered.gaussian.npy \
+  --require-geno-rbf \
   --geno-order genotype_panels/hmp/hmp_K_sample_order.QCfiltered.tsv \
   --env-kernel environment/K_E.npy \
   --env-order environment/env_kernel_sample_order.tsv \

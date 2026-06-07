@@ -78,6 +78,7 @@ bash scripts/04_run_regulatory_enformer_tf.sh
 
 ```text
 genotype_panels/hmp/K_HMP.QCfiltered.meanDiag1.npy
+genotype_panels/hmp/K_HMP.QCfiltered.gaussian.npy
 environment/K_E.npy
 phenotypes/stage1_adjusted_phenotypes.parquet
 integrated_database/canonical_trial_genotype_environment_plot_table.parquet

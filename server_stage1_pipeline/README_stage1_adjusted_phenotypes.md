@@ -131,6 +131,8 @@ After `stage1_adjusted_phenotypes.parquet` exists, build the model-ready dataset
 python build_stage1_model_kernels.py \
   --stage1-phenotypes phenotypes/stage1_adjusted_phenotypes.parquet \
   --geno-kernel genotype_panels/hmp/K_HMP.QCfiltered.meanDiag1.npy \
+  --geno-rbf-kernel genotype_panels/hmp/K_HMP.QCfiltered.gaussian.npy \
+  --require-geno-rbf \
   --geno-order genotype_panels/hmp/hmp_K_sample_order.QCfiltered.tsv \
   --env-kernel environment/K_E.npy \
   --env-order environment/env_kernel_sample_order.tsv \
@@ -145,6 +147,7 @@ Main outputs:
 model_kernels/stage1_hmp_env/stage1_hmp_env_model_ready_stage1_observations.parquet
 model_kernels/stage1_hmp_env/stage1_hmp_env_observation_kernel_indices.npz
 model_kernels/stage1_hmp_env/stage1_hmp_env_K_G_unique.npy
+model_kernels/stage1_hmp_env/stage1_hmp_env_K_G_RBF_unique.npy
 model_kernels/stage1_hmp_env/stage1_hmp_env_K_E_unique.npy
 model_kernels/stage1_hmp_env/stage1_hmp_env_K_G_unique_order.tsv
 model_kernels/stage1_hmp_env/stage1_hmp_env_K_E_unique_order.tsv
@@ -170,8 +173,10 @@ Dense outputs, when allowed:
 
 ```text
 *_K_G_obs.npy
+*_K_G_RBF_obs.npy
 *_K_E_obs.npy
 *_K_GE_hadamard.npy
+*_K_G_RBF_E_hadamard.npy
 *_K_total.npy
 ```
 
@@ -179,7 +184,8 @@ The Hadamard term is:
 
 ```text
 K_GE = K_G_obs o K_E_obs
-K_total = wG K_G_obs + wE K_E_obs + wGE K_GE
+K_RBFE = K_G_RBF_obs o K_E_obs
+K_total = wG K_G_obs + wRBF K_G_RBF_obs + wE K_E_obs + wGE K_GE + wRBFE K_RBFE
 ```
 
 For the full dataset, use the compact indices with the unique kernels and evaluate the covariance lazily in the model code.

@@ -70,6 +70,14 @@ log "Pangenome is external only. GFA='${PANGENOME_GFA}' GBZ='${PANGENOME_GBZ}' H
 
 run_step 01_trial_gid_map "$PYTHON" trial_GID_map.py
 run_step 02_requested_outputs "$PYTHON" build_requested_outputs.py
+run_step 02b_gaussian_genomic_kernel "$PYTHON" build_gaussian_genomic_kernel.py \
+  --linear-kernel genotype_panels/hmp/K_HMP.QCfiltered.meanDiag1.npy \
+  --sample-order genotype_panels/hmp/hmp_K_sample_order.QCfiltered.tsv \
+  --out-kernel genotype_panels/hmp/K_HMP.QCfiltered.gaussian.npy \
+  --out-qc genotype_panels/hmp/K_HMP.QCfiltered.gaussian.qc.json \
+  --gamma-multiplier "${GAUSSIAN_GAMMA_MULTIPLIER:-1.0}" \
+  --median-sample-size "${GAUSSIAN_MEDIAN_SAMPLE_SIZE:-2048}" \
+  --chunk-size "${GAUSSIAN_CHUNK_SIZE:-256}"
 run_step 03_next_integration_layer "$PYTHON" build_next_integration_layer.py
 run_step 04_dartseq_landrace_qc "$PYTHON" build_dartseq_landrace_diversity_qc.py
 run_step 05_integrate_80k_catalog "$PYTHON" integrate_80k_diversity_panel.py
@@ -132,6 +140,7 @@ fi
 log "Stage-1 phenotype input for model matrices: ${STAGE1_PHENOTYPES}"
 require_file genotype_panels/hmp/K_HMP.QCfiltered.npy "HMP QC genotype kernel"
 require_file genotype_panels/hmp/K_HMP.QCfiltered.meanDiag1.npy "mean-diagonal-scaled HMP QC genotype kernel"
+require_file genotype_panels/hmp/K_HMP.QCfiltered.gaussian.npy "Gaussian HMP genomic kernel"
 require_file genotype_panels/hmp/hmp_K_sample_order.QCfiltered.tsv "HMP QC sample order"
 require_file environment/K_E.npy "environment kernel"
 require_file environment/env_kernel_sample_order.tsv "environment kernel order"
@@ -141,6 +150,8 @@ hmp_model_args=(
   build_stage1_model_kernels.py
   --stage1-phenotypes "$STAGE1_PHENOTYPES"
   --geno-kernel "$HMP_KERNEL"
+  --geno-rbf-kernel genotype_panels/hmp/K_HMP.QCfiltered.gaussian.npy
+  --require-geno-rbf
   --geno-order genotype_panels/hmp/hmp_K_sample_order.QCfiltered.tsv
   --env-kernel environment/K_E.npy
   --env-order environment/env_kernel_sample_order.tsv

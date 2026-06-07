@@ -130,7 +130,7 @@ K_z_sample_order.tsv
 Then rerun the multikernel baseline with:
 
 ```text
-K_G + K_E + K_GE + K_z + K_zE
+K_G + K_G_RBF + K_E + K_GE + K_G_RBF_E + K_z + K_zE
 ```
 
 Current repository status:

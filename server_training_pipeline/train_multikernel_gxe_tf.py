@@ -106,14 +106,25 @@ def metrics(y_true: np.ndarray, y_pred: np.ndarray, w: np.ndarray | None = None)
 
 
 class LowRankGxE(tf.keras.Model):
-    def __init__(self, g_factors: np.ndarray, e_factors: np.ndarray, include_ge: bool = True, weight_decay: float = 0.0):
+    def __init__(
+        self,
+        g_factors: np.ndarray,
+        e_factors: np.ndarray,
+        g_rbf_factors: np.ndarray | None = None,
+        include_ge: bool = True,
+        include_rbf_e: bool = True,
+        weight_decay: float = 0.0,
+    ):
         super().__init__()
         self.G = tf.constant(g_factors, dtype=tf.float32)
         self.E = tf.constant(e_factors, dtype=tf.float32)
+        self.G_RBF = tf.constant(g_rbf_factors, dtype=tf.float32) if g_rbf_factors is not None else None
         self.include_ge = include_ge
+        self.include_rbf_e = include_rbf_e and g_rbf_factors is not None
         self.weight_decay = float(weight_decay)
         rg = g_factors.shape[1]
         re = e_factors.shape[1]
+        rr = g_rbf_factors.shape[1] if g_rbf_factors is not None else 0
         self.intercept = self.add_weight(name="intercept", shape=(), initializer="zeros", trainable=True)
         self.beta_g = self.add_weight(
             name="beta_g",
@@ -127,6 +138,16 @@ class LowRankGxE(tf.keras.Model):
             initializer=tf.keras.initializers.RandomNormal(stddev=0.01),
             trainable=True,
         )
+        self.beta_g_rbf = (
+            self.add_weight(
+                name="beta_g_rbf",
+                shape=(rr,),
+                initializer=tf.keras.initializers.RandomNormal(stddev=0.01),
+                trainable=True,
+            )
+            if g_rbf_factors is not None
+            else None
+        )
         self.beta_ge = (
             self.add_weight(
                 name="beta_ge",
@@ -137,22 +158,41 @@ class LowRankGxE(tf.keras.Model):
             if include_ge
             else None
         )
+        self.beta_g_rbf_e = (
+            self.add_weight(
+                name="beta_g_rbf_e",
+                shape=(rr, re),
+                initializer=tf.keras.initializers.RandomNormal(stddev=0.001),
+                trainable=True,
+            )
+            if self.include_rbf_e
+            else None
+        )
 
     def call(self, inputs, training: bool = False):
         gi, ei = inputs
         fg = tf.gather(self.G, gi)
         fe = tf.gather(self.E, ei)
         pred = self.intercept + tf.linalg.matvec(fg, self.beta_g) + tf.linalg.matvec(fe, self.beta_e)
+        fr = tf.gather(self.G_RBF, gi) if self.G_RBF is not None else None
+        if fr is not None:
+            pred = pred + tf.linalg.matvec(fr, self.beta_g_rbf)
         if self.include_ge:
             pred = pred + tf.einsum("br,bs,rs->b", fg, fe, self.beta_ge)
+        if self.include_rbf_e:
+            pred = pred + tf.einsum("br,bs,rs->b", fr, fe, self.beta_g_rbf_e)
         return pred
 
     def regularization_loss(self) -> tf.Tensor:
         if self.weight_decay <= 0:
             return tf.constant(0.0, dtype=tf.float32)
         terms = [tf.reduce_sum(self.beta_g**2), tf.reduce_sum(self.beta_e**2)]
+        if self.beta_g_rbf is not None:
+            terms.append(tf.reduce_sum(self.beta_g_rbf**2))
         if self.beta_ge is not None:
             terms.append(tf.reduce_sum(self.beta_ge**2))
+        if self.beta_g_rbf_e is not None:
+            terms.append(tf.reduce_sum(self.beta_g_rbf_e**2))
         return self.weight_decay * tf.add_n(terms)
 
 
@@ -183,6 +223,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--observations", type=Path, required=True)
     parser.add_argument("--k-g-unique", type=Path, required=True)
+    parser.add_argument("--k-g-rbf-unique", type=Path)
     parser.add_argument("--k-e-unique", type=Path, required=True)
     parser.add_argument("--k-g-order", type=Path, required=True)
     parser.add_argument("--k-e-order", type=Path, required=True)
@@ -190,8 +231,10 @@ def main() -> None:
     parser.add_argument("--prefix", default="stage1_mkl_tf")
     parser.add_argument("--trait", action="append")
     parser.add_argument("--rank-g", type=int, default=128)
+    parser.add_argument("--rank-g-rbf", type=int, default=128)
     parser.add_argument("--rank-e", type=int, default=64)
     parser.add_argument("--no-ge", action="store_true")
+    parser.add_argument("--no-rbf-e", action="store_true")
     parser.add_argument("--split", choices=["random", "loeo", "loyo", "loco"], default="random")
     parser.add_argument("--test-fraction", type=float, default=0.2)
     parser.add_argument("--val-fraction", type=float, default=0.1)
@@ -248,8 +291,20 @@ def main() -> None:
 
     print("Computing low-rank kernel factors ...", flush=True)
     Gfac, gevals = top_kernel_factors(args.k_g_unique, args.rank_g)
+    G_RBF_fac, g_rbf_evals = (
+        top_kernel_factors(args.k_g_rbf_unique, args.rank_g_rbf)
+        if args.k_g_rbf_unique is not None
+        else (None, None)
+    )
     Efac, evals = top_kernel_factors(args.k_e_unique, args.rank_e)
-    model = LowRankGxE(Gfac, Efac, include_ge=not args.no_ge, weight_decay=args.weight_decay)
+    model = LowRankGxE(
+        Gfac,
+        Efac,
+        g_rbf_factors=G_RBF_fac,
+        include_ge=not args.no_ge,
+        include_rbf_e=not args.no_rbf_e,
+        weight_decay=args.weight_decay,
+    )
     optimizer = tf.keras.optimizers.Adam(learning_rate=args.lr)
 
     train_ds = make_dataset(gi[train_idx], ei[train_idx], y_scaled[train_idx], w[train_idx], args.batch_size, True, args.seed)
@@ -302,8 +357,10 @@ def main() -> None:
     np.savez_compressed(
         args.out_dir / f"{args.prefix}_kernel_factors_and_scaling.npz",
         Gfac=Gfac,
+        G_RBF_fac=G_RBF_fac if G_RBF_fac is not None else np.empty((0, 0), dtype=np.float32),
         Efac=Efac,
         g_eigenvalues=gevals,
+        g_rbf_eigenvalues=g_rbf_evals if g_rbf_evals is not None else np.empty(0, dtype=np.float32),
         e_eigenvalues=evals,
         y_mu=np.array([y_mu], dtype=np.float32),
         y_sd=np.array([y_sd], dtype=np.float32),
@@ -324,8 +381,11 @@ def main() -> None:
             {"metric": "rows_test", "value": len(test_idx)},
             {"metric": "split", "value": args.split},
             {"metric": "rank_g", "value": Gfac.shape[1]},
+            {"metric": "rank_g_rbf", "value": G_RBF_fac.shape[1] if G_RBF_fac is not None else 0},
             {"metric": "rank_e", "value": Efac.shape[1]},
             {"metric": "include_ge", "value": not args.no_ge},
+            {"metric": "include_g_rbf", "value": G_RBF_fac is not None},
+            {"metric": "include_g_rbf_e", "value": G_RBF_fac is not None and not args.no_rbf_e},
             {"metric": "tensorflow_checkpoint", "value": ckpt_path},
             {"metric": "val_rmse", "value": val_m["rmse"]},
             {"metric": "val_mae", "value": val_m["mae"]},
