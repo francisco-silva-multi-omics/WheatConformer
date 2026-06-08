@@ -1,9 +1,5 @@
 # Reproducible Wheat GxE Pipeline
 
-This folder is a GitHub-ready reproducibility bundle for the wheat genotype-by-environment project.
-
-It starts from naive raw data folders, builds canonical phenotype/genotype/environment tables, constructs genomic and environmental kernels, produces stage-1 adjusted phenotypes, and trains TensorFlow multikernel baselines. It also includes the TensorFlow Enformer-like regulatory pretraining pipeline for Chinese Spring/IWGSC multi-omics tracks.
-
 ## Quick Start
 
 ```bash
