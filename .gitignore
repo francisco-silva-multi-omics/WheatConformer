@@ -116,3 +116,13 @@ multi_omics_data/
 !scripts/*.sh
 !scripts/*.slurm
 !requirements/*.txt
+
+# Toy-data-only automated tests and CI
+!tests/
+!tests/**/*.py
+!tests/fixtures/
+!tests/fixtures/*.tsv
+!tests/fixtures/*.txt
+!.github/
+!.github/workflows/
+!.github/workflows/*.yml

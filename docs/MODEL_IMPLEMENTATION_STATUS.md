@@ -12,9 +12,13 @@ GBS SAWYT genomic kernel, when GBS raw data are present
 DArTseq landrace diversity QC
 80k external diversity marker-prior context
 Environment component kernels: K_geo, K_weather, K_stress, K_mgmt, K_E
+Country-aware location keys and coordinate-collision audit
+Raw and mean-diagonal-scaled environment components with weight provenance
 Stage-1 adjusted phenotype table
 Model-ready TensorFlow inputs with compact additive/Gaussian genotype and environment kernels
 TensorFlow low-rank additive, Gaussian, GxE, and Gaussian-by-environment predictive baseline
+Automated trait-specific validation/ablation reports with split leakage QC
+Toy-data-only pytest suite and GitHub Actions workflow
 Reference-based TensorFlow CNN+Transformer regulatory pretraining prototype
 ```
 
@@ -28,6 +32,10 @@ Genotype/path-specific sequence windows from the graph
 Regulatory latent genotype embeddings z_g, unless exported with extract_regulatory_embeddings_tf.py
 Functional embedding kernel K_z and K_zE, unless built with build_Kz_from_embeddings.py
 Formal scalable operator REML/AI-REML for the full observation set
+Explicit second-order epistatic kernel K_EPI2
+Automated validation-only Gaussian gamma sweep and manifest
+Linear-versus-Gaussian genomic-kernel diagnostics report
+True group K-fold and explicit cv1_genotype/cv1_environment/cv0_genotype_environment schedules
 RCP scenario prediction and ranking reports
 Attribution-supported prioritized loci/haplotypes
 ```
@@ -49,3 +57,9 @@ full REML MKL with K_A, K_z, K_AE, and K_zE
 ```
 
 The repository now includes exact dense REML for filtered subsets and a scalable validation/ablation suite. For the full hundreds-of-thousands observation dataset, the remaining method gap is an operator-based REML solver rather than dense REML.
+
+The validation suite currently uses repeated grouped holdouts, not true group
+K-fold. Gaussian retention is justified through held-out ablation results;
+gamma sweeping must also use validation-only selection. The TensorFlow model
+remains predictive rather than formal REML, dense REML remains limited to
+filtered subsets, and operator-based REML remains future work.

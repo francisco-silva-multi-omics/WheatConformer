@@ -232,6 +232,15 @@ number of samples.
 
 `K_G_RBF` captures nonlinear similarity in the genome-wide marker feature space and can improve prediction when the genotype-to-phenotype relationship is nonadditive. It can represent epistatic-like predictive patterns, but it does not identify individual marker-by-marker epistatic effects. For that reason, `K_G` and `K_G_RBF` are kept as separate model components and compared through ablation.
 
+An optional explicit second-order epistatic kernel `K_EPI2` would encode a
+specified second-order marker-interaction construction. It differs from
+`K_G_RBF`, which is a nonlinear similarity kernel over the additive genomic
+feature space. `K_EPI2` is not currently implemented.
+
+Gamma candidates must be selected using validation data only; test-set
+performance is reserved for final reporting. Automated gamma-sweep manifest
+generation remains future work.
+
 ## 7. DArTAG, MAS, DArTseq Landrace, GBS, And 80k Panels
 
 Main scripts:
@@ -287,6 +296,22 @@ K_E = w_geo K_geo + w_weather K_weather + w_stress K_stress + w_mgmt K_mgmt
 ```
 
 The reason for separating these kernels is that environmental similarity is not a single biological process. Two sites can be geographically close but climatically different, or climatically similar but managed differently. Splitting the kernel preserves interpretability and allows later weighting/ablation.
+
+Locations are joined with normalized `Country|Loc_no` keys rather than
+`Loc_no` alone. Missing country values fall back to `Loc_no` and are explicitly
+marked. The collision audit flags cross-country location numbers and coordinate
+dispersion above 0.05 decimal degrees or 50 m altitude.
+
+Each raw component is preserved and each non-empty component is scaled before
+combination:
+
+```text
+K_component_scaled = K_component_raw / mean(diag(K_component_raw))
+K_E = sum(normalized_weight_component * K_component_scaled)
+```
+
+The component-weight report records raw and normalized weights, feature
+counts, environment coverage, and raw/scaled mean diagonals.
 
 QC for environment kernels includes:
 
@@ -530,6 +555,22 @@ LOCO    leave-one-country-out
 LOFO    leave-one-family/group-out
 ```
 
+These are repeated grouped holdouts: each repeat assigns whole groups to train,
+validation, and test. They are not true group K-fold, where every group serves
+as the held-out fold exactly once. `split_leakage_qc.tsv` verifies that grouped
+partitions share neither rows nor group values.
+
+Common genomic-prediction CV terminology is:
+
+```text
+cv1_genotype               test genotypes are absent from training
+cv1_environment            test environments are absent from training
+cv0_genotype_environment   both test genotypes and test environments are absent
+```
+
+LOEO is `cv1_environment`-like. Explicit CV1/CV0 schedules and true group
+K-fold remain future validation extensions.
+
 Ablations include:
 
 ```text
@@ -538,11 +579,16 @@ E
 G+E
 G+E+GE
 RBF
+RBF+E
+RBF+E+RBFE
 G+RBF+E
 G+RBF+E+GE+RBFE
 ```
 
-The reason for ablations is to quantify what each kernel contributes. In particular, the Gaussian kernel should be retained only when held-out validation shows improvement beyond the additive genomic kernel.
+The reason for ablations is to quantify what each kernel contributes. The
+Gaussian kernel should be retained only when held-out validation improves over
+the corresponding additive comparator. `scripts/04_run_validation_ablation.sh`
+generates trait-specific results and a combined report.
 
 ## 15. Pedigree Kernel K_A
 

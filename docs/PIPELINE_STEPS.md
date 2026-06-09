@@ -47,6 +47,17 @@ To fetch weather from NASA POWER/Open-Meteo before building `K_E`:
 FETCH_WEATHER=1 bash scripts/01_run_core_pipeline.sh
 ```
 
+Geographic joins use normalized `Country|Loc_no` keys. Missing countries fall
+back to `Loc_no` and are explicitly recorded in
+`environment/qc_location_key_collisions.tsv`. Raw component kernels are saved
+as `K_<component>.raw.npy`; current component names contain mean-diagonal
+scaled kernels. Optional component weights:
+
+```bash
+ENV_WEIGHT_GEO=2 ENV_WEIGHT_WEATHER=2 ENV_WEIGHT_STRESS=1 ENV_WEIGHT_MGMT=1 \
+  bash scripts/01_run_core_pipeline.sh
+```
+
 This builds:
 
 ```text
@@ -110,6 +121,19 @@ sbatch server_training_pipeline/run_multikernel_training.slurm
 sbatch server_gbs_pipeline/run_gbs_multikernel_training.slurm
 ```
 
+## Phase 4b: Validation And Ablation Report
+
+```bash
+export TRAIN_TRAITS="Grain-Yield,Heading,Height"
+export ABLATION_REPEATS=3
+export ABLATION_SEED=2026
+bash scripts/04_run_validation_ablation.sh
+```
+
+This creates trait-specific metrics, summaries, split-leakage QC, and
+configuration under `trained_models/validation_ablation/`, followed by
+`trained_models/validation_ablation_report.tsv`.
+
 ## Phase 5: Regulatory TensorFlow Model
 
 ```bash
@@ -138,5 +162,5 @@ This step is documented but not run by the default core pipeline.
 ```bash
 python scripts/check_expected_outputs.py
 python scripts/05_check_model_methodology_readiness.py
-python -m pytest -q
+bash scripts/run_tests.sh
 ```

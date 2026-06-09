@@ -1,0 +1,5 @@
+Country	Loc_no	Lat_degress	Lat_minutes	Latitud	Long_degress	Long_minutes	Longitude	Altitude
+Mexico	1	20	0	N	100	0	W	1000
+Mexico	2	21	0	N	101	0	W	1100
+Kenya	1	1	0	N	36	0	E	1800
+Kenya	2	2	0	N	37	0	E	1700

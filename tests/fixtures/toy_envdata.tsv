@@ -1,0 +1,9 @@
+Trial_name	Occ	Loc_no	Country	Loc_desc	Cycle	Trait_name	Value
+t1	1	1	Mexico	mx1	c1	Temperature mean	20
+t1	1	1	Mexico	mx1	c1	Rain total	100
+t2	1	2	Mexico	mx2	c2	Temperature mean	22
+t2	1	2	Mexico	mx2	c2	Rain total	80
+t3	1	1	Kenya	ke1	c3	Temperature mean	18
+t3	1	1	Kenya	ke1	c3	Rain total	120
+t4	1	2	Kenya	ke2	c4	Temperature mean	24
+t4	1	2	Kenya	ke2	c4	Rain total	60

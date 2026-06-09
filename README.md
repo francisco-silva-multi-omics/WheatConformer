@@ -91,6 +91,21 @@ The Gaussian genomic bandwidth multiplier can be set with
 followed by `--gamma-multiplier`, the environment variable, and the default
 multiplier of `1.0`.
 
+Environment components are mean-diagonal scaled before combination. Optional
+raw weights are configured with `ENV_WEIGHT_GEO`, `ENV_WEIGHT_WEATHER`,
+`ENV_WEIGHT_STRESS`, and `ENV_WEIGHT_MGMT`; non-empty weights are normalized
+to sum to one.
+
+Run trait-specific validation and the combined ablation report after model
+inputs exist:
+
+```bash
+export TRAIN_TRAITS="Grain-Yield,Heading,Height"
+export ABLATION_REPEATS=3
+export ABLATION_SEED=2026
+bash scripts/04_run_validation_ablation.sh
+```
+
 On SLURM:
 
 ```bash
@@ -110,10 +125,13 @@ bash scripts/04_run_regulatory_enformer_tf.sh
 genotype_panels/hmp/K_HMP.QCfiltered.meanDiag1.npy
 genotype_panels/hmp/K_HMP.QCfiltered.gaussian.npy
 environment/K_E.npy
+environment/qc_location_key_collisions.tsv
+environment/env_kernel_component_weights.tsv
 phenotypes/stage1_adjusted_phenotypes.parquet
 integrated_database/canonical_trial_genotype_environment_plot_table.parquet
 model_kernels/stage1_hmp_env/
 trained_models/stage1_mkl/
+trained_models/validation_ablation_report.tsv
 functional_annotation/multiomics_qc/
 regulatory_model/enformer_windows.h5
 ```

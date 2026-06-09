@@ -10,7 +10,10 @@ import numpy as np
 import pandas as pd
 import tensorflow as tf
 
-from trait_isolation import select_single_trait
+try:
+    from .trait_isolation import select_single_trait
+except ImportError:
+    from trait_isolation import select_single_trait
 
 
 def read_table(path: Path) -> pd.DataFrame:
@@ -78,7 +81,7 @@ def split_indices(
 
     if group_col not in df.columns:
         raise SystemExit(f"Requested split mode {mode}, but group column is absent: {group_col}")
-    groups = df[group_col].astype(str).fillna("").unique()
+    groups = np.asarray(df[group_col].astype(str).fillna("").unique(), dtype=object).copy()
     rng.shuffle(groups)
     n_test_groups = max(1, int(round(len(groups) * test_fraction)))
     n_val_groups = max(1, int(round(len(groups) * val_fraction)))
