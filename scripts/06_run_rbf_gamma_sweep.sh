@@ -5,6 +5,7 @@ trait=""
 split_mode="gho_environment"
 seed=2026
 repeats=3
+selection_ablation="G+RBF+E+GE+RBFE"
 multipliers=(0.25 0.5 1.0 2.0 4.0)
 
 while [[ $# -gt 0 ]]; do
@@ -13,6 +14,7 @@ while [[ $# -gt 0 ]]; do
     --split-mode) split_mode="$2"; shift 2 ;;
     --seed) seed="$2"; shift 2 ;;
     --repeats) repeats="$2"; shift 2 ;;
+    --selection-ablation) selection_ablation="$2"; shift 2 ;;
     --multipliers)
       shift
       multipliers=()
@@ -25,13 +27,14 @@ done
 [[ -n "$trait" ]] || { echo "--trait is required" >&2; exit 2; }
 trait_slug="$(python -c 'import re,sys; print(re.sub(r"[^a-z0-9]+", "_", sys.argv[1].strip().lower()).strip("_"))' "$trait")"
 kernel_root="genotype_panels/hmp/rbf_gamma_sweep"
+trait_kernel_root="$kernel_root/$trait_slug"
 validation_root="trained_models/rbf_gamma_sweep"
-mkdir -p "$kernel_root" "$validation_root/$trait_slug"
+mkdir -p "$trait_kernel_root" "$validation_root/$trait_slug"
 
 for multiplier in "${multipliers[@]}"; do
   label="$(python -c 'import sys; print(format(float(sys.argv[1]), "g"))' "$multiplier")"
-  kernel="$kernel_root/K_HMP.gaussian.gammaMultiplier_${label}.npy"
-  qc="$kernel_root/K_HMP.gaussian.gammaMultiplier_${label}.qc.json"
+  kernel="$trait_kernel_root/K_HMP.gaussian.gammaMultiplier_${label}.npy"
+  qc="$trait_kernel_root/K_HMP.gaussian.gammaMultiplier_${label}.qc.json"
   run_dir="$validation_root/$trait_slug/gammaMultiplier_${label}"
   model_dir="$run_dir/model_inputs"
   mkdir -p "$model_dir"
@@ -71,7 +74,9 @@ for multiplier in "${multipliers[@]}"; do
     --split-mode "$split_mode" \
     --seed "$seed" \
     --repeats "$repeats" \
-    --ablation RBF
+    --ablation RBF \
+    --ablation G+RBF+E \
+    --ablation G+RBF+E+GE+RBFE
 done
 
 python server_training_pipeline/select_rbf_gamma.py \
@@ -79,4 +84,5 @@ python server_training_pipeline/select_rbf_gamma.py \
   --multipliers "${multipliers[@]}" \
   --split-mode "$split_mode" \
   --seed "$seed" \
-  --repeats "$repeats"
+  --repeats "$repeats" \
+  --selection-ablation "$selection_ablation"

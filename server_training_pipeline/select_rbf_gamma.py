@@ -22,6 +22,13 @@ def trait_slug(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", "_", value.strip().lower()).strip("_")
 
 
+def combine_trait_manifests(kernel_root: Path) -> pd.DataFrame:
+    paths = sorted(kernel_root.glob("*/gamma_sweep_manifest.tsv"))
+    if not paths:
+        raise SystemExit(f"No trait-specific gamma manifests found under {kernel_root}")
+    return pd.concat([pd.read_csv(path, sep="\t") for path in paths], ignore_index=True)
+
+
 def select_gamma(
     trait: str,
     multipliers: list[float],
@@ -30,6 +37,8 @@ def select_gamma(
     kernel_root: Path,
     seed: int,
     repeats: int,
+    selection_ablation: str = "G+RBF+E+GE+RBFE",
+    diagnostic_ablations: list[str] | None = None,
 ) -> tuple[pd.DataFrame, dict[str, object], pd.DataFrame]:
     split_mode = canonical_split_mode(split_mode, warn=True)
     rows: list[dict[str, object]] = []
@@ -39,8 +48,9 @@ def select_gamma(
         label = multiplier_label(multiplier)
         run_dir = validation_root / slug / f"gammaMultiplier_{label}"
         metrics_path = run_dir / "gamma_sweep_metrics.tsv"
-        qc_path = kernel_root / f"K_HMP.gaussian.gammaMultiplier_{label}.qc.json"
-        kernel_path = kernel_root / f"K_HMP.gaussian.gammaMultiplier_{label}.npy"
+        trait_kernel_root = kernel_root / slug
+        qc_path = trait_kernel_root / f"K_HMP.gaussian.gammaMultiplier_{label}.qc.json"
+        kernel_path = trait_kernel_root / f"K_HMP.gaussian.gammaMultiplier_{label}.npy"
         compact_path = run_dir / "model_inputs" / "gamma_sweep_K_G_RBF_unique.npy"
         if not metrics_path.exists():
             raise SystemExit(f"Missing gamma validation metrics: {metrics_path}")
@@ -50,16 +60,17 @@ def select_gamma(
         validation = metrics[
             metrics["split"].eq("val")
             & metrics["split_mode"].eq(split_mode)
-            & metrics["ablation"].eq("RBF")
+            & metrics["ablation"].eq(selection_ablation)
         ].copy()
         if validation.empty:
             raise SystemExit(
-                f"No validation-only RBF metrics for multiplier {label} and split mode {split_mode}: {metrics_path}"
+                f"No validation-only metrics for ablation {selection_ablation}, multiplier {label}, and split mode {split_mode}: {metrics_path}"
             )
         qc = json.loads(qc_path.read_text(encoding="utf-8"))
         row = {
             "trait": trait,
             "split_mode": split_mode,
+            "selection_ablation": selection_ablation,
             "gamma_multiplier": float(multiplier),
             "gamma": float(qc["gamma"]),
             "validation_repeats": int(validation["repeat"].nunique()),
@@ -73,7 +84,9 @@ def select_gamma(
         manifest_rows.append(
             {
                 "trait": trait,
+                "trait_slug": slug,
                 "split_mode": split_mode,
+                "selection_ablation": selection_ablation,
                 "seed": seed,
                 "requested_repeats": repeats,
                 "gamma_multiplier": float(multiplier),
@@ -97,6 +110,8 @@ def select_gamma(
     selected = {
         "trait": trait,
         "selection_split": "validation",
+        "selection_ablation": selection_ablation,
+        "diagnostic_ablations": diagnostic_ablations or ["RBF", "G+RBF+E"],
         "split_mode": split_mode,
         "selection_criterion": "lowest validation RMSE; tie breaker highest validation Pearson correlation",
         "test_metrics_used_for_selection": False,
@@ -124,9 +139,11 @@ def main() -> None:
     parser.add_argument("--split-mode", default="gho_environment")
     parser.add_argument("--seed", type=int, default=2026)
     parser.add_argument("--repeats", type=int, default=3)
+    parser.add_argument("--selection-ablation", default="G+RBF+E+GE+RBFE")
+    parser.add_argument("--diagnostic-ablation", action="append", default=["RBF", "G+RBF+E"])
     parser.add_argument("--validation-root", type=Path, default=Path("trained_models/rbf_gamma_sweep"))
     parser.add_argument("--kernel-root", type=Path, default=Path("genotype_panels/hmp/rbf_gamma_sweep"))
-    parser.add_argument("--manifest", type=Path, default=Path("genotype_panels/hmp/rbf_gamma_sweep/gamma_sweep_manifest.tsv"))
+    parser.add_argument("--manifest", type=Path)
     args = parser.parse_args()
 
     summary, selected, manifest = select_gamma(
@@ -137,13 +154,18 @@ def main() -> None:
         args.kernel_root,
         args.seed,
         args.repeats,
+        args.selection_ablation,
+        args.diagnostic_ablation,
     )
     out_dir = args.validation_root / trait_slug(args.trait)
     out_dir.mkdir(parents=True, exist_ok=True)
     summary.to_csv(out_dir / "gamma_validation_summary.tsv", sep="\t", index=False)
     (out_dir / "selected_gamma.json").write_text(json.dumps(selected, indent=2), encoding="utf-8")
-    args.manifest.parent.mkdir(parents=True, exist_ok=True)
-    manifest.to_csv(args.manifest, sep="\t", index=False)
+    manifest_path = args.manifest or args.kernel_root / trait_slug(args.trait) / "gamma_sweep_manifest.tsv"
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    manifest.to_csv(manifest_path, sep="\t", index=False)
+    combined = combine_trait_manifests(args.kernel_root)
+    combined.to_csv(args.kernel_root / "gamma_sweep_manifest_all_traits.tsv", sep="\t", index=False)
     print(json.dumps(selected, indent=2))
 
 
