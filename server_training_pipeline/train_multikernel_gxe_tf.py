@@ -40,6 +40,27 @@ def write_table(df: pd.DataFrame, path: Path, write_tsv: bool = True) -> None:
         df.to_csv(path.with_suffix(".tsv.gz"), sep="\t", index=False)
 
 
+def persist_and_validate_split_leakage(
+    leakage: dict[str, object],
+    out_dir: Path,
+    prefix: str,
+    requested_split: str,
+    canonical_split: str,
+) -> None:
+    out_dir.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame([leakage]).to_csv(out_dir / f"{prefix}_split_leakage_qc.tsv", sep="\t", index=False)
+    (out_dir / f"{prefix}_split_leakage_qc.json").write_text(
+        json.dumps(leakage, default=str, indent=2), encoding="utf-8"
+    )
+    if leakage["leakage_status"] != "pass":
+        raise SystemExit(
+            "Split leakage detected. "
+            f"requested_split={requested_split!r}; "
+            f"canonical_split={canonical_split!r}; "
+            f"details={leakage}"
+        )
+
+
 def weighted_mean_std(y: np.ndarray, w: np.ndarray) -> tuple[float, float]:
     w = np.where(np.isfinite(w) & (w > 0), w, 1.0).astype(np.float64)
     y = y.astype(np.float64)
@@ -273,6 +294,7 @@ def main() -> None:
     else:
         train_idx, val_idx, test_idx = make_split(obs, canonical_split, args.seed, args.test_fraction, args.val_fraction, split_col)
     leakage = split_leakage_record(obs, 0, canonical_split, train_idx, val_idx, test_idx, group_col=split_col)
+    persist_and_validate_split_leakage(leakage, args.out_dir, args.prefix, requested_split, canonical_split)
     if len(train_idx) == 0 or len(val_idx) == 0 or len(test_idx) == 0:
         raise SystemExit(f"Empty split: train={len(train_idx)}, val={len(val_idx)}, test={len(test_idx)}")
 
