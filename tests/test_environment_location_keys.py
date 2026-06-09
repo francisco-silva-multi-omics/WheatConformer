@@ -60,6 +60,52 @@ def test_unresolved_location_hash_is_stable() -> None:
     assert first.startswith("UNRESOLVED_LOCATION|")
 
 
+def test_unresolved_hashes_are_row_order_independent() -> None:
+    rows = pd.DataFrame(
+        {
+            "Country": ["", ""],
+            "Loc_no": ["", ""],
+            "Loc_desc": ["", ""],
+            "Trial_name": ["Trial A", "Trial B"],
+            "Cycle": ["2020", "2021"],
+            "Occ": ["1", "2"],
+            "source_file": ["a.tsv", "b.tsv"],
+        },
+        index=[100, 200],
+    )
+    first = add_location_keys(rows).set_index("Trial_name")["location_key"].to_dict()
+    shuffled = add_location_keys(rows.sample(frac=1, random_state=7)).set_index("Trial_name")["location_key"].to_dict()
+    reindexed = add_location_keys(rows.reset_index(drop=True)).set_index("Trial_name")["location_key"].to_dict()
+    assert first == shuffled == reindexed
+    assert first["Trial A"] != first["Trial B"]
+
+
+def test_identical_unresolved_records_share_deterministic_key_and_audit_count() -> None:
+    rows = pd.DataFrame(
+        {
+            "Country": ["", ""],
+            "Loc_no": ["", ""],
+            "Loc_desc": ["", ""],
+            "Trial_name": ["", ""],
+            "Cycle": ["", ""],
+            "Occ": ["", ""],
+            "source_file": ["same.tsv", "same.tsv"],
+            "Lat_degress": ["", ""],
+            "Lat_minutes": ["", ""],
+            "Latitud": ["", ""],
+            "Long_degress": ["", ""],
+            "Long_minutes": ["", ""],
+            "Longitude": ["", ""],
+            "Altitude": ["", ""],
+        }
+    )
+    keyed = add_location_keys(rows)
+    assert keyed["location_key"].nunique() == 1
+    audit = location_collision_audit(rows).iloc[0]
+    assert audit["unresolved_duplicate_count"] == 1
+    assert "source_file" in audit["unresolved_hash_payload_fields"]
+
+
 def test_empty_location_numbers_are_excluded_from_coordinate_fallbacks() -> None:
     work = add_location_keys(pd.DataFrame({"Country": ["", ""], "Loc_no": ["", ""]}))
     work["latitude"] = [10.0, 30.0]

@@ -18,6 +18,15 @@ import pandas as pd
 
 OUT = BASE / "environment"
 ID_COLS = ["Trial_name", "Occ", "Loc_no", "Country", "Loc_desc", "Cycle"]
+UNRESOLVED_LOCATION_PAYLOAD_FIELDS = [
+    "Trial_name_key",
+    "Country_key",
+    "Loc_desc_key",
+    "Loc_no_key",
+    "Cycle",
+    "Occ",
+    "source_file",
+]
 
 
 def env_id_from_frame(df: pd.DataFrame) -> pd.Series:
@@ -69,6 +78,11 @@ def normalize_location_text(s: pd.Series) -> pd.Series:
     return normalize_country(s)
 
 
+def stable_unresolved_location_key(row: pd.Series) -> str:
+    payload = "|".join(str(row.get(field, "")).strip() for field in UNRESOLVED_LOCATION_PAYLOAD_FIELDS)
+    return "UNRESOLVED_LOCATION|" + hashlib.sha256(payload.encode("utf-8")).hexdigest()[:20]
+
+
 def add_location_keys(df: pd.DataFrame) -> pd.DataFrame:
     out = df.copy()
     out["Loc_no_key"] = normalize_loc_no(out.get("Loc_no", pd.Series("", index=out.index)))
@@ -77,7 +91,7 @@ def add_location_keys(df: pd.DataFrame) -> pd.DataFrame:
     out["Trial_name_key"] = normalize_location_text(out.get("Trial_name", pd.Series("", index=out.index)))
     out["loc_no_missing"] = out["Loc_no_key"].eq("")
     keys, methods = [], []
-    for row_index, row in out.iterrows():
+    for _, row in out.iterrows():
         country, loc_no, desc, trial = row["Country_key"], row["Loc_no_key"], row["Loc_desc_key"], row["Trial_name_key"]
         if country and loc_no:
             key, method = f"{country}|{loc_no}", "country_loc_no"
@@ -88,8 +102,7 @@ def add_location_keys(df: pd.DataFrame) -> pd.DataFrame:
         elif loc_no:
             key, method = loc_no, "country_missing_loc_no_fallback"
         else:
-            stable = str(row_index) + "|" + "|".join(str(row.get(col, "")) for col in sorted(out.columns))
-            key = "UNRESOLVED_LOCATION|" + hashlib.sha256(stable.encode("utf-8")).hexdigest()[:20]
+            key = stable_unresolved_location_key(row)
             method = "unresolved_location_hash_fallback"
         keys.append(key)
         methods.append(method)
@@ -151,6 +164,16 @@ def location_collision_audit(
                 "loc_descriptions": ";".join(descriptions),
                 "trials": ";".join(trials),
                 "loc_no_missing": bool(group["loc_no_missing"].any()),
+                "unresolved_hash_payload_fields": (
+                    ";".join(UNRESOLVED_LOCATION_PAYLOAD_FIELDS)
+                    if group["location_key_method"].eq("unresolved_location_hash_fallback").any()
+                    else ""
+                ),
+                "unresolved_duplicate_count": (
+                    int(len(group) - 1)
+                    if group["location_key_method"].eq("unresolved_location_hash_fallback").all()
+                    else 0
+                ),
                 "collision_status": ";".join(reasons) if reasons else "ok",
             }
         )
