@@ -2,6 +2,7 @@
 
 import os
 import re
+import hashlib
 import platform
 import sys
 from pathlib import Path
@@ -63,17 +64,37 @@ def normalize_country(s: pd.Series) -> pd.Series:
         .str.strip("_")
     )
 
+def normalize_location_text(s: pd.Series) -> pd.Series:
+    return normalize_country(s)
+
 
 def add_location_keys(df: pd.DataFrame) -> pd.DataFrame:
     out = df.copy()
     out["Loc_no_key"] = normalize_loc_no(out.get("Loc_no", pd.Series("", index=out.index)))
     out["Country_key"] = normalize_country(out.get("Country", pd.Series("", index=out.index)))
-    out["location_key_fallback"] = out["Country_key"].eq("")
-    out["location_key"] = np.where(
-        out["location_key_fallback"],
-        out["Loc_no_key"],
-        out["Country_key"] + "|" + out["Loc_no_key"],
-    )
+    out["Loc_desc_key"] = normalize_location_text(out.get("Loc_desc", pd.Series("", index=out.index)))
+    out["Trial_name_key"] = normalize_location_text(out.get("Trial_name", pd.Series("", index=out.index)))
+    out["loc_no_missing"] = out["Loc_no_key"].eq("")
+    keys, methods = [], []
+    for row_index, row in out.iterrows():
+        country, loc_no, desc, trial = row["Country_key"], row["Loc_no_key"], row["Loc_desc_key"], row["Trial_name_key"]
+        if country and loc_no:
+            key, method = f"{country}|{loc_no}", "country_loc_no"
+        elif country and desc:
+            key, method = f"{country}|{desc}", "country_loc_desc_fallback"
+        elif trial and desc:
+            key, method = f"{trial}|{country}|{desc}", "trial_country_loc_desc_fallback"
+        elif loc_no:
+            key, method = loc_no, "country_missing_loc_no_fallback"
+        else:
+            stable = str(row_index) + "|" + "|".join(str(row.get(col, "")) for col in sorted(out.columns))
+            key = "UNRESOLVED_LOCATION|" + hashlib.sha256(stable.encode("utf-8")).hexdigest()[:20]
+            method = "unresolved_location_hash_fallback"
+        keys.append(key)
+        methods.append(method)
+    out["location_key"] = keys
+    out["location_key_method"] = methods
+    out["location_key_fallback"] = out["location_key_method"].ne("country_loc_no")
     return out
 
 
@@ -103,9 +124,15 @@ def location_collision_audit(
         alt_dispersion = float(group["altitude"].max() - group["altitude"].min()) if group["altitude"].notna().any() else 0.0
         loc_numbers = sorted({value for value in group["Loc_no_key"] if value})
         countries = sorted({value for value in group["Country_key"] if value})
+        descriptions = sorted({value for value in group["Loc_desc_key"] if value})
+        trials = sorted({value for value in group["Trial_name_key"] if value})
         reasons = []
-        if group["location_key_fallback"].any():
+        if group["Country_key"].eq("").any():
             reasons.append("country_missing_fallback")
+        if group["loc_no_missing"].any():
+            reasons.append("loc_no_missing_fallback")
+        if group["location_key_method"].eq("unresolved_location_hash_fallback").any():
+            reasons.append("unresolved_location_hash_fallback")
         if any(country_counts.get(loc_no, 0) > 1 for loc_no in loc_numbers):
             reasons.append("loc_no_multiple_countries")
         if lat_dispersion > degree_tolerance or lon_dispersion > degree_tolerance or alt_dispersion > altitude_tolerance:
@@ -113,12 +140,16 @@ def location_collision_audit(
         rows.append(
             {
                 "location_key": location_key,
+                "location_key_method": ";".join(sorted(set(group["location_key_method"]))),
                 "n_rows": len(group),
                 "n_unique_latitude": group["latitude"].nunique(dropna=True),
                 "n_unique_longitude": group["longitude"].nunique(dropna=True),
                 "n_unique_altitude": group["altitude"].nunique(dropna=True),
                 "countries": ";".join(countries),
                 "loc_numbers": ";".join(loc_numbers),
+                "loc_descriptions": ";".join(descriptions),
+                "trials": ";".join(trials),
+                "loc_no_missing": bool(group["loc_no_missing"].any()),
                 "collision_status": ";".join(reasons) if reasons else "ok",
             }
         )
