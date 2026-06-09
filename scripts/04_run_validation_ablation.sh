@@ -50,6 +50,7 @@ while IFS=$'\t' read -r trait trait_slug; do
     --trait "$trait"
     --repeats "${ABLATION_REPEATS:-3}"
     --seed "${ABLATION_SEED:-2026}"
+    --factorization-mode "${ABLATION_FACTORIZATION_MODE:-full_transductive}"
   )
   if [[ -s "$epi2_unique" ]]; then
     cmd+=(--k-g-epi2-unique "$epi2_unique")

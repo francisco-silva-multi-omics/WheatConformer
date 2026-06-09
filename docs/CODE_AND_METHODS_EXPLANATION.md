@@ -240,7 +240,9 @@ dense REML, but is not enabled by default.
 
 Gamma candidates are selected using validation data only; test-set performance
 is reserved for final reporting. `scripts/06_run_rbf_gamma_sweep.sh` evaluates
-the predefined multiplier grid and writes the selected-gamma manifest.
+the predefined multiplier grid and writes a trait-specific selected-gamma
+manifest. Selection defaults to the integrated `G+RBF+E+GE+RBFE` model;
+RBF-only metrics are secondary diagnostics.
 
 ## 7. DArTAG, MAS, DArTseq Landrace, GBS, And 80k Panels
 
@@ -545,15 +547,16 @@ Main script:
 server_training_pipeline/run_validation_ablation_suite.py
 ```
 
-The validation suite runs:
+The validation suite uses canonical names:
 
 ```text
-CV2     random sparse observation prediction
-LOEO    leave-one-environment-out
-LOYO    leave-one-year/cycle-out
-LOTO    leave-one-trial-out
-LOCO    leave-one-country-out
-LOFO    leave-one-family/group-out
+cv2_random_observation
+gho_environment
+gho_cycle
+gho_trial
+gho_country
+gho_family
+group_kfold
 ```
 
 The suite distinguishes repeated grouped holdouts from true `group_kfold`,
@@ -572,6 +575,21 @@ cv0_genotype_environment   both test genotypes and test environments are absent
 The implemented scenarios include `cv1_genotype`, `cv1_environment`, and
 `cv0_genotype_environment`. Legacy LOEO/LOYO/LOTO/LOCO/LOFO labels remain
 backward-compatible aliases for accurately named grouped holdouts.
+TensorFlow and ablation scripts share these canonical names. Leakage QC covers
+train-validation, train-test, and validation-test overlap.
+
+Two kernel-factorization regimes are available:
+
+```text
+full_transductive   complete kernels define the eigenspace before phenotype splits
+train_nystrom       train-only kernel submatrices define the eigenspace
+```
+
+The transductive mode is the backward-compatible default and does not use test
+phenotypes, but held-out IDs influence the kernel eigenspace. When requested
+for `cv1_genotype`, `cv1_environment`, or `cv0_genotype_environment`,
+`train_nystrom` excludes validation/test IDs from eigendecomposition and
+projects them with `K_new,train U_train diag(1/sqrt(lambda_train))`.
 
 Ablations include:
 
@@ -591,6 +609,12 @@ The reason for ablations is to quantify what each kernel contributes. The
 Gaussian kernel should be retained only when held-out validation improves over
 the corresponding additive comparator. `scripts/04_run_validation_ablation.sh`
 generates trait-specific results and a combined report.
+
+Ridge penalties and factor ranks can be tuned with
+`scripts/07_run_multikernel_hyperparameter_sweep.sh`. Candidate models use the
+same integrated ablation and split configuration. Lowest validation RMSE is
+the selection criterion, with highest validation Pearson correlation as the
+tie breaker. Test metrics are not used for selection.
 
 ## 15. Pedigree Kernel K_A
 

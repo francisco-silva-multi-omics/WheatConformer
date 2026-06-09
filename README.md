@@ -106,6 +106,20 @@ export ABLATION_SEED=2026
 bash scripts/04_run_validation_ablation.sh
 ```
 
+The default validation factorization is `full_transductive`: phenotypes are
+held out, but all kernel IDs contribute to the eigenspace. For strict
+inductive CV1/CV0 benchmarking, set:
+
+```bash
+export ABLATION_FACTORIZATION_MODE=train_nystrom
+bash scripts/04_run_validation_ablation.sh
+```
+
+`train_nystrom` eigendecomposes train-only kernel submatrices and projects
+validation/test IDs without allowing them to influence the train eigenspace.
+It is applied to `cv1_genotype`, `cv1_environment`, and
+`cv0_genotype_environment`; other split modes record `full_transductive`.
+
 Select an RBF multiplier from validation metrics only:
 
 ```bash
@@ -113,6 +127,20 @@ bash scripts/06_run_rbf_gamma_sweep.sh \
   --trait "Grain Yield" \
   --selection-ablation G+RBF+E+GE+RBFE
 ```
+
+Tune the integrated model's ridge penalty and factor ranks using validation
+metrics only:
+
+```bash
+bash scripts/07_run_multikernel_hyperparameter_sweep.sh \
+  --trait "Grain Yield" \
+  --split-mode gho_environment
+```
+
+Gamma and ridge/rank selection default to the integrated
+`G+RBF+E+GE+RBFE` model. RBF-only metrics are secondary diagnostics. Split
+names are canonical across TensorFlow and ablation scripts; legacy aliases are
+temporary compatibility shims.
 
 Build the optional explicit second-order kernel:
 
@@ -150,6 +178,7 @@ integrated_database/canonical_trial_genotype_environment_plot_table.parquet
 model_kernels/stage1_hmp_env/
 trained_models/stage1_mkl/
 trained_models/validation_ablation_report.tsv
+trained_models/hyperparameter_sweep/
 functional_annotation/multiomics_qc/
 regulatory_model/enformer_windows.h5
 ```

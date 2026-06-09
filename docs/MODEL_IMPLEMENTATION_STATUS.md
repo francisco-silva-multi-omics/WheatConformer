@@ -23,6 +23,8 @@ TensorFlow low-rank additive, Gaussian, GxE, and Gaussian-by-environment predict
 Automated trait-specific validation/ablation reports with split leakage QC
 Grouped holdout, true group K-fold, cv1_genotype, cv1_environment, and cv0_genotype_environment splits
 Shared TensorFlow/validation split semantics with three-way leakage QC
+Optional train-only Nyström factorization for strict inductive CV1/CV0 validation
+Validation-only integrated-model ridge and factor-rank selection
 Trait-isolated HMP, GBS, validation, and dense REML workflows
 Toy-data-only pytest suite and GitHub Actions workflow
 Reference-based TensorFlow CNN+Transformer regulatory pretraining prototype
@@ -63,6 +65,9 @@ The repository now includes exact dense REML for filtered subsets and a scalable
 The validation suite supports repeated grouped holdouts, true group K-fold,
 and explicit CV1/CV0 scenarios. Gaussian retention is justified through
 held-out ablation results, and gamma selection uses validation metrics only.
+The default complete-kernel factorization is transductive; strict train-only
+Nyström factorization is available for CV1/CV0 benchmarking. Ridge and
+factor-rank sweeps also select from validation metrics only.
 The TensorFlow model
 remains predictive rather than formal REML, dense REML remains limited to
 filtered subsets, and operator-based REML remains future work.

@@ -163,6 +163,35 @@ Canonical split names distinguish random observations, grouped holdouts, true
 group K-fold, and genomic-prediction CV scenarios. Legacy `loeo`, `loyo`,
 `loto`, `loco`, and `lofo` arguments remain aliases and emit warnings.
 TensorFlow training and validation use the same shared split utilities.
+Leakage QC checks train-validation, train-test, and validation-test overlap.
+
+The default `full_transductive` factorization uses complete genotype and
+environment kernels before phenotype splits. Strict inductive CV1/CV0
+benchmarking is optional:
+
+```bash
+export ABLATION_FACTORIZATION_MODE=train_nystrom
+bash scripts/04_run_validation_ablation.sh
+```
+
+For `cv1_genotype`, `cv1_environment`, and `cv0_genotype_environment`, this
+eigendecomposes train-only kernel submatrices and uses Nyström projection for
+validation/test IDs. Metrics record effective factorization mode, requested
+rank, retained rank, and train kernel dimension.
+
+Tune the integrated model's ridge and low-rank dimensions using validation
+metrics only:
+
+```bash
+bash scripts/07_run_multikernel_hyperparameter_sweep.sh \
+  --trait "Grain Yield" \
+  --split-mode gho_environment
+```
+
+The default grid covers ridge `0.01 0.1 1 10 100`, genotype/RBF ranks
+`32 64 128`, and environment ranks `16 32 64`. Selection uses lowest
+validation RMSE, then highest validation Pearson correlation; test metrics are
+not used.
 
 Environment location keys never fall back to country alone. Missing location
 numbers use location descriptions or deterministic unresolved hashes.

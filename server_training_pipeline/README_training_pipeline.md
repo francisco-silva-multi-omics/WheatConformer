@@ -5,7 +5,8 @@ This folder contains two training routes aligned with the scalable methodology:
 1. `train_multikernel_gxe_tf.py`: scalable TensorFlow multi-kernel GxE baseline.
 2. `build_*enformer*` + `train_enformer_like_tf.py`: TensorFlow Enformer-like CNN+Transformer regulatory module.
 3. `fit_multikernel_reml.py`: exact dense REML for filtered stage-2 subsets.
-4. `run_validation_ablation_suite.py`: CV2/LOEO/LOYO/LOTO/LOCO/LOFO validation and ablations.
+4. `run_validation_ablation_suite.py`: canonical grouped holdout, group K-fold, CV1/CV0 validation, and ablations.
+5. `tune_multikernel_hyperparameters.py`: validation-only ridge/rank selection for the integrated model.
 
 ## Why Dense Full Matrices Are Avoided
 
@@ -60,7 +61,7 @@ python server_training_pipeline/train_multikernel_gxe_tf.py \
   --rank-g 128 \
   --rank-g-rbf 128 \
   --rank-e 64 \
-  --split loeo \
+  --split gho_environment \
   --epochs 200 \
   --batch-size 8192
 ```
@@ -284,11 +285,40 @@ python server_training_pipeline/run_validation_ablation_suite.py \
   --prefix grain_yield_validation_ablation
 ```
 
-This runs:
+This runs canonical modes such as:
 
 ```text
-CV2, LOEO, LOYO, LOTO, LOCO, LOFO
+cv2_random_observation
+gho_environment, gho_cycle, gho_trial, gho_country, gho_family
+group_kfold
+cv1_genotype, cv1_environment, cv0_genotype_environment
 G, E, G+E, G+E+GE, RBF, G+RBF+E, G+RBF+E+GE+RBFE
 ```
 
-The Gaussian bandwidth is a hyperparameter. The default median-distance heuristic is a stable starting point, but final reporting should compare `GAUSSIAN_GAMMA_MULTIPLIER` values such as `0.25`, `0.5`, `1`, `2`, and `4` under the same held-out splits.
+Legacy LOEO/LOYO/LOTO/LOCO/LOFO names remain temporary aliases for grouped
+holdouts and emit warnings. TensorFlow and ablation scripts share canonical
+split semantics. Leakage QC covers train-validation, train-test, and
+validation-test overlap.
+
+The default `--factorization-mode full_transductive` holds out phenotypes but
+allows all kernel IDs to define the low-rank eigenspace. For strict inductive
+CV1/CV0 evaluation, use `--factorization-mode train_nystrom`. It
+eigendecomposes train-only kernel submatrices and Nyström-projects
+validation/test IDs. Outputs record factorization mode and rank provenance.
+
+The Gaussian bandwidth is selected using validation metrics from the
+integrated `G+RBF+E+GE+RBFE` model by default; RBF-only results are secondary
+diagnostics. Trait-specific manifests prevent cross-trait selection.
+
+Tune ridge and ranks, again using validation only:
+
+```bash
+bash scripts/07_run_multikernel_hyperparameter_sweep.sh \
+  --trait "Grain Yield" \
+  --split-mode gho_environment
+```
+
+One trait per invocation applies to HMP TensorFlow, GBS TensorFlow, validation
+ablation, and dense REML. The TensorFlow baseline is predictive, not formal
+REML. Dense REML remains limited to filtered subsets; scalable operator REML
+remains future work.
