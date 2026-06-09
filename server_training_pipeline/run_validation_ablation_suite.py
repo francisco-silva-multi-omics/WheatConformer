@@ -7,7 +7,23 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from trait_isolation import select_single_trait
+try:
+    from .trait_isolation import select_single_trait
+except ImportError:
+    from trait_isolation import select_single_trait
+
+
+DEFAULT_ABLATIONS = [
+    "G",
+    "E",
+    "G+E",
+    "G+E+GE",
+    "RBF",
+    "RBF+E",
+    "RBF+E+RBFE",
+    "G+RBF+E",
+    "G+RBF+E+GE+RBFE",
+]
 
 
 def read_table(path: Path) -> pd.DataFrame:
@@ -60,7 +76,7 @@ def make_split(df: pd.DataFrame, mode: str, seed: int, test_fraction: float, val
         return idx[n_test + n_val :], idx[n_test : n_test + n_val], idx[:n_test]
     if group_col is None or group_col not in df.columns:
         raise SystemExit(f"Split {mode} requires group column {group_col}")
-    groups = df[group_col].fillna("").astype(str).unique()
+    groups = np.asarray(df[group_col].fillna("").astype(str).unique(), dtype=object).copy()
     rng.shuffle(groups)
     n_test = max(1, int(round(len(groups) * test_fraction)))
     n_val = max(1, int(round(len(groups) * val_fraction)))
@@ -71,6 +87,50 @@ def make_split(df: pd.DataFrame, mode: str, seed: int, test_fraction: float, val
     val = np.where(g.isin(val_groups))[0]
     train = np.where(~g.isin(test_groups | val_groups))[0]
     return train, val, test
+
+
+def split_leakage_record(
+    df: pd.DataFrame,
+    repeat: int,
+    split_mode: str,
+    group_col: str | None,
+    train: np.ndarray,
+    val: np.ndarray,
+    test: np.ndarray,
+) -> dict[str, object]:
+    train_rows, val_rows, test_rows = set(train.tolist()), set(val.tolist()), set(test.tolist())
+    row_overlaps = {
+        "train_val_row_overlap": len(train_rows & val_rows),
+        "train_test_row_overlap": len(train_rows & test_rows),
+        "val_test_row_overlap": len(val_rows & test_rows),
+    }
+    group_overlaps = {
+        "train_val_group_overlap": 0,
+        "train_test_group_overlap": 0,
+        "val_test_group_overlap": 0,
+    }
+    if group_col is not None:
+        groups = df[group_col].fillna("").astype(str)
+        train_groups = set(groups.iloc[train])
+        val_groups = set(groups.iloc[val])
+        test_groups = set(groups.iloc[test])
+        group_overlaps = {
+            "train_val_group_overlap": len(train_groups & val_groups),
+            "train_test_group_overlap": len(train_groups & test_groups),
+            "val_test_group_overlap": len(val_groups & test_groups),
+        }
+    leakage = any(value > 0 for value in [*row_overlaps.values(), *group_overlaps.values()])
+    return {
+        "repeat": repeat,
+        "split_mode": split_mode,
+        "group_column": group_col or "",
+        "train_n": len(train),
+        "val_n": len(val),
+        "test_n": len(test),
+        **row_overlaps,
+        **group_overlaps,
+        "leakage_status": "fail" if leakage else "pass",
+    }
 
 
 def build_features(
@@ -182,9 +242,7 @@ def main() -> None:
     G = top_factors(args.k_g_unique, args.rank_g)
     G_RBF = top_factors(args.k_g_rbf_unique, args.rank_g_rbf) if args.k_g_rbf_unique else None
     E = top_factors(args.k_e_unique, args.rank_e)
-    ablations = args.ablation or ["G", "E", "G+E", "G+E+GE"]
-    if G_RBF is not None and args.ablation is None:
-        ablations.extend(["RBF", "G+RBF+E", "G+RBF+E+GE+RBFE"])
+    ablations = args.ablation or (DEFAULT_ABLATIONS if G_RBF is not None else DEFAULT_ABLATIONS[:4])
     y_raw = obs["phenotype_value"].to_numpy(dtype=np.float32)
     w = obs["weight_g_e"].to_numpy(dtype=np.float32)
     obs["_lofo_group"] = family_group(obs, args.lofo_col)
@@ -198,13 +256,16 @@ def main() -> None:
         "lofo": "_lofo_group",
     }
     rows = []
+    leakage_rows = []
     for repeat in range(args.repeats):
         for split_mode, group_col in split_cols.items():
             try:
                 train, val, test = make_split(obs, split_mode, args.seed + repeat, args.test_fraction, args.val_fraction, group_col)
             except SystemExit as exc:
                 rows.append({"repeat": repeat, "split_mode": split_mode, "ablation": "NA", "split": "skipped", "n": 0, "rmse": np.nan, "mae": np.nan, "pearson": np.nan, "note": str(exc)})
+                leakage_rows.append({"repeat": repeat, "split_mode": split_mode, "group_column": group_col or "", "leakage_status": "skipped", "note": str(exc)})
                 continue
+            leakage_rows.append(split_leakage_record(obs, repeat, split_mode, group_col, train, val, test))
             if len(train) == 0 or len(test) == 0:
                 rows.append({"repeat": repeat, "split_mode": split_mode, "ablation": "NA", "split": "skipped", "n": 0, "rmse": np.nan, "mae": np.nan, "pearson": np.nan, "note": "empty train/test"})
                 continue
@@ -221,6 +282,7 @@ def main() -> None:
 
     result = pd.DataFrame(rows)
     result.to_csv(args.out_dir / f"{args.prefix}_metrics.tsv", sep="\t", index=False)
+    pd.DataFrame(leakage_rows).to_csv(args.out_dir / "split_leakage_qc.tsv", sep="\t", index=False)
     summary = (
         result[result["split"].eq("test")]
         .groupby(["split_mode", "ablation"], dropna=False)
@@ -228,13 +290,12 @@ def main() -> None:
         .reset_index()
     )
     summary.to_csv(args.out_dir / f"{args.prefix}_summary.tsv", sep="\t", index=False)
-    with (args.out_dir / f"{args.prefix}_config.json").open("w", encoding="utf-8") as handle:
-        json.dump(
-            vars(args) | {"selected_trait": selected_trait, "observations_used": int(len(obs)), "ablations_used": ablations},
-            handle,
-            default=str,
-            indent=2,
-        )
+    config = vars(args) | {"selected_trait": selected_trait, "observations_used": int(len(obs)), "ablations_used": ablations}
+    with (args.out_dir / "config.json").open("w", encoding="utf-8") as handle:
+        json.dump(config, handle, default=str, indent=2)
+    if args.prefix != "validation_ablation":
+        with (args.out_dir / f"{args.prefix}_config.json").open("w", encoding="utf-8") as handle:
+            json.dump(config, handle, default=str, indent=2)
     print(summary.to_string(index=False))
 
 
