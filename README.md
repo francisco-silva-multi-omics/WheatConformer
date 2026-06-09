@@ -8,6 +8,13 @@ conda activate wheat80k
 python -m pip install -r requirements/base.txt
 ```
 
+For development and verification:
+
+```bash
+python -m pip install -r requirements/test.txt
+python -m pytest -q
+```
+
 Prepare raw folders manually:
 
 ```bash
@@ -56,6 +63,33 @@ conda activate wheattrain
 python -m pip install -r requirements/training_tensorflow.txt
 bash scripts/03_run_training.sh
 ```
+
+Training is strictly one trait per model. For a model-ready observation table
+with multiple traits, specify the traits to run:
+
+```bash
+export TRAIN_TRAITS="Grain-Yield,Heading,Height"
+bash scripts/03_run_training.sh
+```
+
+Each HMP trait is written under `trained_models/stage1_mkl/<sanitized_trait>/`.
+When `TRAIN_TRAITS` is unset, training proceeds only if the observation table
+contains exactly one non-empty trait.
+
+HMP QC thresholds can be overridden before core processing:
+
+```bash
+export HMP_MAF_MIN=0.01
+export HMP_MARKER_HET_MAX=0.10
+export HMP_SAMPLE_HET_MAX=0.10
+export HMP_MARKER_MISSING_MAX=0.20
+export HMP_SAMPLE_MISSING_MAX=0.20
+```
+
+The Gaussian genomic bandwidth multiplier can be set with
+`GAUSSIAN_GAMMA_MULTIPLIER`. An explicit `--gamma` has highest precedence,
+followed by `--gamma-multiplier`, the environment variable, and the default
+multiplier of `1.0`.
 
 On SLURM:
 

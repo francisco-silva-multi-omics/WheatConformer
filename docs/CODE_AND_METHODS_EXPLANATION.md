@@ -140,7 +140,13 @@ The HMP QC logic uses:
 minor allele frequency >= 0.01
 marker heterozygosity <= 0.10
 sample heterozygosity <= 0.10
+marker missingness <= 0.20
+sample missingness <= 0.20
 ```
+
+These defaults can be overridden with `HMP_MAF_MIN`, `HMP_MARKER_HET_MAX`,
+`HMP_SAMPLE_HET_MAX`, `HMP_MARKER_MISSING_MAX`, and
+`HMP_SAMPLE_MISSING_MAX`.
 
 The rationale:
 
@@ -149,10 +155,17 @@ The rationale:
 | MAF filter | Very rare markers contribute little stable relationship information and can inflate noise. |
 | Marker heterozygosity filter | Wheat lines are expected to be mostly inbred; excessive heterozygosity may indicate problematic markers, paralogs, alignment issues, or genotype calling errors. |
 | Sample heterozygosity filter | Highly heterozygous samples may indicate seed mixture, contamination, poor calling, or nonrepresentative material. |
+| Marker missingness filter | Removes loci with insufficient observed calls before allele-frequency estimation and imputation. |
+| Sample missingness filter | Removes samples whose genomic relationships would depend excessively on imputation. |
 | Missing conversion and mean imputation | Prevents the missing code `-9` from creating false genetic distances. |
 | Kernel scaling by mean diagonal | Makes kernels comparable and stabilizes downstream variance components or kernel weighting. |
 
-After QC, allele frequencies are recomputed on the filtered matrix. This matters because the VanRaden denominator depends on marker allele frequencies:
+The storage value `-9` is converted to `NaN` before MAF, heterozygosity,
+missingness, or kernel calculations. QC tables report every marker/sample,
+whether it was retained, and all applicable removal reasons. After filtering,
+all-NaN markers are removed, remaining missing calls are marker-mean imputed,
+and allele frequencies are recomputed. This matters because the VanRaden
+denominator depends on marker allele frequencies:
 
 ```text
 denom = sum 2p(1-p)
@@ -207,7 +220,15 @@ By default:
 gamma = 1 / median(sampled positive d_G^2)
 ```
 
-This median-distance heuristic prevents the kernel from collapsing toward either an identity matrix or an all-ones matrix. `GAUSSIAN_GAMMA_MULTIPLIER` can be varied and selected using held-out validation.
+This median-distance heuristic prevents the kernel from collapsing toward either an identity matrix or an all-ones matrix. `GAUSSIAN_GAMMA_MULTIPLIER` can be varied and selected using held-out validation. Effective gamma precedence is:
+
+```text
+--gamma > --gamma-multiplier > GAUSSIAN_GAMMA_MULTIPLIER > default 1.0
+```
+
+The Gaussian QC JSON records the effective gamma, its source, multiplier,
+sampled median squared distance, linear-kernel path, sample-order path, and
+number of samples.
 
 `K_G_RBF` captures nonlinear similarity in the genome-wide marker feature space and can improve prediction when the genotype-to-phenotype relationship is nonadditive. It can represent epistatic-like predictive patterns, but it does not identify individual marker-by-marker epistatic effects. For that reason, `K_G` and `K_G_RBF` are kept as separate model components and compared through ablation.
 
@@ -421,6 +442,20 @@ Main script:
 ```text
 server_training_pipeline/train_multikernel_gxe_tf.py
 ```
+
+One model invocation is restricted to one non-empty
+`trait_name_canonical`. If an observation table contains multiple traits,
+`--trait` is mandatory; otherwise training aborts before response extraction.
+The validation/ablation suite applies the same rule. The shell training
+pipeline accepts a comma-separated `TRAIN_TRAITS` value and creates a separate
+output directory for every selected trait:
+
+```text
+trained_models/stage1_mkl/<sanitized_trait>/
+```
+
+This prevents a single loss from combining responses with incompatible units,
+scales, and biological meaning.
 
 The scalable TensorFlow model uses low-rank factors of `K_G`, `K_G_RBF`, and `K_E`:
 

@@ -74,13 +74,34 @@ sbatch server_80k_pipeline/run_80k_pipeline.slurm
 bash scripts/02_run_model_inputs.sh
 ```
 
-The core pipeline builds both the additive VanRaden genomic kernel and a Gaussian/RBF genomic kernel. The Gaussian bandwidth defaults to the inverse median sampled squared genomic distance and can be adjusted with `GAUSSIAN_GAMMA_MULTIPLIER`.
+The core pipeline builds both the additive VanRaden genomic kernel and a Gaussian/RBF genomic kernel. The Gaussian bandwidth defaults to the inverse median sampled squared genomic distance and can be adjusted with:
+
+```bash
+GAUSSIAN_GAMMA_MULTIPLIER=2.0 bash scripts/01_run_core_pipeline.sh
+```
+
+Gamma precedence is `--gamma`, then `--gamma-multiplier`, then
+`GAUSSIAN_GAMMA_MULTIPLIER`, then the default multiplier `1.0`. The effective
+gamma, source, multiplier, sampled median distance, input paths, and sample
+count are recorded in the Gaussian QC JSON.
 
 ## Phase 4: TensorFlow Baseline Training
 
 ```bash
 bash scripts/03_run_training.sh
 ```
+
+One training invocation is always restricted to one trait. If HMP model inputs
+contain multiple traits, provide an explicit comma-separated list:
+
+```bash
+export TRAIN_TRAITS="Grain-Yield,Heading,Height"
+bash scripts/03_run_training.sh
+```
+
+The script creates one output directory per trait under
+`trained_models/stage1_mkl/`. If `TRAIN_TRAITS` is unset and multiple traits
+exist, the pipeline aborts instead of mixing responses.
 
 or submit the individual SLURM files:
 
@@ -117,4 +138,5 @@ This step is documented but not run by the default core pipeline.
 ```bash
 python scripts/check_expected_outputs.py
 python scripts/05_check_model_methodology_readiness.py
+python -m pytest -q
 ```
