@@ -75,6 +75,28 @@ def cv0_split(df: pd.DataFrame, seed: int, test_fraction: float, val_fraction: f
         np.where(geno.isin(test_g) & env.isin(test_e))[0],
     )
 
+def group_kfold_splits(df: pd.DataFrame, group_col: str, splits: int, seed: int, val_fraction: float):
+    if group_col not in df.columns:
+        raise SystemExit(f"group_kfold requires group column {group_col}")
+    groups = np.asarray(sorted(df[group_col].fillna("").astype(str).unique()), dtype=object)
+    if splits < 2 or len(groups) < splits:
+        raise SystemExit(f"group_kfold requires 2 <= splits <= unique groups; got {splits} and {len(groups)}")
+    rng = np.random.default_rng(seed)
+    rng.shuffle(groups)
+    values = df[group_col].fillna("").astype(str)
+    out = []
+    for fold, test_values in enumerate(np.array_split(groups, splits)):
+        test_groups = set(test_values)
+        remaining = np.asarray([value for value in groups if value not in test_groups], dtype=object)
+        np.random.default_rng(seed + fold + 1).shuffle(remaining)
+        val_groups = set(remaining[:max(1, round(len(remaining) * val_fraction))])
+        out.append((
+            np.where(~values.isin(test_groups | val_groups))[0],
+            np.where(values.isin(val_groups))[0],
+            np.where(values.isin(test_groups))[0],
+        ))
+    return out
+
 
 def make_split(df, mode, seed, test_fraction, val_fraction, group_col=None):
     mode = canonical_split_mode(mode)
@@ -85,6 +107,8 @@ def make_split(df, mode, seed, test_fraction, val_fraction, group_col=None):
         return idx[n_test + n_val:], idx[n_test:n_test + n_val], idx[:n_test]
     if mode == "cv0_genotype_environment":
         return cv0_split(df, seed, test_fraction, val_fraction)
+    if mode == "group_kfold":
+        return group_kfold_splits(df, group_col, 5, seed, val_fraction)[0]
     return grouped_holdout(df, group_col, seed, test_fraction, val_fraction)
 
 

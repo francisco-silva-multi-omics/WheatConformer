@@ -3,6 +3,7 @@
 import os
 import re
 import hashlib
+import json
 import platform
 import sys
 from pathlib import Path
@@ -385,6 +386,16 @@ def component_weights(nonempty: list[str], component_names: list[str]) -> tuple[
     return raw, {name: raw[name] / total for name in component_names}
 
 
+def component_activity(feature_count: int, mean_diag_raw: float) -> tuple[bool, str]:
+    if feature_count <= 0:
+        return False, "no_features"
+    if not np.isfinite(mean_diag_raw):
+        return False, "nonfinite_mean_diagonal"
+    if mean_diag_raw <= 0:
+        return False, "zero_variance_kernel"
+    return True, ""
+
+
 def main() -> None:
     env = pd.read_csv(OUT / "envdata.tsv", sep="\t", dtype=str, low_memory=False)
     loc = pd.read_csv(OUT / "locdata.tsv", sep="\t", dtype=str, low_memory=False)
@@ -430,12 +441,15 @@ def main() -> None:
         )
         K_raw, z, scaling = standardized_kernel(features)
         K_scaled, mean_diag_raw, mean_diag_scaled = scale_kernel_mean_diagonal(K_raw)
+        active, inactive_reason = component_activity(feature_count, mean_diag_raw)
         kernels[name] = K_scaled
         component_stats[name] = {
             "feature_count": feature_count,
             "mean_diag_raw": mean_diag_raw,
             "mean_diag_scaled": mean_diag_scaled,
             "coverage_env_count": covered_envs,
+            "active_component": active,
+            "inactive_reason": inactive_reason,
         }
         np.save(OUT / f"K_{name}.raw.npy", K_raw)
         np.save(OUT / f"K_{name}.npy", K_scaled)
@@ -448,10 +462,17 @@ def main() -> None:
             manifest_rows.append({"kernel": name, "feature": col})
         print(f"K_{name}", K_scaled.shape, "features", z.shape[1], "mean_diag", mean_diag_scaled)
 
-    nonempty = [name for name, features in feature_sets.items() if features.dropna(axis=1, how="all").shape[1] > 0]
-    raw_weights, weights = component_weights(nonempty, list(feature_sets))
-    K_E = sum(weights[name] * kernels[name] for name in feature_sets).astype(np.float32)
+    active_components = [name for name in feature_sets if component_stats[name]["active_component"]]
+    raw_weights, weights = component_weights(active_components, list(feature_sets))
+    K_E_raw = sum(weights[name] * kernels[name] for name in feature_sets).astype(np.float32)
+    K_E, environment_mean_diag_raw, environment_mean_diag_scaled = scale_kernel_mean_diagonal(K_E_raw)
+    np.save(OUT / "K_E.raw.npy", K_E_raw)
     np.save(OUT / "K_E.npy", K_E)
+    (OUT / "K_E.qc.json").write_text(json.dumps({
+        "active_components": active_components,
+        "environment_mean_diag_raw": environment_mean_diag_raw,
+        "environment_mean_diag_scaled": environment_mean_diag_scaled,
+    }, indent=2), encoding="utf-8")
 
     pd.DataFrame(
         [
@@ -460,6 +481,8 @@ def main() -> None:
                 "raw_weight": raw_weights[name],
                 "normalized_weight": weights[name],
                 **component_stats[name],
+                "environment_mean_diag_raw": environment_mean_diag_raw,
+                "environment_mean_diag_scaled": environment_mean_diag_scaled,
             }
             for name in feature_sets
         ]

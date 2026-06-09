@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 
 import build_environment_component_kernels as environment_kernels
-from build_environment_component_kernels import component_weights, scale_kernel_mean_diagonal
+from build_environment_component_kernels import component_activity, component_weights, scale_kernel_mean_diagonal, standardized_kernel
 
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -30,6 +30,14 @@ def test_component_weights_normalize_nonempty_components(monkeypatch) -> None:
     assert np.isclose(normalized["geo"], 2 / 3)
 
 
+def test_constant_component_is_inactive_and_gets_zero_weight() -> None:
+    kernel, _, _ = standardized_kernel(pd.DataFrame({"constant": [2, 2, 2]}))
+    active, reason = component_activity(1, float(np.diag(kernel).mean()))
+    assert not active and reason == "zero_variance_kernel"
+    raw, normalized = component_weights(["geo"], ["geo", "constant"])
+    assert raw["constant"] == normalized["constant"] == 0.0
+
+
 def test_environment_kernel_main_writes_scaled_components_and_provenance(tmp_path, monkeypatch) -> None:
     shutil.copyfile(FIXTURES / "toy_envdata.tsv", tmp_path / "envdata.tsv")
     shutil.copyfile(FIXTURES / "toy_locdata.tsv", tmp_path / "locdata.tsv")
@@ -45,7 +53,7 @@ def test_environment_kernel_main_writes_scaled_components_and_provenance(tmp_pat
             assert np.isclose(np.diag(scaled).mean(), 1.0)
 
     weights = pd.read_csv(tmp_path / "env_kernel_component_weights.tsv", sep="\t")
-    assert weights.columns.tolist() == [
+    assert set([
         "kernel",
         "raw_weight",
         "normalized_weight",
@@ -53,7 +61,12 @@ def test_environment_kernel_main_writes_scaled_components_and_provenance(tmp_pat
         "mean_diag_raw",
         "mean_diag_scaled",
         "coverage_env_count",
-    ]
+        "active_component",
+        "inactive_reason",
+        "environment_mean_diag_raw",
+        "environment_mean_diag_scaled",
+    ]).issubset(weights.columns)
     assert np.isclose(weights["normalized_weight"].sum(), 1.0)
     assert (tmp_path / "qc_location_key_collisions.tsv").exists()
     assert np.isclose(np.diag(np.load(tmp_path / "K_E.npy")).mean(), 1.0)
+    assert (tmp_path / "K_E.raw.npy").exists()

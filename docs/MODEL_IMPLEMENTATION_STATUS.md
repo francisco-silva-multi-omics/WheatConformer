@@ -22,6 +22,8 @@ Model-ready TensorFlow inputs with compact additive/Gaussian genotype and enviro
 TensorFlow low-rank additive, Gaussian, GxE, and Gaussian-by-environment predictive baseline
 Automated trait-specific validation/ablation reports with split leakage QC
 Grouped holdout, true group K-fold, cv1_genotype, cv1_environment, and cv0_genotype_environment splits
+Shared TensorFlow/validation split semantics with three-way leakage QC
+Trait-isolated HMP, GBS, validation, and dense REML workflows
 Toy-data-only pytest suite and GitHub Actions workflow
 Reference-based TensorFlow CNN+Transformer regulatory pretraining prototype
 ```

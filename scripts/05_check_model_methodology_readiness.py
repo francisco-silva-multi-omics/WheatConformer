@@ -17,7 +17,7 @@ CHECKS = [
     ("hmp_kernel", "genotype_panels/hmp/K_HMP.QCfiltered.meanDiag1.npy", "implemented"),
     ("hmp_gaussian_kernel", "genotype_panels/hmp/K_HMP.QCfiltered.gaussian.npy", "implemented"),
     ("linear_vs_gaussian_diagnostics", "genotype_panels/hmp/K_HMP.linear_vs_gaussian_diagnostics.json", "implemented"),
-    ("rbf_gamma_sweep_manifest", "genotype_panels/hmp/rbf_gamma_sweep/gamma_sweep_manifest.tsv", "implemented"),
+    ("rbf_gamma_sweep_manifest", "genotype_panels/hmp/rbf_gamma_sweep/gamma_sweep_manifest_all_traits.tsv", "implemented"),
     ("environment_kernel", "environment/K_E.npy", "implemented"),
     ("environment_geo_kernel", "environment/K_geo.npy", "implemented"),
     ("environment_weather_kernel", "environment/K_weather.npy", "implemented"),

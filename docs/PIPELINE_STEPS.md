@@ -105,6 +105,10 @@ bash scripts/06_run_rbf_gamma_sweep.sh \
   --multipliers 0.25 0.5 1.0 2.0 4.0
 ```
 
+Gamma selection defaults to the integrated `G+RBF+E+GE+RBFE` model and uses
+validation metrics only. RBF-only results remain diagnostic. Each trait writes
+its own manifest, and `gamma_sweep_manifest_all_traits.tsv` combines them.
+
 The core pipeline also writes additive-versus-RBF CKA, off-diagonal
 correlation, symmetry, PSD, effective-rank, and eigenvalue diagnostics.
 
@@ -158,6 +162,13 @@ configuration under `trained_models/validation_ablation/`, followed by
 Canonical split names distinguish random observations, grouped holdouts, true
 group K-fold, and genomic-prediction CV scenarios. Legacy `loeo`, `loyo`,
 `loto`, `loco`, and `lofo` arguments remain aliases and emit warnings.
+TensorFlow training and validation use the same shared split utilities.
+
+Environment location keys never fall back to country alone. Missing location
+numbers use location descriptions or deterministic unresolved hashes.
+Components with zero effective variance receive zero weight, and both
+`environment/K_E.raw.npy` and mean-diagonal-normalized `environment/K_E.npy`
+are written.
 
 ## Phase 5: Regulatory TensorFlow Model
 

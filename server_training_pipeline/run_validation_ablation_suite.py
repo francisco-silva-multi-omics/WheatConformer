@@ -216,9 +216,9 @@ def group_kfold_splits(
 
 
 try:
-    from .split_utils import canonical_split_mode, grouped_holdout, cv0_split, make_split, split_leakage_record
+    from .split_utils import canonical_split_mode, grouped_holdout, cv0_split, make_split, split_leakage_record, group_kfold_splits
 except ImportError:
-    from split_utils import canonical_split_mode, grouped_holdout, cv0_split, make_split, split_leakage_record
+    from split_utils import canonical_split_mode, grouped_holdout, cv0_split, make_split, split_leakage_record, group_kfold_splits
 
 
 def split_leakage_record(

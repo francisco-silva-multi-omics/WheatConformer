@@ -12,10 +12,10 @@ import tensorflow as tf
 
 try:
     from .trait_isolation import select_single_trait
-    from .split_utils import CANONICAL_SPLIT_MODES, SPLIT_ALIASES, canonical_split_mode, make_split, split_leakage_record
+    from .split_utils import CANONICAL_SPLIT_MODES, SPLIT_ALIASES, canonical_split_mode, group_kfold_splits, make_split, split_leakage_record
 except ImportError:
     from trait_isolation import select_single_trait
-    from split_utils import CANONICAL_SPLIT_MODES, SPLIT_ALIASES, canonical_split_mode, make_split, split_leakage_record
+    from split_utils import CANONICAL_SPLIT_MODES, SPLIT_ALIASES, canonical_split_mode, group_kfold_splits, make_split, split_leakage_record
 
 
 def read_table(path: Path) -> pd.DataFrame:
@@ -244,6 +244,8 @@ def main() -> None:
     parser.add_argument("--no-rbf-e", action="store_true")
     parser.add_argument("--split", default="cv2_random_observation")
     parser.add_argument("--group-kfold-col", default="env_kernel_id")
+    parser.add_argument("--group-kfold-splits", type=int, default=5)
+    parser.add_argument("--group-kfold-fold", type=int, default=0)
     parser.add_argument("--test-fraction", type=float, default=0.2)
     parser.add_argument("--val-fraction", type=float, default=0.1)
     parser.add_argument("--seed", type=int, default=2026)
@@ -295,7 +297,13 @@ def main() -> None:
         "cv1_genotype": "panel_sample_id", "cv1_environment": "env_kernel_id",
         "cv0_genotype_environment": None, "group_kfold": args.group_kfold_col,
     }[canonical_split]
-    train_idx, val_idx, test_idx = make_split(obs, canonical_split, args.seed, args.test_fraction, args.val_fraction, split_col)
+    if canonical_split == "group_kfold":
+        folds = group_kfold_splits(obs, split_col, args.group_kfold_splits, args.seed, args.val_fraction)
+        if not 0 <= args.group_kfold_fold < len(folds):
+            raise SystemExit(f"--group-kfold-fold must be between 0 and {len(folds) - 1}")
+        train_idx, val_idx, test_idx = folds[args.group_kfold_fold]
+    else:
+        train_idx, val_idx, test_idx = make_split(obs, canonical_split, args.seed, args.test_fraction, args.val_fraction, split_col)
     leakage = split_leakage_record(obs, 0, canonical_split, train_idx, val_idx, test_idx, group_col=split_col)
     if len(train_idx) == 0 or len(val_idx) == 0 or len(test_idx) == 0:
         raise SystemExit(f"Empty split: train={len(train_idx)}, val={len(val_idx)}, test={len(test_idx)}")

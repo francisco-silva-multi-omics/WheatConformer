@@ -109,7 +109,9 @@ bash scripts/04_run_validation_ablation.sh
 Select an RBF multiplier from validation metrics only:
 
 ```bash
-bash scripts/06_run_rbf_gamma_sweep.sh --trait "Grain Yield"
+bash scripts/06_run_rbf_gamma_sweep.sh \
+  --trait "Grain Yield" \
+  --selection-ablation G+RBF+E+GE+RBFE
 ```
 
 Build the optional explicit second-order kernel:
@@ -139,7 +141,7 @@ bash scripts/04_run_regulatory_enformer_tf.sh
 genotype_panels/hmp/K_HMP.QCfiltered.meanDiag1.npy
 genotype_panels/hmp/K_HMP.QCfiltered.gaussian.npy
 genotype_panels/hmp/K_HMP.linear_vs_gaussian_diagnostics.json
-genotype_panels/hmp/rbf_gamma_sweep/gamma_sweep_manifest.tsv
+genotype_panels/hmp/rbf_gamma_sweep/gamma_sweep_manifest_all_traits.tsv
 environment/K_E.npy
 environment/qc_location_key_collisions.tsv
 environment/env_kernel_component_weights.tsv

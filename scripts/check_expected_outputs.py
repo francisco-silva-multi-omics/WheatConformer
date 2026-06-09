@@ -16,6 +16,8 @@ EXPECTED = [
     "genotype_panels/hmp/hmp_K_sample_order.QCfiltered.tsv",
     "phenotypes/stage1_adjusted_phenotypes.parquet",
     "environment/K_E.npy",
+    "environment/K_E.raw.npy",
+    "environment/K_E.qc.json",
     "environment/K_geo.npy",
     "environment/K_geo.raw.npy",
     "environment/K_weather.npy",
