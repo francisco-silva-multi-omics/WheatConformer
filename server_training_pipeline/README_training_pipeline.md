@@ -8,6 +8,12 @@ This folder contains two training routes aligned with the scalable methodology:
 4. `run_validation_ablation_suite.py`: canonical grouped holdout, group K-fold, CV1/CV0 validation, and ablations.
 5. `tune_multikernel_hyperparameters.py`: validation-only ridge/rank selection for the integrated model.
 
+`split_utils.py` is the single source of truth for all split semantics.
+TensorFlow training persists `<prefix>_split_leakage_qc.tsv/json` and aborts
+before kernel factorization if a required-disjoint split fails leakage QC.
+Validation/ablation runs skip leakage-failed folds and exclude them from
+performance reports.
+
 ## Why Dense Full Matrices Are Avoided
 
 For the current stage-1 table, hundreds of thousands of observations imply an observation kernel of size:
@@ -305,6 +311,10 @@ allows all kernel IDs to define the low-rank eigenspace. For strict inductive
 CV1/CV0 evaluation, use `--factorization-mode train_nystrom`. It
 eigendecomposes train-only kernel submatrices and Nyström-projects
 validation/test IDs. Outputs record factorization mode and rank provenance.
+The TensorFlow trainer supports the same argument and shared implementation.
+Use strict Nyström for inductive benchmarking. Complete-kernel transductive
+factorization remains appropriate for deployment-style prediction when the
+candidate genotype and environment set is known.
 
 The Gaussian bandwidth is selected using validation metrics from the
 integrated `G+RBF+E+GE+RBFE` model by default; RBF-only results are secondary
@@ -322,3 +332,13 @@ One trait per invocation applies to HMP TensorFlow, GBS TensorFlow, validation
 ablation, and dense REML. The TensorFlow baseline is predictive, not formal
 REML. Dense REML remains limited to filtered subsets; scalable operator REML
 remains future work.
+
+Before HPC training, run:
+
+```bash
+python scripts/05_check_model_methodology_readiness.py --strict
+```
+
+Strict readiness fails on missing baseline artifacts and requested-trait
+validation/leakage files. Graph-pangenome paths, `K_z`, and operator-based REML
+are reported as future work rather than baseline failures.

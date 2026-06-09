@@ -305,6 +305,11 @@ Locations are joined with normalized `Country|Loc_no` keys rather than
 marked. The collision audit flags cross-country location numbers and coordinate
 dispersion above 0.05 decimal degrees or 50 m altitude.
 
+Empty normalized `Loc_no` values are never used to aggregate fallback
+coordinates, preventing unrelated unresolved sites from receiving a pooled
+location. Unresolved-location hashes use stable source fields rather than
+dataframe row indexes, so their keys are reproducible under row reordering.
+
 Each raw component is preserved and each non-empty component is scaled before
 combination:
 
@@ -577,6 +582,10 @@ The implemented scenarios include `cv1_genotype`, `cv1_environment`, and
 backward-compatible aliases for accurately named grouped holdouts.
 TensorFlow and ablation scripts share these canonical names. Leakage QC covers
 train-validation, train-test, and validation-test overlap.
+`server_training_pipeline/split_utils.py` is the single source of truth.
+TensorFlow training persists QC and aborts before factorization on leakage
+failure. Validation and ablation preserve the failure reason but skip the fold,
+so it cannot contribute performance metrics.
 
 Two kernel-factorization regimes are available:
 
@@ -590,6 +599,15 @@ phenotypes, but held-out IDs influence the kernel eigenspace. When requested
 for `cv1_genotype`, `cv1_environment`, or `cv0_genotype_environment`,
 `train_nystrom` excludes validation/test IDs from eigendecomposition and
 projects them with `K_new,train U_train diag(1/sqrt(lambda_train))`.
+Both the validation suite and TensorFlow trainer use the shared factorization
+implementation. Strict Nyström is intended for inductive benchmarking;
+complete-kernel transductive factorization remains valid for deployment-style
+prediction when all candidate kernel IDs are known.
+
+The strict readiness checker treats quantitative-baseline artifacts and
+requested-trait leakage summaries as required. Graph paths, regulatory `K_z`,
+and operator-based REML remain future thesis components and do not cause
+baseline-readiness failure.
 
 Ablations include:
 

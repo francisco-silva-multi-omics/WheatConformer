@@ -6,6 +6,7 @@ import numpy as np
 import pandas as pd
 
 from server_training_pipeline.run_validation_ablation_suite import (
+    build_leakage_summary,
     canonical_split_mode,
     fold_skip_reason,
     group_kfold_splits,
@@ -111,3 +112,25 @@ def test_empty_validation_fold_is_skipped() -> None:
         np.array([3]),
     )
     assert reason == "empty train/validation/test partition"
+
+
+def test_leakage_summary_reports_passed_failed_and_empty_skips() -> None:
+    summary = build_leakage_summary(
+        pd.DataFrame(
+            [
+                {"repeat": 0, "split_mode": "cv1_genotype", "leakage_status": "pass", "note": ""},
+                {"repeat": 1, "split_mode": "cv1_genotype", "leakage_status": "fail", "note": "split leakage detected"},
+                {
+                    "repeat": 2,
+                    "split_mode": "cv1_genotype",
+                    "leakage_status": "skipped",
+                    "note": "empty train/validation/test partition",
+                },
+            ]
+        )
+    ).iloc[0]
+    assert summary["repeats_attempted"] == 3
+    assert summary["repeats_passed"] == 1
+    assert summary["repeats_failed"] == 1
+    assert summary["repeats_skipped"] == 1
+    assert summary["repeats_skipped_empty"] == 1

@@ -49,6 +49,12 @@ python scripts/check_expected_outputs.py
 python scripts/05_check_model_methodology_readiness.py
 ```
 
+Use `python scripts/05_check_model_methodology_readiness.py --strict` before
+HPC training. Strict mode fails for missing quantitative-baseline artifacts,
+including requested-trait leakage summaries, while graph paths, `K_z`, and
+other future thesis components are reported separately without failing the
+baseline check.
+
 To include the environment weather fix with external weather fetch:
 
 ```bash
@@ -119,6 +125,14 @@ bash scripts/04_run_validation_ablation.sh
 validation/test IDs without allowing them to influence the train eigenspace.
 It is applied to `cv1_genotype`, `cv1_environment`, and
 `cv0_genotype_environment`; other split modes record `full_transductive`.
+The TensorFlow trainer also supports `--factorization-mode train_nystrom` for
+strict CV1/CV0 benchmarking. `full_transductive` remains appropriate for
+deployment-style prediction when all candidate genotype and environment
+kernels are known.
+
+`server_training_pipeline/split_utils.py` is the single source of truth for
+split semantics. TensorFlow training aborts on failed leakage QC, while
+validation/ablation runs record and skip leakage-failed folds.
 
 Select an RBF multiplier from validation metrics only:
 

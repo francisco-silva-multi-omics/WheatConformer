@@ -27,7 +27,7 @@ def combine_reports(root: Path) -> pd.DataFrame:
         config = json.loads(config_path.read_text(encoding="utf-8"))
         trait = str(config.get("selected_trait", trait_dir.name))
         summary = pd.read_csv(summary_path, sep="\t")
-        summary = summary[summary["ablation"].ne("NA")].copy()
+        summary = summary[summary["ablation"].notna() & summary["ablation"].ne("NA")].copy()
         leakage_path = trait_dir / "split_leakage_summary.tsv"
         if not leakage_path.exists():
             raise SystemExit(f"Missing trait-specific leakage summary: {leakage_path}")

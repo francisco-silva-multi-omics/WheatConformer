@@ -173,6 +173,27 @@ def fold_skip_reason(
     return None
 
 
+def build_leakage_summary(leakage_df: pd.DataFrame) -> pd.DataFrame:
+    notes = leakage_df.get("note", pd.Series("", index=leakage_df.index)).fillna("")
+    return (
+        leakage_df.assign(
+            passed=leakage_df["leakage_status"].eq("pass"),
+            failed=leakage_df["leakage_status"].eq("fail"),
+            skipped=leakage_df["leakage_status"].eq("skipped"),
+            skipped_empty=notes.eq("empty train/validation/test partition"),
+        )
+        .groupby("split_mode", dropna=False)
+        .agg(
+            repeats_attempted=("repeat", "count"),
+            repeats_passed=("passed", "sum"),
+            repeats_failed=("failed", "sum"),
+            repeats_skipped=("skipped", "sum"),
+            repeats_skipped_empty=("skipped_empty", "sum"),
+        )
+        .reset_index()
+    )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run scalable validation and ablation suite for low-rank multikernel baseline.")
     parser.add_argument("--observations", type=Path, required=True)
@@ -373,19 +394,7 @@ def main() -> None:
     result.to_csv(args.out_dir / f"{args.prefix}_metrics.tsv", sep="\t", index=False)
     leakage_df = pd.DataFrame(leakage_rows)
     leakage_df.to_csv(args.out_dir / "split_leakage_qc.tsv", sep="\t", index=False)
-    leakage_summary = (
-        leakage_df.assign(
-            passed=leakage_df["leakage_status"].eq("pass"),
-            failed=leakage_df["leakage_status"].eq("fail"),
-            skipped=leakage_df["leakage_status"].eq("skipped"),
-            skipped_empty=leakage_df.get("note", pd.Series("", index=leakage_df.index)).eq("empty train/validation/test partition"),
-        )
-        .groupby("split_mode", dropna=False)
-        .agg(repeats_attempted=("repeat", "count"), repeats_passed=("passed", "sum"),
-             repeats_failed=("failed", "sum"), repeats_skipped=("skipped", "sum"),
-             repeats_skipped_empty=("skipped_empty", "sum"))
-        .reset_index()
-    )
+    leakage_summary = build_leakage_summary(leakage_df)
     leakage_summary.insert(0, "trait", selected_trait)
     leakage_summary["leakage_free"] = leakage_summary["repeats_failed"].eq(0)
     leakage_summary.to_csv(args.out_dir / "split_leakage_summary.tsv", sep="\t", index=False)

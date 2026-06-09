@@ -48,3 +48,24 @@ def test_cv1_genotype_train_ids_define_strict_kernel_dimension(tmp_path: Path) -
     assert factors.shape[0] == 5
     assert metadata["train_kernel_dimension"] == 3
     assert metadata["rank_retained"] <= 3
+
+
+def test_tensorflow_trainer_records_factorization_provenance() -> None:
+    source = (
+        Path(__file__).resolve().parents[1]
+        / "server_training_pipeline"
+        / "train_multikernel_gxe_tf.py"
+    ).read_text(encoding="utf-8")
+    for field in [
+        "requested_factorization_mode",
+        "effective_factorization_mode",
+        "train_genotype_kernel_dimension",
+        "train_environment_kernel_dimension",
+        "rank_g_requested",
+        "rank_g_retained",
+        "rank_g_rbf_requested",
+        "rank_g_rbf_retained",
+        "rank_e_requested",
+        "rank_e_retained",
+    ]:
+        assert field in source

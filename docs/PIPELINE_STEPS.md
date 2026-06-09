@@ -53,6 +53,10 @@ back to `Loc_no` and are explicitly recorded in
 as `K_<component>.raw.npy`; current component names contain mean-diagonal
 scaled kernels. Optional component weights:
 
+Empty `Loc_no` values are excluded from fallback coordinate aggregation.
+Unresolved location hashes are derived from stable source fields and remain
+unchanged when input rows are reordered.
+
 ```bash
 ENV_WEIGHT_GEO=2 ENV_WEIGHT_WEATHER=2 ENV_WEIGHT_STRESS=1 ENV_WEIGHT_MGMT=1 \
   bash scripts/01_run_core_pipeline.sh
@@ -164,6 +168,9 @@ group K-fold, and genomic-prediction CV scenarios. Legacy `loeo`, `loyo`,
 `loto`, `loco`, and `lofo` arguments remain aliases and emit warnings.
 TensorFlow training and validation use the same shared split utilities.
 Leakage QC checks train-validation, train-test, and validation-test overlap.
+`server_training_pipeline/split_utils.py` is the only implementation of split
+semantics. TensorFlow training writes split QC and aborts on leakage failure;
+validation and ablation record and skip failed folds before model fitting.
 
 The default `full_transductive` factorization uses complete genotype and
 environment kernels before phenotype splits. Strict inductive CV1/CV0
@@ -178,6 +185,19 @@ For `cv1_genotype`, `cv1_environment`, and `cv0_genotype_environment`, this
 eigendecomposes train-only kernel submatrices and uses Nyström projection for
 validation/test IDs. Metrics record effective factorization mode, requested
 rank, retained rank, and train kernel dimension.
+
+The TensorFlow trainer accepts the same strict mode:
+
+```bash
+python server_training_pipeline/train_multikernel_gxe_tf.py \
+  ... \
+  --split cv1_genotype \
+  --factorization-mode train_nystrom
+```
+
+Use strict Nyström for inductive benchmarking. The default
+`full_transductive` mode remains acceptable for deployment-style prediction
+when all candidate genotypes and environments are known.
 
 Tune the integrated model's ridge and low-rank dimensions using validation
 metrics only:
@@ -226,6 +246,6 @@ This step is documented but not run by the default core pipeline.
 
 ```bash
 python scripts/check_expected_outputs.py
-python scripts/05_check_model_methodology_readiness.py
+python scripts/05_check_model_methodology_readiness.py --strict
 bash scripts/run_tests.sh
 ```

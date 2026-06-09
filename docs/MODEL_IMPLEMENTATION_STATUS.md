@@ -24,6 +24,10 @@ Automated trait-specific validation/ablation reports with split leakage QC
 Grouped holdout, true group K-fold, cv1_genotype, cv1_environment, and cv0_genotype_environment splits
 Shared TensorFlow/validation split semantics with three-way leakage QC
 Optional train-only Nyström factorization for strict inductive CV1/CV0 validation
+Optional train-only Nyström factorization in TensorFlow CV1/CV0 training
+Hard-stop TensorFlow leakage guard and skipped leakage-failed ablation folds
+Deterministic unresolved-location hashes and empty-location fallback exclusion
+Strict quantitative-baseline readiness checking
 Validation-only integrated-model ridge and factor-rank selection
 Trait-isolated HMP, GBS, validation, and dense REML workflows
 Toy-data-only pytest suite and GitHub Actions workflow
@@ -68,6 +72,8 @@ held-out ablation results, and gamma selection uses validation metrics only.
 The default complete-kernel factorization is transductive; strict train-only
 Nyström factorization is available for CV1/CV0 benchmarking. Ridge and
 factor-rank sweeps also select from validation metrics only.
+`split_utils.py` is the single split-semantics implementation. Failed leakage
+QC cannot enter TensorFlow training or ablation performance summaries.
 The TensorFlow model
 remains predictive rather than formal REML, dense REML remains limited to
 filtered subsets, and operator-based REML remains future work.
