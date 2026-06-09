@@ -16,8 +16,12 @@ if platform.system() == "Windows" and LOCAL_DEPS.exists():
 
 import numpy as np
 import pandas as pd
-import pyarrow as pa
-import pyarrow.parquet as pq
+try:
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+except ImportError:
+    pa = None
+    pq = None
 
 
 IUPAC_TO_BASES = {
@@ -44,6 +48,154 @@ MAS_FILES = [
 ]
 HAPLOBLOCKS = BASE / "Haplotype-based_genome-wide_association_study" / "Haplotype_blocks_EYT2011-12_to_EYT2017-18.csv"
 DARTSEQ_LANDRACE_DIR = BASE / "DArTseq-derived_SNPs_for_wheat_Mexican_landrace_accessions"
+
+
+def env_float(name: str, default: float) -> float:
+    value = os.environ.get(name)
+    if value is None or not value.strip():
+        return default
+    try:
+        parsed = float(value)
+    except ValueError as exc:
+        raise SystemExit(f"{name} must be numeric; found {value!r}") from exc
+    if not np.isfinite(parsed) or parsed < 0 or parsed > 1:
+        raise SystemExit(f"{name} must be finite and between 0 and 1; found {parsed}")
+    return parsed
+
+
+def hmp_qc_thresholds() -> dict[str, float]:
+    return {
+        "maf_min": env_float("HMP_MAF_MIN", 0.01),
+        "marker_het_max": env_float("HMP_MARKER_HET_MAX", 0.10),
+        "sample_het_max": env_float("HMP_SAMPLE_HET_MAX", 0.10),
+        "marker_missing_max": env_float("HMP_MARKER_MISSING_MAX", 0.20),
+        "sample_missing_max": env_float("HMP_SAMPLE_MISSING_MAX", 0.20),
+    }
+
+
+def vanraden_kernel(M: pd.DataFrame | np.ndarray) -> tuple[np.ndarray, np.ndarray, float]:
+    values = np.asarray(M, dtype=np.float64)
+    if values.ndim != 2 or values.shape[0] == 0 or values.shape[1] == 0:
+        raise ValueError(f"VanRaden input must be a non-empty 2D matrix; found shape={values.shape}")
+    if not np.all(np.isfinite(values)):
+        raise ValueError("VanRaden input contains missing or non-finite values")
+    if np.any((values < 0) | (values > 2)):
+        raise ValueError("VanRaden input contains values outside dosage range 0..2")
+    p = values.mean(axis=0) / 2.0
+    Z = values - (2.0 * p)
+    denom = float(np.sum(2.0 * p * (1.0 - p)))
+    if not np.isfinite(denom) or denom <= 0:
+        raise ValueError(f"VanRaden denominator must be finite and positive; found {denom}")
+    K = (Z @ Z.T) / denom
+    return K.astype(np.float32), p.astype(np.float64), denom
+
+
+def _removal_reasons(flags: list[tuple[pd.Series, str]]) -> pd.Series:
+    index = flags[0][0].index
+    reasons = pd.Series("", index=index, dtype=object)
+    for flag, label in flags:
+        reasons.loc[flag] = reasons.loc[flag].map(lambda value: f"{value};{label}".strip(";"))
+    return reasons.replace("", "kept")
+
+
+def compute_hmp_qc(
+    raw_matrix: pd.DataFrame,
+    sample_ids: pd.Series,
+    thresholds: dict[str, float] | None = None,
+) -> dict[str, object]:
+    thresholds = thresholds or hmp_qc_thresholds()
+    if len(raw_matrix) != len(sample_ids):
+        raise ValueError(f"HMP matrix rows ({len(raw_matrix)}) do not match sample IDs ({len(sample_ids)})")
+    M = raw_matrix.astype(np.float32).replace(-9, np.nan).reset_index(drop=True)
+    sample_ids = sample_ids.reset_index(drop=True)
+    observed = M.to_numpy(dtype=np.float32, copy=False)
+    observed = observed[np.isfinite(observed)]
+    valid = np.isin(observed, [0.0, 1.0, 2.0])
+    if observed.size and not valid.all():
+        bad = sorted(np.unique(observed[~valid]).tolist())
+        raise ValueError(f"HMP dosage matrix contains values outside 0/1/2/-9: {bad[:10]}")
+
+    marker_missingness = M.isna().mean(axis=0)
+    sample_missingness = M.isna().mean(axis=1)
+    marker_het = (M == 1).mean(axis=0)
+    sample_het = (M == 1).mean(axis=1)
+    p = M.mean(axis=0) / 2.0
+    maf = np.minimum(p, 1.0 - p)
+
+    low_maf = maf < thresholds["maf_min"]
+    high_marker_het = marker_het > thresholds["marker_het_max"]
+    high_marker_missing = marker_missingness > thresholds["marker_missing_max"]
+    nonfinite_p = ~np.isfinite(p)
+    keep_markers = ~(low_maf | high_marker_het | high_marker_missing | nonfinite_p)
+
+    high_sample_het = sample_het > thresholds["sample_het_max"]
+    high_sample_missing = sample_missingness > thresholds["sample_missing_max"]
+    keep_samples = ~(high_sample_het | high_sample_missing)
+
+    M_filt = M.loc[keep_samples, keep_markers].copy()
+    all_nan_after_sample_qc = M_filt.isna().all(axis=0)
+    if all_nan_after_sample_qc.any():
+        keep_markers.loc[all_nan_after_sample_qc.index[all_nan_after_sample_qc]] = False
+        M_filt = M_filt.loc[:, ~all_nan_after_sample_qc].copy()
+
+    if M_filt.empty or M_filt.shape[0] == 0 or M_filt.shape[1] == 0:
+        raise ValueError(f"HMP QC removed all usable data; filtered shape={M_filt.shape}")
+    missing_before = int(M_filt.isna().sum().sum())
+    marker_means = M_filt.mean(axis=0)
+    M_imputed = M_filt.fillna(marker_means)
+    missing_after = int(M_imputed.isna().sum().sum())
+    if missing_after:
+        raise ValueError(f"HMP mean imputation left {missing_after} missing calls")
+    K, p_filt, denom = vanraden_kernel(M_imputed)
+
+    all_nan_full = pd.Series(False, index=M.columns)
+    all_nan_full.loc[all_nan_after_sample_qc.index] = all_nan_after_sample_qc
+    marker_reasons = _removal_reasons(
+        [
+            (low_maf, "low_maf"),
+            (high_marker_het, "high_heterozygosity"),
+            (high_marker_missing, "high_missingness"),
+            (nonfinite_p, "nonfinite_allele_frequency"),
+            (all_nan_full, "all_nan_after_sample_qc"),
+        ]
+    )
+    sample_reasons = _removal_reasons(
+        [
+            (high_sample_het, "high_heterozygosity"),
+            (high_sample_missing, "high_missingness"),
+        ]
+    )
+    marker_qc = pd.DataFrame(
+        {
+            "marker": M.columns,
+            "maf": maf.reindex(M.columns).to_numpy(),
+            "marker_heterozygosity": marker_het.reindex(M.columns).to_numpy(),
+            "marker_missingness": marker_missingness.reindex(M.columns).to_numpy(),
+            "keep_marker": keep_markers.reindex(M.columns).fillna(False).to_numpy(),
+            "removal_reason": marker_reasons.reindex(M.columns).to_numpy(),
+        }
+    )
+    sample_qc = pd.DataFrame(
+        {
+            "sample_id": sample_ids.astype(str).to_numpy(),
+            "sample_heterozygosity": sample_het.to_numpy(),
+            "sample_missingness": sample_missingness.to_numpy(),
+            "keep_sample": keep_samples.to_numpy(),
+            "removal_reason": sample_reasons.to_numpy(),
+        }
+    )
+    return {
+        "matrix_imputed": M_imputed.reset_index(drop=True),
+        "sample_ids": sample_ids.loc[keep_samples].reset_index(drop=True),
+        "marker_qc": marker_qc,
+        "sample_qc": sample_qc,
+        "kernel": K,
+        "p_filtered": p_filt,
+        "denominator": denom,
+        "missing_before_imputation": missing_before,
+        "missing_after_imputation": missing_after,
+        "thresholds": thresholds,
+    }
 
 
 def rel(path: Path) -> str:
@@ -209,50 +361,17 @@ def build_hmp_qcfiltered_outputs() -> None:
 
     sample_ids = X["sample_id"].copy()
     marker_cols = [c for c in X.columns if c != "sample_id"]
-    M = X[marker_cols].astype(np.float32)
-
-    p = M.mean(axis=0) / 2
-    maf = np.minimum(p, 1 - p)
-
-    marker_het = (M == 1).mean(axis=0)
-    sample_het = (M == 1).mean(axis=1)
-
-    maf_min = 0.01
-    marker_het_max = 0.10
-    sample_het_max = 0.10
-
-    keep_markers = (maf >= maf_min) & (marker_het <= marker_het_max)
-    keep_samples = sample_het <= sample_het_max
-
-    qc_marker_table = pd.DataFrame(
-        {
-            "marker": marker_cols,
-            "maf": maf.values,
-            "marker_heterozygosity": marker_het.values,
-            "keep_marker": keep_markers.values,
-        }
-    )
-
-    qc_sample_table = pd.DataFrame(
-        {
-            "sample_id": sample_ids,
-            "sample_heterozygosity": sample_het.values,
-            "keep_sample": keep_samples.values,
-        }
-    )
+    result = compute_hmp_qc(X[marker_cols], sample_ids)
+    qc_marker_table = result["marker_qc"]
+    qc_sample_table = result["sample_qc"]
+    M_filt = result["matrix_imputed"]
+    sample_ids_filt = result["sample_ids"]
+    K = result["kernel"]
+    thresholds = result["thresholds"]
 
     qc_marker_table.to_csv(out / "qc_hmp_marker_stats.tsv", sep="\t", index=False)
     qc_sample_table.to_csv(out / "qc_hmp_sample_stats.tsv", sep="\t", index=False)
 
-    M_filt = M.loc[keep_samples, keep_markers].copy()
-    sample_ids_filt = sample_ids.loc[keep_samples].reset_index(drop=True)
-
-    p_filt = M_filt.mean(axis=0) / 2
-    Z = M_filt - (2 * p_filt)
-    denom = np.sum(2 * p_filt * (1 - p_filt))
-
-    K = (Z.to_numpy(dtype=np.float32) @ Z.to_numpy(dtype=np.float32).T) / denom
-    K = K.astype(np.float32)
     mean_diag = float(np.mean(np.diag(K)))
     if np.isfinite(mean_diag) and mean_diag > 0:
         K_mean_diag1 = (K / mean_diag).astype(np.float32)
@@ -276,13 +395,18 @@ def build_hmp_qcfiltered_outputs() -> None:
         index=False,
     )
 
-    print("Original samples:", M.shape[0])
-    print("Original markers:", M.shape[1])
-    print("Kept samples:", int(keep_samples.sum()))
-    print("Kept markers:", int(keep_markers.sum()))
-    print("Removed low-MAF markers:", int((maf < maf_min).sum()))
-    print("Removed high-het markers:", int((marker_het > marker_het_max).sum()))
-    print("Removed high-het samples:", int((~keep_samples).sum()))
+    print("Original samples:", len(sample_ids))
+    print("Original markers:", len(marker_cols))
+    print("Kept samples:", len(sample_ids_filt))
+    print("Kept markers:", M_filt.shape[1])
+    print("QC thresholds:", thresholds)
+    print("Removed low-MAF markers:", int(qc_marker_table["removal_reason"].str.contains("low_maf").sum()))
+    print("Removed high-heterozygosity markers:", int(qc_marker_table["removal_reason"].str.contains("high_heterozygosity").sum()))
+    print("Removed high-missingness markers:", int(qc_marker_table["removal_reason"].str.contains("high_missingness").sum()))
+    print("Removed high-heterozygosity samples:", int(qc_sample_table["removal_reason"].str.contains("high_heterozygosity").sum()))
+    print("Removed high-missingness samples:", int(qc_sample_table["removal_reason"].str.contains("high_missingness").sum()))
+    print("Remaining missing calls before imputation:", result["missing_before_imputation"])
+    print("Remaining missing calls after imputation:", result["missing_after_imputation"])
     print("Filtered matrix:", X_filt.shape)
     print("K shape:", K.shape)
     print("K mean diagonal:", mean_diag)
@@ -629,6 +753,7 @@ def build_phenotypes_and_environment() -> None:
 def main() -> None:
     ensure_dirs()
     hmp_markers = build_hmp_outputs()
+    build_hmp_qcfiltered_outputs()
     dartag_markers = build_dartag_outputs()
     dartseq_landrace_markers = build_dartseq_landrace_outputs()
     mas_meta = build_mas_outputs()
