@@ -221,6 +221,11 @@ def main() -> None:
     parser.add_argument("--val-fraction", type=float, default=0.1)
     parser.add_argument("--max-observations", type=int, default=0)
     parser.add_argument("--lofo-col", default="canonical_germplasm_key")
+    parser.add_argument(
+        "--split-mode",
+        action="append",
+        help="Split mode to run; can be repeated. Default: run all available modes.",
+    )
     parser.add_argument("--ablation", action="append")
     args = parser.parse_args()
 
@@ -255,6 +260,11 @@ def main() -> None:
         "loco": "country",
         "lofo": "_lofo_group",
     }
+    if args.split_mode:
+        unknown = sorted(set(args.split_mode).difference(split_cols))
+        if unknown:
+            raise SystemExit(f"Unknown --split-mode values: {unknown}; choose from {sorted(split_cols)}")
+        split_cols = {mode: split_cols[mode] for mode in args.split_mode}
     rows = []
     leakage_rows = []
     for repeat in range(args.repeats):
