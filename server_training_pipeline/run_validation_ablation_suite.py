@@ -7,6 +7,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from trait_isolation import select_single_trait
+
 
 def read_table(path: Path) -> pd.DataFrame:
     suffix = "".join(path.suffixes).lower()
@@ -164,12 +166,14 @@ def main() -> None:
 
     args.out_dir.mkdir(parents=True, exist_ok=True)
     obs = read_table(args.observations)
-    if args.trait:
-        wanted = {t.upper() for t in args.trait}
-        obs = obs[obs["trait_name_canonical"].fillna("").astype(str).str.upper().isin(wanted)].copy()
+    obs, selected_trait = select_single_trait(obs, args.trait)
+    print(f"Selected trait: {selected_trait}; rows before response filtering: {len(obs):,}", flush=True)
     obs["phenotype_value"] = pd.to_numeric(obs["phenotype_value"], errors="coerce")
     obs["weight_g_e"] = pd.to_numeric(obs["weight_g_e"], errors="coerce").fillna(1.0)
     obs = obs[obs["phenotype_value"].notna()].reset_index(drop=True)
+    if obs.empty:
+        raise SystemExit(f"Selected trait has zero finite phenotype rows: {selected_trait}")
+    print(f"Selected trait: {selected_trait}; finite phenotype rows: {len(obs):,}", flush=True)
     if args.max_observations and len(obs) > args.max_observations:
         obs = obs.sample(args.max_observations, random_state=args.seed).reset_index(drop=True)
 
@@ -225,7 +229,12 @@ def main() -> None:
     )
     summary.to_csv(args.out_dir / f"{args.prefix}_summary.tsv", sep="\t", index=False)
     with (args.out_dir / f"{args.prefix}_config.json").open("w", encoding="utf-8") as handle:
-        json.dump(vars(args) | {"observations_used": int(len(obs)), "ablations_used": ablations}, handle, default=str, indent=2)
+        json.dump(
+            vars(args) | {"selected_trait": selected_trait, "observations_used": int(len(obs)), "ablations_used": ablations},
+            handle,
+            default=str,
+            indent=2,
+        )
     print(summary.to_string(index=False))
 
 

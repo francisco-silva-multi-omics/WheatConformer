@@ -10,6 +10,8 @@ import numpy as np
 import pandas as pd
 import tensorflow as tf
 
+from trait_isolation import select_single_trait
+
 
 def read_table(path: Path) -> pd.DataFrame:
     suffixes = "".join(path.suffixes).lower()
@@ -255,12 +257,14 @@ def main() -> None:
     print(f"TensorFlow: {tf.__version__}; GPUs: {len(gpus)}", flush=True)
 
     obs = read_table(args.observations)
-    if args.trait:
-        wanted = {str(t).strip().upper() for t in args.trait}
-        obs = obs[obs["trait_name_canonical"].astype(str).str.upper().isin(wanted)].copy()
+    obs, selected_trait = select_single_trait(obs, args.trait)
+    print(f"Selected trait: {selected_trait}; rows before response filtering: {len(obs):,}", flush=True)
     obs["phenotype_value"] = pd.to_numeric(obs["phenotype_value"], errors="coerce")
     obs["weight_g_e"] = pd.to_numeric(obs["weight_g_e"], errors="coerce")
     obs = obs[obs["phenotype_value"].notna()].copy()
+    if obs.empty:
+        raise SystemExit(f"Selected trait has zero finite phenotype rows: {selected_trait}")
+    print(f"Selected trait: {selected_trait}; finite phenotype rows: {len(obs):,}", flush=True)
     obs["weight_g_e"] = obs["weight_g_e"].replace([np.inf, -np.inf], np.nan).fillna(1.0)
     obs["weight_g_e"] = np.where(obs["weight_g_e"] > 0, obs["weight_g_e"], 1.0)
     if args.weight_clip_quantile and 0 < args.weight_clip_quantile < 1:
@@ -376,6 +380,7 @@ def main() -> None:
     summary = pd.DataFrame(
         [
             {"metric": "rows_total", "value": len(obs)},
+            {"metric": "trait", "value": selected_trait},
             {"metric": "rows_train", "value": len(train_idx)},
             {"metric": "rows_val", "value": len(val_idx)},
             {"metric": "rows_test", "value": len(test_idx)},
