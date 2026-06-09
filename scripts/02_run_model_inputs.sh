@@ -4,17 +4,25 @@ set -euo pipefail
 mkdir -p logs model_kernels
 
 echo "[1/2] HMP + environment model-ready stage-1 inputs"
-python build_stage1_model_kernels.py \
-  --stage1-phenotypes phenotypes/stage1_adjusted_phenotypes.parquet \
-  --geno-kernel genotype_panels/hmp/K_HMP.QCfiltered.meanDiag1.npy \
-  --geno-rbf-kernel genotype_panels/hmp/K_HMP.QCfiltered.gaussian.npy \
-  --require-geno-rbf \
-  --geno-order genotype_panels/hmp/hmp_K_sample_order.QCfiltered.tsv \
-  --env-kernel environment/K_E.npy \
-  --env-order environment/env_kernel_sample_order.tsv \
-  --out-dir model_kernels/stage1_hmp_env \
-  --prefix stage1_hmp_env \
+hmp_cmd=(
+  python build_stage1_model_kernels.py
+  --stage1-phenotypes phenotypes/stage1_adjusted_phenotypes.parquet
+  --geno-kernel genotype_panels/hmp/K_HMP.QCfiltered.meanDiag1.npy
+  --geno-rbf-kernel genotype_panels/hmp/K_HMP.QCfiltered.gaussian.npy
+  --require-geno-rbf
+  --geno-order genotype_panels/hmp/hmp_K_sample_order.QCfiltered.tsv
+  --env-kernel environment/K_E.npy
+  --env-order environment/env_kernel_sample_order.tsv
+  --out-dir model_kernels/stage1_hmp_env
+  --prefix stage1_hmp_env
   --write-tsv
+)
+epi2_kernel="${HMP_EPI2_KERNEL:-genotype_panels/hmp/K_HMP.QCfiltered.epi2.npy}"
+if [[ -s "$epi2_kernel" ]]; then
+  echo "Including optional EPI2 kernel: $epi2_kernel"
+  hmp_cmd+=(--geno-epi2-kernel "$epi2_kernel")
+fi
+"${hmp_cmd[@]}"
 
 echo "[2/2] GBS SAWYT + environment model-ready stage-1 inputs, if GBS kernel exists"
 if [[ -f genotype_panels/gbs_sawyt/K_GBS_SAWYT.QCfiltered.npy ]]; then

@@ -68,6 +68,12 @@ def test_cv0_has_zero_overlap_on_both_axes() -> None:
     assert qc["env_overlap_train_test"] == 0
     assert qc["train_rows"] > 0 and qc["val_rows"] > 0 and qc["test_rows"] > 0
     assert qc["leakage_status"] == "pass"
+    geno = obs["panel_sample_id"]
+    env = obs["env_kernel_id"]
+    assert not (set(geno.iloc[train]) & set(geno.iloc[val]))
+    assert not (set(geno.iloc[val]) & set(geno.iloc[test]))
+    assert not (set(env.iloc[train]) & set(env.iloc[val]))
+    assert not (set(env.iloc[val]) & set(env.iloc[test]))
 
 
 def test_group_kfold_holds_every_group_out_once() -> None:

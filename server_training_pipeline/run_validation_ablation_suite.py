@@ -26,6 +26,12 @@ DEFAULT_ABLATIONS = [
     "G+RBF+E+GE+RBFE",
 ]
 
+EPI2_ABLATIONS = [
+    "G+EPI2+E",
+    "G+EPI2+E+GE+EPI2E",
+    "G+RBF+EPI2+E+GE+RBFE+EPI2E",
+]
+
 SPLIT_ALIASES = {
     "cv2": "cv2_random_observation",
     "loeo": "gho_environment",
@@ -260,6 +266,7 @@ def build_features(
     G: np.ndarray,
     E: np.ndarray,
     G_RBF: np.ndarray | None,
+    G_EPI2: np.ndarray | None,
     gi: np.ndarray,
     ei: np.ndarray,
     rank_ge_g: int,
@@ -273,6 +280,10 @@ def build_features(
         if G_RBF is None:
             raise ValueError("Ablation requests RBF but --k-g-rbf-unique was not supplied")
         parts.append(G_RBF[gi])
+    if "EPI2" in terms:
+        if G_EPI2 is None:
+            raise ValueError("Ablation requests EPI2 but --k-g-epi2-unique was not supplied")
+        parts.append(G_EPI2[gi])
     if "E" in terms:
         parts.append(E[ei])
     if "GE" in terms:
@@ -283,6 +294,12 @@ def build_features(
         if G_RBF is None:
             raise ValueError("Ablation requests RBFE but --k-g-rbf-unique was not supplied")
         Gs = G_RBF[gi, : min(rank_ge_g, G_RBF.shape[1])]
+        Es = E[ei, : min(rank_ge_e, E.shape[1])]
+        parts.append((Gs[:, :, None] * Es[:, None, :]).reshape(len(gi), -1))
+    if "EPI2E" in terms:
+        if G_EPI2 is None:
+            raise ValueError("Ablation requests EPI2E but --k-g-epi2-unique was not supplied")
+        Gs = G_EPI2[gi, : min(rank_ge_g, G_EPI2.shape[1])]
         Es = E[ei, : min(rank_ge_e, E.shape[1])]
         parts.append((Gs[:, :, None] * Es[:, None, :]).reshape(len(gi), -1))
     return np.hstack(parts).astype(np.float32)
@@ -325,6 +342,7 @@ def main() -> None:
     parser.add_argument("--observations", type=Path, required=True)
     parser.add_argument("--k-g-unique", type=Path, required=True)
     parser.add_argument("--k-g-rbf-unique", type=Path)
+    parser.add_argument("--k-g-epi2-unique", type=Path)
     parser.add_argument("--k-e-unique", type=Path, required=True)
     parser.add_argument("--k-g-order", type=Path, required=True)
     parser.add_argument("--k-e-order", type=Path, required=True)
@@ -333,6 +351,7 @@ def main() -> None:
     parser.add_argument("--trait", action="append")
     parser.add_argument("--rank-g", type=int, default=96)
     parser.add_argument("--rank-g-rbf", type=int, default=96)
+    parser.add_argument("--rank-g-epi2", type=int, default=96)
     parser.add_argument("--rank-e", type=int, default=48)
     parser.add_argument("--rank-ge-g", type=int, default=16)
     parser.add_argument("--rank-ge-e", type=int, default=16)
@@ -370,8 +389,11 @@ def main() -> None:
     ei = map_compact(obs, "env_kernel_index", args.k_e_order)
     G = top_factors(args.k_g_unique, args.rank_g)
     G_RBF = top_factors(args.k_g_rbf_unique, args.rank_g_rbf) if args.k_g_rbf_unique else None
+    G_EPI2 = top_factors(args.k_g_epi2_unique, args.rank_g_epi2) if args.k_g_epi2_unique else None
     E = top_factors(args.k_e_unique, args.rank_e)
     ablations = args.ablation or (DEFAULT_ABLATIONS if G_RBF is not None else DEFAULT_ABLATIONS[:4])
+    if args.ablation is None and G_EPI2 is not None:
+        ablations = ablations + EPI2_ABLATIONS
     y_raw = obs["phenotype_value"].to_numpy(dtype=np.float32)
     w = obs["weight_g_e"].to_numpy(dtype=np.float32)
     obs["_lofo_group"] = family_group(obs, args.lofo_col)
@@ -420,7 +442,7 @@ def main() -> None:
                 continue
             y, mu, sd = weighted_standardize(y_raw, w, train)
             for ablation in ablations:
-                X = build_features(ablation, G, E, G_RBF, gi, ei, args.rank_ge_g, args.rank_ge_e)
+                X = build_features(ablation, G, E, G_RBF, G_EPI2, gi, ei, args.rank_ge_g, args.rank_ge_e)
                 beta = fit_ridge(X, y, w, train, args.ridge)
                 pred = (X @ beta) * sd + mu
                 for label, idx in [("train", train), ("val", val), ("test", test)]:

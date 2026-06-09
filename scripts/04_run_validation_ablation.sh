@@ -24,6 +24,14 @@ ablations=(
   G+RBF+E
   G+RBF+E+GE+RBFE
 )
+epi2_unique="model_kernels/stage1_hmp_env/stage1_hmp_env_K_G_EPI2_unique.npy"
+if [[ -s "$epi2_unique" ]]; then
+  ablations+=(
+    G+EPI2+E
+    G+EPI2+E+GE+EPI2E
+    G+RBF+EPI2+E+GE+RBFE+EPI2E
+  )
+fi
 
 while IFS=$'\t' read -r trait trait_slug; do
   [[ -n "$trait" ]] || continue
@@ -43,6 +51,9 @@ while IFS=$'\t' read -r trait trait_slug; do
     --repeats "${ABLATION_REPEATS:-3}"
     --seed "${ABLATION_SEED:-2026}"
   )
+  if [[ -s "$epi2_unique" ]]; then
+    cmd+=(--k-g-epi2-unique "$epi2_unique")
+  fi
   for ablation in "${ablations[@]}"; do
     cmd+=(--ablation "$ablation")
   done

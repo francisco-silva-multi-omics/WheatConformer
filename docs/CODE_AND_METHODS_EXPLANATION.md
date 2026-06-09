@@ -232,14 +232,15 @@ number of samples.
 
 `K_G_RBF` captures nonlinear similarity in the genome-wide marker feature space and can improve prediction when the genotype-to-phenotype relationship is nonadditive. It can represent epistatic-like predictive patterns, but it does not identify individual marker-by-marker epistatic effects. For that reason, `K_G` and `K_G_RBF` are kept as separate model components and compared through ablation.
 
-An optional explicit second-order epistatic kernel `K_EPI2` would encode a
-specified second-order marker-interaction construction. It differs from
-`K_G_RBF`, which is a nonlinear similarity kernel over the additive genomic
-feature space. `K_EPI2` is not currently implemented.
+The optional explicit second-order epistatic kernel is implemented as
+`K_EPI2 = K_G hadamard K_G`, followed by mean-diagonal scaling. It differs
+from `K_G_RBF`, which is a nonlinear similarity kernel over the additive
+genomic feature space. EPI2 is available for stage-1 compaction, ablation, and
+dense REML, but is not enabled by default.
 
-Gamma candidates must be selected using validation data only; test-set
-performance is reserved for final reporting. Automated gamma-sweep manifest
-generation remains future work.
+Gamma candidates are selected using validation data only; test-set performance
+is reserved for final reporting. `scripts/06_run_rbf_gamma_sweep.sh` evaluates
+the predefined multiplier grid and writes the selected-gamma manifest.
 
 ## 7. DArTAG, MAS, DArTseq Landrace, GBS, And 80k Panels
 
@@ -555,10 +556,10 @@ LOCO    leave-one-country-out
 LOFO    leave-one-family/group-out
 ```
 
-These are repeated grouped holdouts: each repeat assigns whole groups to train,
-validation, and test. They are not true group K-fold, where every group serves
-as the held-out fold exactly once. `split_leakage_qc.tsv` verifies that grouped
-partitions share neither rows nor group values.
+The suite distinguishes repeated grouped holdouts from true `group_kfold`,
+where every group serves as the held-out fold exactly once.
+`split_leakage_qc.tsv` reports genotype and environment overlap with
+mode-specific expected overlap.
 
 Common genomic-prediction CV terminology is:
 
@@ -568,8 +569,9 @@ cv1_environment            test environments are absent from training
 cv0_genotype_environment   both test genotypes and test environments are absent
 ```
 
-LOEO is `cv1_environment`-like. Explicit CV1/CV0 schedules and true group
-K-fold remain future validation extensions.
+The implemented scenarios include `cv1_genotype`, `cv1_environment`, and
+`cv0_genotype_environment`. Legacy LOEO/LOYO/LOTO/LOCO/LOFO labels remain
+backward-compatible aliases for accurately named grouped holdouts.
 
 Ablations include:
 

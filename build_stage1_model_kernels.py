@@ -105,6 +105,7 @@ def main() -> None:
         help="Optional Gaussian genomic kernel with the same sample order as --geno-kernel.",
     )
     parser.add_argument("--require-geno-rbf", action="store_true")
+    parser.add_argument("--geno-epi2-kernel", type=Path, help="Optional scaled second-order additive-by-additive genomic kernel.")
     parser.add_argument("--geno-order-col", default="sample_id")
     parser.add_argument("--geno-col", default="panel_sample_id")
     parser.add_argument("--env-kernel", type=Path, default=BASE / "environment" / "K_E.npy")
@@ -126,6 +127,8 @@ def main() -> None:
     parser.add_argument("--w-e", type=float, default=1.0)
     parser.add_argument("--w-ge", type=float, default=1.0)
     parser.add_argument("--w-g-rbf-e", type=float, default=1.0)
+    parser.add_argument("--w-g-epi2", type=float, default=1.0)
+    parser.add_argument("--w-g-epi2-e", type=float, default=1.0)
     args = parser.parse_args()
 
     args.out_dir.mkdir(parents=True, exist_ok=True)
@@ -167,6 +170,7 @@ def main() -> None:
     K_g = np.load(args.geno_kernel, mmap_mode="r")
     K_e = np.load(args.env_kernel, mmap_mode="r")
     K_g_rbf = np.load(args.geno_rbf_kernel, mmap_mode="r") if args.geno_rbf_kernel and args.geno_rbf_kernel.exists() else None
+    K_g_epi2 = np.load(args.geno_epi2_kernel, mmap_mode="r") if args.geno_epi2_kernel and args.geno_epi2_kernel.exists() else None
     _, geno_index = load_kernel_order(args.geno_order, args.geno_order_col)
     _, env_index = load_kernel_order(args.env_order, args.env_order_col)
     if K_g.shape[0] != K_g.shape[1] or K_g.shape[0] != len(geno_index):
@@ -177,6 +181,10 @@ def main() -> None:
         raise SystemExit(f"Required Gaussian genomic kernel is missing: {args.geno_rbf_kernel}")
     if K_g_rbf is not None and K_g_rbf.shape != K_g.shape:
         raise SystemExit(f"Gaussian genomic kernel shape {K_g_rbf.shape} does not match additive kernel shape {K_g.shape}")
+    if args.geno_epi2_kernel and K_g_epi2 is None:
+        raise SystemExit(f"Requested EPI2 genomic kernel is missing: {args.geno_epi2_kernel}")
+    if K_g_epi2 is not None and K_g_epi2.shape != K_g.shape:
+        raise SystemExit(f"EPI2 genomic kernel shape {K_g_epi2.shape} does not match additive kernel shape {K_g.shape}")
 
     pheno = pheno[pheno[args.geno_col].isin(geno_index) & pheno[args.env_col].isin(env_index)].copy()
     if args.max_observations:
@@ -259,10 +267,17 @@ def main() -> None:
         if K_g_rbf is not None
         else None
     )
+    K_g_epi2_unique = (
+        np.asarray(K_g_epi2[np.ix_(unique_geno_idx, unique_geno_idx)], dtype=np.float32)
+        if K_g_epi2 is not None
+        else None
+    )
     np.save(args.out_dir / f"{args.prefix}_K_G_unique.npy", K_g_unique)
     np.save(args.out_dir / f"{args.prefix}_K_E_unique.npy", K_e_unique)
     if K_g_rbf_unique is not None:
         np.save(args.out_dir / f"{args.prefix}_K_G_RBF_unique.npy", K_g_rbf_unique)
+    if K_g_epi2_unique is not None:
+        np.save(args.out_dir / f"{args.prefix}_K_G_EPI2_unique.npy", K_g_epi2_unique)
     pd.DataFrame(
         {
             args.geno_order_col: unique_geno_ids,
@@ -281,7 +296,7 @@ def main() -> None:
     dense_written = False
     dense_reason = ""
     n = len(model_table)
-    dense_matrix_count = 6 if K_g_rbf is not None else 4
+    dense_matrix_count = 4 + (2 if K_g_rbf is not None else 0) + (2 if K_g_epi2 is not None else 0)
     dense_gb = estimate_dense_gb(n, matrices=dense_matrix_count)
     if args.write_dense_kernels:
         if n > args.max_dense_obs:
@@ -305,6 +320,12 @@ def main() -> None:
                 K_total = K_total + args.w_g_rbf * K_g_rbf_obs + args.w_g_rbf_e * K_g_rbf_e_obs
                 np.save(args.out_dir / f"{args.prefix}_K_G_RBF_obs.npy", K_g_rbf_obs)
                 np.save(args.out_dir / f"{args.prefix}_K_G_RBF_E_hadamard.npy", K_g_rbf_e_obs)
+            if K_g_epi2 is not None:
+                K_g_epi2_obs = np.asarray(K_g_epi2[np.ix_(geno_obs_index, geno_obs_index)], dtype=np.float32)
+                K_g_epi2_e_obs = (K_g_epi2_obs * K_e_obs).astype(np.float32)
+                K_total = K_total + args.w_g_epi2 * K_g_epi2_obs + args.w_g_epi2_e * K_g_epi2_e_obs
+                np.save(args.out_dir / f"{args.prefix}_K_G_EPI2_obs.npy", K_g_epi2_obs)
+                np.save(args.out_dir / f"{args.prefix}_K_G_EPI2_E_hadamard.npy", K_g_epi2_e_obs)
             np.save(args.out_dir / f"{args.prefix}_K_total.npy", np.asarray(K_total, dtype=np.float32))
             dense_written = True
     else:
@@ -332,8 +353,17 @@ def main() -> None:
                 "metric": "K_G_RBF_unique_mean_diag",
                 "value": float(np.mean(np.diag(K_g_rbf_unique))) if K_g_rbf_unique is not None else np.nan,
             },
+            {
+                "metric": "K_G_EPI2_unique_shape",
+                "value": "x".join(map(str, K_g_epi2_unique.shape)) if K_g_epi2_unique is not None else "absent",
+            },
+            {
+                "metric": "K_G_EPI2_unique_mean_diag",
+                "value": float(np.mean(np.diag(K_g_epi2_unique))) if K_g_epi2_unique is not None else np.nan,
+            },
             {"metric": "K_E_unique_mean_diag", "value": float(np.mean(np.diag(K_e_unique)))},
             {"metric": "gaussian_genomic_kernel_included", "value": K_g_rbf_unique is not None},
+            {"metric": "epi2_genomic_kernel_included", "value": K_g_epi2_unique is not None},
             {"metric": "dense_observation_kernels_written", "value": dense_written},
             {"metric": "dense_observation_kernel_memory_estimate_gib", "value": round(dense_gb, 4)},
             {"metric": "dense_observation_kernel_note", "value": dense_reason},

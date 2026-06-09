@@ -17,7 +17,7 @@ CHECKS = [
     ("hmp_kernel", "genotype_panels/hmp/K_HMP.QCfiltered.meanDiag1.npy", "implemented"),
     ("hmp_gaussian_kernel", "genotype_panels/hmp/K_HMP.QCfiltered.gaussian.npy", "implemented"),
     ("linear_vs_gaussian_diagnostics", "genotype_panels/hmp/K_HMP.linear_vs_gaussian_diagnostics.json", "implemented"),
-    ("rbf_gamma_sweep_manifest", "genotype_panels/hmp/rbf_gamma_sweep/gamma_sweep_manifest.tsv", "missing_methodology_component"),
+    ("rbf_gamma_sweep_manifest", "genotype_panels/hmp/rbf_gamma_sweep/gamma_sweep_manifest.tsv", "implemented"),
     ("environment_kernel", "environment/K_E.npy", "implemented"),
     ("environment_geo_kernel", "environment/K_geo.npy", "implemented"),
     ("environment_weather_kernel", "environment/K_weather.npy", "implemented"),
@@ -33,7 +33,7 @@ CHECKS = [
     ("pangenome_path_dictionary", "pangenome_resources/graph/genotype_path_dictionary.tsv", "missing_external_graph_component"),
     ("future_rcp_environment_features", "environment/future_rcp_weather_features.tsv", "missing_if_rcp_analysis_required"),
     ("future_rcp_environment_kernel", "environment/future/K_E_future.npy", "missing_if_rcp_analysis_required"),
-    ("validation_ablation_report", "trained_models/validation_ablation_report.tsv", "missing_methodology_component"),
+    ("validation_ablation_report", "trained_models/validation_ablation_report.tsv", "implemented"),
 ]
 
 

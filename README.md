@@ -106,6 +106,20 @@ export ABLATION_SEED=2026
 bash scripts/04_run_validation_ablation.sh
 ```
 
+Select an RBF multiplier from validation metrics only:
+
+```bash
+bash scripts/06_run_rbf_gamma_sweep.sh --trait "Grain Yield"
+```
+
+Build the optional explicit second-order kernel:
+
+```bash
+python build_epistatic_genomic_kernel.py \
+  --linear-kernel genotype_panels/hmp/K_HMP.QCfiltered.meanDiag1.npy \
+  --sample-order genotype_panels/hmp/hmp_K_sample_order.QCfiltered.tsv
+```
+
 On SLURM:
 
 ```bash
@@ -124,6 +138,8 @@ bash scripts/04_run_regulatory_enformer_tf.sh
 ```text
 genotype_panels/hmp/K_HMP.QCfiltered.meanDiag1.npy
 genotype_panels/hmp/K_HMP.QCfiltered.gaussian.npy
+genotype_panels/hmp/K_HMP.linear_vs_gaussian_diagnostics.json
+genotype_panels/hmp/rbf_gamma_sweep/gamma_sweep_manifest.tsv
 environment/K_E.npy
 environment/qc_location_key_collisions.tsv
 environment/env_kernel_component_weights.tsv

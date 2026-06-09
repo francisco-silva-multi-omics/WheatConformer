@@ -111,6 +111,8 @@ def main() -> None:
     parser.add_argument("--k-g-order", type=Path, required=True)
     parser.add_argument("--k-g-rbf", type=Path)
     parser.add_argument("--k-g-rbf-order", type=Path)
+    parser.add_argument("--geno-epi2-kernel", type=Path)
+    parser.add_argument("--geno-epi2-order", type=Path)
     parser.add_argument("--k-e", type=Path, required=True)
     parser.add_argument("--k-e-order", type=Path, required=True)
     parser.add_argument("--k-a", type=Path)
@@ -128,6 +130,8 @@ def main() -> None:
     parser.add_argument("--fixed-effect-col", action="append", default=[])
     parser.add_argument("--include-ge", action="store_true")
     parser.add_argument("--include-rbf-e", action="store_true")
+    parser.add_argument("--include-epi2", action="store_true")
+    parser.add_argument("--include-epi2-e", action="store_true")
     parser.add_argument("--include-ae", action="store_true")
     parser.add_argument("--include-ze", action="store_true")
     parser.add_argument("--max-observations", type=int, default=12000)
@@ -176,6 +180,21 @@ def main() -> None:
         kernels.append(("K_G_RBF", KGRBF_obs))
         if args.include_rbf_e:
             kernels.append(("K_G_RBF_E", KGRBF_obs * kernels[1][1]))
+
+    if args.include_epi2 or args.include_epi2_e:
+        if not args.geno_epi2_kernel:
+            raise SystemExit("--geno-epi2-kernel is required with --include-epi2 or --include-epi2-e")
+        KGEPI2 = np.load(args.geno_epi2_kernel).astype(np.float64)
+        epi2_order = load_order(args.geno_epi2_order or args.k_g_order)
+        epi2_i = (
+            compact_index_from_order(obs, "geno_kernel_index", epi2_order)
+            if "geno_kernel_index" in obs
+            else id_index(obs[args.geno_id_col], epi2_order, "sample_id")
+        )
+        KGEPI2_obs = KGEPI2[np.ix_(epi2_i, epi2_i)]
+        kernels.append(("K_G_EPI2", KGEPI2_obs))
+        if args.include_epi2_e:
+            kernels.append(("K_G_EPI2_E", KGEPI2_obs * kernels[1][1]))
 
     if args.k_a:
         if not args.k_a_order:

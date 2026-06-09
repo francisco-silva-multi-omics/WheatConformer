@@ -96,6 +96,27 @@ Gamma precedence is `--gamma`, then `--gamma-multiplier`, then
 gamma, source, multiplier, sampled median distance, input paths, and sample
 count are recorded in the Gaussian QC JSON.
 
+Run the predefined validation-only gamma sweep for one trait:
+
+```bash
+bash scripts/06_run_rbf_gamma_sweep.sh \
+  --trait "Grain Yield" \
+  --split-mode gho_environment \
+  --multipliers 0.25 0.5 1.0 2.0 4.0
+```
+
+The core pipeline also writes additive-versus-RBF CKA, off-diagonal
+correlation, symmetry, PSD, effective-rank, and eigenvalue diagnostics.
+
+Optional explicit second-order epistasis can be built without changing the
+default core or training commands:
+
+```bash
+python build_epistatic_genomic_kernel.py \
+  --linear-kernel genotype_panels/hmp/K_HMP.QCfiltered.meanDiag1.npy \
+  --sample-order genotype_panels/hmp/hmp_K_sample_order.QCfiltered.tsv
+```
+
 ## Phase 4: TensorFlow Baseline Training
 
 ```bash
@@ -133,6 +154,10 @@ bash scripts/04_run_validation_ablation.sh
 This creates trait-specific metrics, summaries, split-leakage QC, and
 configuration under `trained_models/validation_ablation/`, followed by
 `trained_models/validation_ablation_report.tsv`.
+
+Canonical split names distinguish random observations, grouped holdouts, true
+group K-fold, and genomic-prediction CV scenarios. Legacy `loeo`, `loyo`,
+`loto`, `loco`, and `lofo` arguments remain aliases and emit warnings.
 
 ## Phase 5: Regulatory TensorFlow Model
 
