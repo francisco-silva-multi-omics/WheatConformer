@@ -53,6 +53,12 @@ DEFAULT_SPLIT_MODES = [
     "cv0_genotype_environment",
 ]
 
+STRICT_INDUCTIVE_SPLIT_MODES = {
+    "cv1_genotype",
+    "cv1_environment",
+    "cv0_genotype_environment",
+}
+
 
 def read_table(path: Path) -> pd.DataFrame:
     suffix = "".join(path.suffixes).lower()
@@ -61,17 +67,65 @@ def read_table(path: Path) -> pd.DataFrame:
     return pd.read_csv(path, sep="\t", low_memory=False)
 
 
-def top_factors(path: Path, rank: int) -> np.ndarray:
+def kernel_factors(
+    path: Path,
+    rank: int,
+    train_ids: np.ndarray | None = None,
+) -> tuple[np.ndarray, dict[str, int | str]]:
     K = np.load(path).astype(np.float64)
+    if K.ndim != 2 or K.shape[0] != K.shape[1]:
+        raise ValueError(f"Kernel must be square: {path} has shape {K.shape}")
     K = (K + K.T) / 2.0
-    vals, vecs = np.linalg.eigh(K)
+    if train_ids is None:
+        train_ids = np.arange(K.shape[0], dtype=np.int32)
+        K_train = K
+        factorization_mode = "full_transductive"
+    else:
+        train_ids = np.unique(np.asarray(train_ids, dtype=np.int32))
+        if train_ids.size == 0:
+            raise ValueError("train_nystrom requires at least one training kernel ID")
+        if train_ids.min() < 0 or train_ids.max() >= K.shape[0]:
+            raise ValueError(f"Training kernel IDs are outside kernel dimensions for {path}")
+        K_train = K[np.ix_(train_ids, train_ids)]
+        factorization_mode = "train_nystrom"
+
+    vals, vecs = np.linalg.eigh(K_train)
     order = np.argsort(vals)[::-1]
     vals = vals[order]
     vecs = vecs[:, order]
     keep = vals > 1e-8
     vals = vals[keep][:rank]
     vecs = vecs[:, keep][:, :rank]
-    return (vecs * np.sqrt(vals)[None, :]).astype(np.float32)
+    if vals.size == 0:
+        raise ValueError(f"Kernel has no positive eigenvalues above tolerance: {path}")
+    if factorization_mode == "full_transductive":
+        factors = vecs * np.sqrt(vals)[None, :]
+    else:
+        factors = K[:, train_ids] @ (vecs / np.sqrt(vals)[None, :])
+    metadata = {
+        "factorization_mode": factorization_mode,
+        "rank_requested": int(rank),
+        "rank_retained": int(vals.size),
+        "train_kernel_dimension": int(train_ids.size),
+        "kernel_dimension": int(K.shape[0]),
+    }
+    return factors.astype(np.float32), metadata
+
+
+def top_factors(path: Path, rank: int) -> np.ndarray:
+    factors, _ = kernel_factors(path, rank)
+    return factors
+
+
+def factorization_columns(
+    factorization_mode: str,
+    metadata: dict[str, dict[str, int | str] | None],
+) -> dict[str, int | str | None]:
+    columns: dict[str, int | str | None] = {"factorization_mode": factorization_mode}
+    for label, details in metadata.items():
+        for field in ("rank_requested", "rank_retained", "train_kernel_dimension"):
+            columns[f"{label}_{field}"] = details[field] if details is not None else None
+    return columns
 
 
 def map_compact(obs: pd.DataFrame, index_col: str, order_path: Path) -> np.ndarray:
@@ -377,6 +431,12 @@ def main() -> None:
     parser.add_argument("--group-kfold-col", default="env_kernel_id")
     parser.add_argument("--group-kfold-splits", type=int, default=5)
     parser.add_argument(
+        "--factorization-mode",
+        choices=["full_transductive", "train_nystrom"],
+        default="full_transductive",
+        help="Use complete-kernel factors, or train-only Nyström factors for CV1/CV0 splits.",
+    )
+    parser.add_argument(
         "--split-mode",
         action="append",
         help="Split mode to run; can be repeated. Default: run all available modes.",
@@ -399,12 +459,15 @@ def main() -> None:
 
     gi = map_compact(obs, "geno_kernel_index", args.k_g_order)
     ei = map_compact(obs, "env_kernel_index", args.k_e_order)
-    G = top_factors(args.k_g_unique, args.rank_g)
-    G_RBF = top_factors(args.k_g_rbf_unique, args.rank_g_rbf) if args.k_g_rbf_unique else None
-    G_EPI2 = top_factors(args.k_g_epi2_unique, args.rank_g_epi2) if args.k_g_epi2_unique else None
-    E = top_factors(args.k_e_unique, args.rank_e)
-    ablations = args.ablation or (DEFAULT_ABLATIONS if G_RBF is not None else DEFAULT_ABLATIONS[:4])
-    if args.ablation is None and G_EPI2 is not None:
+    full_factors: tuple[
+        np.ndarray,
+        np.ndarray | None,
+        np.ndarray | None,
+        np.ndarray,
+        dict[str, dict[str, int | str] | None],
+    ] | None = None
+    ablations = args.ablation or (DEFAULT_ABLATIONS if args.k_g_rbf_unique else DEFAULT_ABLATIONS[:4])
+    if args.ablation is None and args.k_g_epi2_unique:
         ablations = ablations + EPI2_ABLATIONS
     y_raw = obs["phenotype_value"].to_numpy(dtype=np.float32)
     w = obs["weight_g_e"].to_numpy(dtype=np.float32)
@@ -455,14 +518,86 @@ def main() -> None:
                 leakage_rows[-1]["leakage_status"] = "skipped"
                 leakage_rows[-1]["note"] = note
                 continue
+            effective_factorization_mode = (
+                "train_nystrom"
+                if args.factorization_mode == "train_nystrom" and split_mode in STRICT_INDUCTIVE_SPLIT_MODES
+                else "full_transductive"
+            )
+            if effective_factorization_mode == "train_nystrom":
+                train_g_ids = np.unique(gi[train])
+                train_e_ids = np.unique(ei[train])
+                fold_G, fold_G_metadata = kernel_factors(args.k_g_unique, args.rank_g, train_g_ids)
+                if args.k_g_rbf_unique:
+                    fold_G_RBF, fold_G_RBF_metadata = kernel_factors(
+                        args.k_g_rbf_unique, args.rank_g_rbf, train_g_ids
+                    )
+                else:
+                    fold_G_RBF, fold_G_RBF_metadata = None, None
+                if args.k_g_epi2_unique:
+                    fold_G_EPI2, fold_G_EPI2_metadata = kernel_factors(
+                        args.k_g_epi2_unique, args.rank_g_epi2, train_g_ids
+                    )
+                else:
+                    fold_G_EPI2, fold_G_EPI2_metadata = None, None
+                fold_E, fold_E_metadata = kernel_factors(args.k_e_unique, args.rank_e, train_e_ids)
+                fold_metadata = {
+                    "g": fold_G_metadata,
+                    "g_rbf": fold_G_RBF_metadata,
+                    "g_epi2": fold_G_EPI2_metadata,
+                    "e": fold_E_metadata,
+                }
+            else:
+                if full_factors is None:
+                    fold_G, fold_G_metadata = kernel_factors(args.k_g_unique, args.rank_g)
+                    if args.k_g_rbf_unique:
+                        fold_G_RBF, fold_G_RBF_metadata = kernel_factors(
+                            args.k_g_rbf_unique, args.rank_g_rbf
+                        )
+                    else:
+                        fold_G_RBF, fold_G_RBF_metadata = None, None
+                    if args.k_g_epi2_unique:
+                        fold_G_EPI2, fold_G_EPI2_metadata = kernel_factors(
+                            args.k_g_epi2_unique, args.rank_g_epi2
+                        )
+                    else:
+                        fold_G_EPI2, fold_G_EPI2_metadata = None, None
+                    fold_E, fold_E_metadata = kernel_factors(args.k_e_unique, args.rank_e)
+                    fold_metadata = {
+                        "g": fold_G_metadata,
+                        "g_rbf": fold_G_RBF_metadata,
+                        "g_epi2": fold_G_EPI2_metadata,
+                        "e": fold_E_metadata,
+                    }
+                    full_factors = fold_G, fold_G_RBF, fold_G_EPI2, fold_E, fold_metadata
+                else:
+                    fold_G, fold_G_RBF, fold_G_EPI2, fold_E, fold_metadata = full_factors
+            factor_columns = factorization_columns(effective_factorization_mode, fold_metadata)
             y, mu, sd = weighted_standardize(y_raw, w, train)
             for ablation in ablations:
-                X = build_features(ablation, G, E, G_RBF, G_EPI2, gi, ei, args.rank_ge_g, args.rank_ge_e)
+                X = build_features(
+                    ablation,
+                    fold_G,
+                    fold_E,
+                    fold_G_RBF,
+                    fold_G_EPI2,
+                    gi,
+                    ei,
+                    args.rank_ge_g,
+                    args.rank_ge_e,
+                )
                 beta = fit_ridge(X, y, w, train, args.ridge)
                 pred = (X @ beta) * sd + mu
                 for label, idx in [("train", train), ("val", val), ("test", test)]:
                     rec = metric_rows(y_raw, pred, w, idx, label)
-                    rec.update({"repeat": repeat, "split_mode": split_mode, "ablation": ablation, "note": ""})
+                    rec.update(
+                        {
+                            "repeat": repeat,
+                            "split_mode": split_mode,
+                            "ablation": ablation,
+                            "note": "",
+                            **factor_columns,
+                        }
+                    )
                     rows.append(rec)
                 print(f"repeat={repeat} split={split_mode} ablation={ablation} test_n={len(test)}", flush=True)
 
