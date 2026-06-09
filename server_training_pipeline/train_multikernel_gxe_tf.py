@@ -12,10 +12,10 @@ import tensorflow as tf
 
 try:
     from .trait_isolation import select_single_trait
-    from .split_utils import CANONICAL_SPLIT_MODES, SPLIT_ALIASES, canonical_split_mode, group_kfold_splits, make_split, split_leakage_record
+    from .split_utils import canonical_split_mode, group_kfold_splits, make_split, split_leakage_record
 except ImportError:
     from trait_isolation import select_single_trait
-    from split_utils import CANONICAL_SPLIT_MODES, SPLIT_ALIASES, canonical_split_mode, group_kfold_splits, make_split, split_leakage_record
+    from split_utils import canonical_split_mode, group_kfold_splits, make_split, split_leakage_record
 
 
 def read_table(path: Path) -> pd.DataFrame:
@@ -62,38 +62,6 @@ def top_kernel_factors(kernel_path: Path, rank: int, jitter: float = 1e-6) -> tu
     vecs = vecs[:, keep][:, :rank]
     factors = vecs * np.sqrt(vals)[None, :]
     return factors.astype(np.float32), vals.astype(np.float32)
-
-
-def split_indices(
-    df: pd.DataFrame,
-    mode: str,
-    test_fraction: float,
-    val_fraction: float,
-    seed: int,
-    group_col: str,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    rng = np.random.default_rng(seed)
-    n = len(df)
-    if mode == "random":
-        idx = np.arange(n)
-        rng.shuffle(idx)
-        n_test = int(round(n * test_fraction))
-        n_val = int(round(n * val_fraction))
-        return idx[n_test + n_val :], idx[n_test : n_test + n_val], idx[:n_test]
-
-    if group_col not in df.columns:
-        raise SystemExit(f"Requested split mode {mode}, but group column is absent: {group_col}")
-    groups = np.asarray(df[group_col].astype(str).fillna("").unique(), dtype=object).copy()
-    rng.shuffle(groups)
-    n_test_groups = max(1, int(round(len(groups) * test_fraction)))
-    n_val_groups = max(1, int(round(len(groups) * val_fraction)))
-    test_groups = set(groups[:n_test_groups])
-    val_groups = set(groups[n_test_groups : n_test_groups + n_val_groups])
-    group_series = df[group_col].astype(str).fillna("")
-    test = np.where(group_series.isin(test_groups))[0]
-    val = np.where(group_series.isin(val_groups))[0]
-    train = np.where(~group_series.isin(test_groups | val_groups))[0]
-    return train, val, test
 
 
 def metrics(y_true: np.ndarray, y_pred: np.ndarray, w: np.ndarray | None = None) -> dict[str, float]:

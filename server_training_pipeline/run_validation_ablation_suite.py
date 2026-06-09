@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import warnings
 from pathlib import Path
 
 import numpy as np
@@ -10,8 +9,10 @@ import pandas as pd
 
 try:
     from .trait_isolation import select_single_trait
+    from .split_utils import canonical_split_mode, group_kfold_splits, make_split, split_leakage_record
 except ImportError:
     from trait_isolation import select_single_trait
+    from split_utils import canonical_split_mode, group_kfold_splits, make_split, split_leakage_record
 
 
 DEFAULT_ABLATIONS = [
@@ -31,15 +32,6 @@ EPI2_ABLATIONS = [
     "G+EPI2+E+GE+EPI2E",
     "G+RBF+EPI2+E+GE+RBFE+EPI2E",
 ]
-
-SPLIT_ALIASES = {
-    "cv2": "cv2_random_observation",
-    "loeo": "gho_environment",
-    "loyo": "gho_cycle",
-    "loto": "gho_trial",
-    "loco": "gho_country",
-    "lofo": "gho_family",
-}
 
 DEFAULT_SPLIT_MODES = [
     "cv2_random_observation",
@@ -145,186 +137,6 @@ def weighted_standardize(y: np.ndarray, w: np.ndarray, train: np.ndarray) -> tup
     mu = float(np.sum(wt * y[train]) / np.sum(wt))
     sd = float(np.sqrt(np.sum(wt * (y[train] - mu) ** 2) / np.sum(wt)))
     return ((y - mu) / max(sd, 1e-8)).astype(np.float32), mu, max(sd, 1e-8)
-
-
-def canonical_split_mode(mode: str, warn: bool = False) -> str:
-    normalized = mode.strip().lower()
-    canonical = SPLIT_ALIASES.get(normalized, normalized)
-    if warn and canonical != normalized:
-        warnings.warn(
-            f"Split mode {mode!r} is a backward-compatible alias; recording canonical mode {canonical!r}.",
-            stacklevel=2,
-        )
-    return canonical
-
-
-def grouped_holdout(
-    df: pd.DataFrame,
-    group_col: str,
-    seed: int,
-    test_fraction: float,
-    val_fraction: float,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    if group_col not in df.columns:
-        raise SystemExit(f"Grouped holdout requires group column {group_col}")
-    rng = np.random.default_rng(seed)
-    groups = np.asarray(df[group_col].fillna("").astype(str).unique(), dtype=object).copy()
-    if len(groups) < 3:
-        raise SystemExit(f"Grouped holdout requires at least three groups in {group_col}; found {len(groups)}")
-    rng.shuffle(groups)
-    n_test = max(1, int(round(len(groups) * test_fraction)))
-    n_val = max(1, int(round(len(groups) * val_fraction)))
-    if n_test + n_val >= len(groups):
-        n_val = 1
-        n_test = 1
-    test_groups = set(groups[:n_test])
-    val_groups = set(groups[n_test : n_test + n_val])
-    g = df[group_col].fillna("").astype(str)
-    test = np.where(g.isin(test_groups))[0]
-    val = np.where(g.isin(val_groups))[0]
-    train = np.where(~g.isin(test_groups | val_groups))[0]
-    return train, val, test
-
-
-def cv0_split(
-    df: pd.DataFrame,
-    seed: int,
-    test_fraction: float,
-    val_fraction: float,
-    genotype_col: str = "panel_sample_id",
-    environment_col: str = "env_kernel_id",
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    required = [genotype_col, environment_col]
-    missing = [col for col in required if col not in df.columns]
-    if missing:
-        raise SystemExit(f"cv0_genotype_environment requires columns: {missing}")
-    rng = np.random.default_rng(seed)
-    geno = df[genotype_col].fillna("").astype(str)
-    env = df[environment_col].fillna("").astype(str)
-
-    def partition(values: pd.Series) -> tuple[set[str], set[str]]:
-        groups = np.asarray(values.unique(), dtype=object).copy()
-        if len(groups) < 3:
-            raise SystemExit("cv0_genotype_environment requires at least three groups on each axis")
-        rng.shuffle(groups)
-        n_test = max(1, int(round(len(groups) * test_fraction)))
-        n_val = max(1, int(round(len(groups) * val_fraction)))
-        if n_test + n_val >= len(groups):
-            n_test = n_val = 1
-        return set(groups[:n_test]), set(groups[n_test : n_test + n_val])
-
-    test_g, val_g = partition(geno)
-    test_e, val_e = partition(env)
-    test = np.where(geno.isin(test_g) & env.isin(test_e))[0]
-    val = np.where(geno.isin(val_g) & env.isin(val_e))[0]
-    train = np.where(~geno.isin(test_g | val_g) & ~env.isin(test_e | val_e))[0]
-    return train, val, test
-
-
-def make_split(df: pd.DataFrame, mode: str, seed: int, test_fraction: float, val_fraction: float, group_col: str | None) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    mode = canonical_split_mode(mode)
-    rng = np.random.default_rng(seed)
-    n = len(df)
-    if mode == "cv2_random_observation":
-        idx = np.arange(n)
-        rng.shuffle(idx)
-        n_test = max(1, int(round(n * test_fraction)))
-        n_val = max(1, int(round(n * val_fraction)))
-        return idx[n_test + n_val :], idx[n_test : n_test + n_val], idx[:n_test]
-    if mode == "cv0_genotype_environment":
-        return cv0_split(df, seed, test_fraction, val_fraction)
-    if group_col is None or group_col not in df.columns:
-        raise SystemExit(f"Split {mode} requires group column {group_col}")
-    return grouped_holdout(df, group_col, seed, test_fraction, val_fraction)
-
-
-def group_kfold_splits(
-    df: pd.DataFrame,
-    group_col: str,
-    splits: int,
-    seed: int,
-    val_fraction: float,
-) -> list[tuple[np.ndarray, np.ndarray, np.ndarray]]:
-    if group_col not in df.columns:
-        raise SystemExit(f"group_kfold requires group column {group_col}")
-    groups = np.asarray(sorted(df[group_col].fillna("").astype(str).unique()), dtype=object)
-    if splits < 2 or len(groups) < splits:
-        raise SystemExit(f"group_kfold requires 2 <= splits <= unique groups; got {splits} splits and {len(groups)} groups")
-    rng = np.random.default_rng(seed)
-    rng.shuffle(groups)
-    folds = np.array_split(groups, splits)
-    values = df[group_col].fillna("").astype(str)
-    out = []
-    for fold, test_values in enumerate(folds):
-        test_groups = set(test_values)
-        remaining = np.asarray([value for value in groups if value not in test_groups], dtype=object)
-        fold_rng = np.random.default_rng(seed + fold + 1)
-        fold_rng.shuffle(remaining)
-        n_val = max(1, int(round(len(remaining) * val_fraction)))
-        val_groups = set(remaining[:n_val])
-        test = np.where(values.isin(test_groups))[0]
-        val = np.where(values.isin(val_groups))[0]
-        train = np.where(~values.isin(test_groups | val_groups))[0]
-        out.append((train, val, test))
-    return out
-
-
-try:
-    from .split_utils import canonical_split_mode, grouped_holdout, cv0_split, make_split, split_leakage_record, group_kfold_splits
-except ImportError:
-    from split_utils import canonical_split_mode, grouped_holdout, cv0_split, make_split, split_leakage_record, group_kfold_splits
-
-
-def split_leakage_record(
-    df: pd.DataFrame,
-    repeat: int,
-    split_mode: str,
-    train: np.ndarray,
-    val: np.ndarray,
-    test: np.ndarray,
-    group_col: str | None = None,
-) -> dict[str, object]:
-    split_mode = canonical_split_mode(split_mode)
-    geno_col = "panel_sample_id" if "panel_sample_id" in df.columns else "geno_kernel_index"
-    env_col = "env_kernel_id" if "env_kernel_id" in df.columns else "env_kernel_index"
-    geno = df[geno_col].fillna("").astype(str)
-    env = df[env_col].fillna("").astype(str)
-    train_g, val_g, test_g = set(geno.iloc[train]), set(geno.iloc[val]), set(geno.iloc[test])
-    train_e, val_e, test_e = set(env.iloc[train]), set(env.iloc[val]), set(env.iloc[test])
-    geno_overlap = len(train_g & test_g)
-    env_overlap = len(train_e & test_e)
-    expected_geno = "zero" if split_mode in {"cv1_genotype", "cv0_genotype_environment"} else "allowed"
-    expected_env = "zero" if split_mode in {"gho_environment", "cv1_environment", "cv0_genotype_environment"} else "allowed"
-    if split_mode == "group_kfold":
-        if group_col in {"panel_sample_id", "geno_kernel_index"}:
-            expected_geno = "zero"
-        if group_col in {"env_kernel_id", "env_kernel_index"}:
-            expected_env = "zero"
-    leakage = (expected_geno == "zero" and geno_overlap > 0) or (expected_env == "zero" and env_overlap > 0)
-    return {
-        "repeat": repeat,
-        "split_mode": split_mode,
-        "train_rows": len(train),
-        "val_rows": len(val),
-        "test_rows": len(test),
-        "train_unique_genotypes": len(train_g),
-        "val_unique_genotypes": len(val_g),
-        "test_unique_genotypes": len(test_g),
-        "train_unique_environments": len(train_e),
-        "val_unique_environments": len(val_e),
-        "test_unique_environments": len(test_e),
-        "geno_overlap_train_test": geno_overlap,
-        "env_overlap_train_test": env_overlap,
-        "expected_geno_overlap": expected_geno,
-        "expected_env_overlap": expected_env,
-        "leakage_status": "fail" if leakage else "pass",
-    }
-
-
-try:
-    from .split_utils import split_leakage_record
-except ImportError:
-    from split_utils import split_leakage_record
 
 
 def build_features(
