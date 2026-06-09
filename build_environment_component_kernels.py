@@ -1,5 +1,6 @@
 ﻿from __future__ import annotations
 
+import os
 import re
 import platform
 import sys
@@ -49,7 +50,31 @@ def parse_value(value: object, trait: str) -> float:
 
 
 def normalize_loc_no(s: pd.Series) -> pd.Series:
-    return s.astype(str).str.strip().str.replace(r"\.0$", "", regex=True)
+    return s.fillna("").astype(str).str.strip().str.replace(r"\.0$", "", regex=True).str.upper()
+
+
+def normalize_country(s: pd.Series) -> pd.Series:
+    return (
+        s.fillna("")
+        .astype(str)
+        .str.strip()
+        .str.upper()
+        .str.replace(r"[^0-9A-Z]+", "_", regex=True)
+        .str.strip("_")
+    )
+
+
+def add_location_keys(df: pd.DataFrame) -> pd.DataFrame:
+    out = df.copy()
+    out["Loc_no_key"] = normalize_loc_no(out.get("Loc_no", pd.Series("", index=out.index)))
+    out["Country_key"] = normalize_country(out.get("Country", pd.Series("", index=out.index)))
+    out["location_key_fallback"] = out["Country_key"].eq("")
+    out["location_key"] = np.where(
+        out["location_key_fallback"],
+        out["Loc_no_key"],
+        out["Country_key"] + "|" + out["Loc_no_key"],
+    )
+    return out
 
 
 def decimal_degrees(deg: pd.Series, minutes: pd.Series, hemi: pd.Series) -> pd.Series:
@@ -59,6 +84,45 @@ def decimal_degrees(deg: pd.Series, minutes: pd.Series, hemi: pd.Series) -> pd.S
     h = hemi.astype(str).str.upper().str.strip()
     sign = np.where(h.isin(["S", "W"]), -1.0, 1.0)
     return val * sign
+
+
+def location_collision_audit(
+    loc: pd.DataFrame,
+    degree_tolerance: float = 0.05,
+    altitude_tolerance: float = 50.0,
+) -> pd.DataFrame:
+    work = add_location_keys(loc)
+    work["latitude"] = decimal_degrees(work["Lat_degress"], work["Lat_minutes"], work["Latitud"])
+    work["longitude"] = decimal_degrees(work["Long_degress"], work["Long_minutes"], work["Longitude"])
+    work["altitude"] = pd.to_numeric(work["Altitude"], errors="coerce")
+    country_counts = work[work["Country_key"].ne("")].groupby("Loc_no_key")["Country_key"].nunique()
+    rows = []
+    for location_key, group in work.groupby("location_key", dropna=False, sort=True):
+        lat_dispersion = float(group["latitude"].max() - group["latitude"].min()) if group["latitude"].notna().any() else 0.0
+        lon_dispersion = float(group["longitude"].max() - group["longitude"].min()) if group["longitude"].notna().any() else 0.0
+        alt_dispersion = float(group["altitude"].max() - group["altitude"].min()) if group["altitude"].notna().any() else 0.0
+        loc_numbers = sorted({value for value in group["Loc_no_key"] if value})
+        countries = sorted({value for value in group["Country_key"] if value})
+        reasons = []
+        if group["location_key_fallback"].any():
+            reasons.append("country_missing_fallback")
+        if any(country_counts.get(loc_no, 0) > 1 for loc_no in loc_numbers):
+            reasons.append("loc_no_multiple_countries")
+        if lat_dispersion > degree_tolerance or lon_dispersion > degree_tolerance or alt_dispersion > altitude_tolerance:
+            reasons.append("coordinate_dispersion_collision")
+        rows.append(
+            {
+                "location_key": location_key,
+                "n_rows": len(group),
+                "n_unique_latitude": group["latitude"].nunique(dropna=True),
+                "n_unique_longitude": group["longitude"].nunique(dropna=True),
+                "n_unique_altitude": group["altitude"].nunique(dropna=True),
+                "countries": ";".join(countries),
+                "loc_numbers": ";".join(loc_numbers),
+                "collision_status": ";".join(reasons) if reasons else "ok",
+            }
+        )
+    return pd.DataFrame(rows)
 
 
 def build_env_trait_matrix(env: pd.DataFrame) -> pd.DataFrame:
@@ -73,16 +137,27 @@ def build_env_trait_matrix(env: pd.DataFrame) -> pd.DataFrame:
 def build_geo_features(env: pd.DataFrame, loc: pd.DataFrame, env_ids: pd.Index) -> pd.DataFrame:
     env_base = env[[*ID_COLS]].drop_duplicates().copy()
     env_base["env_id"] = env_id_from_frame(env_base)
-    env_base["Loc_no_key"] = normalize_loc_no(env_base["Loc_no"])
+    env_base = add_location_keys(env_base)
 
-    loc_work = loc.copy()
-    loc_work["Loc_no_key"] = normalize_loc_no(loc_work["Loc_no"])
+    loc_work = add_location_keys(loc)
     loc_work["latitude"] = decimal_degrees(loc_work["Lat_degress"], loc_work["Lat_minutes"], loc_work["Latitud"])
     loc_work["longitude"] = decimal_degrees(loc_work["Long_degress"], loc_work["Long_minutes"], loc_work["Longitude"])
     loc_work["altitude"] = pd.to_numeric(loc_work["Altitude"], errors="coerce")
-    loc_by_id = loc_work.groupby("Loc_no_key")[["latitude", "longitude", "altitude"]].mean()
+    loc_by_id = loc_work.groupby("location_key")[["latitude", "longitude", "altitude"]].mean()
+    country_counts = loc_work[loc_work["Country_key"].ne("")].groupby("Loc_no_key")["Country_key"].nunique()
+    all_loc_numbers = pd.Index(loc_work["Loc_no_key"].drop_duplicates())
+    safe_loc_numbers = all_loc_numbers[country_counts.reindex(all_loc_numbers, fill_value=0).le(1)]
+    fallback_by_loc = (
+        loc_work[loc_work["Loc_no_key"].isin(safe_loc_numbers)]
+        .groupby("Loc_no_key")[["latitude", "longitude", "altitude"]]
+        .mean()
+        .add_suffix("_fallback")
+    )
 
-    geo = env_base[["env_id", "Loc_no_key"]].merge(loc_by_id, left_on="Loc_no_key", right_index=True, how="left")
+    geo = env_base[["env_id", "location_key", "Loc_no_key"]].merge(loc_by_id, left_on="location_key", right_index=True, how="left")
+    geo = geo.merge(fallback_by_loc, left_on="Loc_no_key", right_index=True, how="left")
+    for coordinate in ["latitude", "longitude", "altitude"]:
+        geo[coordinate] = geo[coordinate].fillna(geo[f"{coordinate}_fallback"])
     geo = geo.drop_duplicates("env_id").set_index("env_id")[["latitude", "longitude", "altitude"]].reindex(env_ids)
 
     gps = env[ID_COLS + ["Trait_name", "Value"]].copy()
@@ -250,9 +325,39 @@ def standardized_kernel(features: pd.DataFrame) -> tuple[np.ndarray, pd.DataFram
     return K.astype(np.float32), z, scaling
 
 
+def scale_kernel_mean_diagonal(kernel: np.ndarray) -> tuple[np.ndarray, float, float]:
+    raw = np.asarray(kernel, dtype=np.float32)
+    mean_diag_raw = float(np.mean(np.diag(raw))) if raw.size else 0.0
+    if not np.isfinite(mean_diag_raw) or mean_diag_raw <= 0:
+        return raw.copy(), mean_diag_raw, mean_diag_raw
+    scaled = (raw / mean_diag_raw).astype(np.float32)
+    return scaled, mean_diag_raw, float(np.mean(np.diag(scaled)))
+
+
+def component_weights(nonempty: list[str], component_names: list[str]) -> tuple[dict[str, float], dict[str, float]]:
+    raw = {}
+    for name in component_names:
+        if name not in nonempty:
+            raw[name] = 0.0
+            continue
+        variable = f"ENV_WEIGHT_{name.upper()}"
+        value = os.environ.get(variable, "1.0")
+        try:
+            raw[name] = float(value)
+        except ValueError as exc:
+            raise SystemExit(f"{variable} must be numeric; found {value!r}") from exc
+        if not np.isfinite(raw[name]) or raw[name] < 0:
+            raise SystemExit(f"{variable} must be finite and nonnegative; found {raw[name]}")
+    total = sum(raw.values())
+    if total <= 0:
+        raise SystemExit("At least one non-empty environment component must have a positive weight")
+    return raw, {name: raw[name] / total for name in component_names}
+
+
 def main() -> None:
     env = pd.read_csv(OUT / "envdata.tsv", sep="\t", dtype=str, low_memory=False)
     loc = pd.read_csv(OUT / "locdata.tsv", sep="\t", dtype=str, low_memory=False)
+    location_collision_audit(loc).to_csv(OUT / "qc_location_key_collisions.tsv", sep="\t", index=False)
 
     env_base = env[[*ID_COLS]].drop_duplicates().copy()
     env_base["env_id"] = env_id_from_frame(env_base)
@@ -276,6 +381,7 @@ def main() -> None:
     }
 
     kernels: dict[str, np.ndarray] = {}
+    component_stats: dict[str, dict[str, float | int]] = {}
     manifest_rows = []
     coverage_rows = []
     scaling_rows = []
@@ -291,9 +397,17 @@ def main() -> None:
                 "feature_count": feature_count,
             }
         )
-        K, z, scaling = standardized_kernel(features)
-        kernels[name] = K
-        np.save(OUT / f"K_{name}.npy", K)
+        K_raw, z, scaling = standardized_kernel(features)
+        K_scaled, mean_diag_raw, mean_diag_scaled = scale_kernel_mean_diagonal(K_raw)
+        kernels[name] = K_scaled
+        component_stats[name] = {
+            "feature_count": feature_count,
+            "mean_diag_raw": mean_diag_raw,
+            "mean_diag_scaled": mean_diag_scaled,
+            "coverage_env_count": covered_envs,
+        }
+        np.save(OUT / f"K_{name}.raw.npy", K_raw)
+        np.save(OUT / f"K_{name}.npy", K_scaled)
         z.reset_index(names="env_id").to_parquet(OUT / f"env_features_{name}.parquet", index=False)
         if not scaling.empty:
             scaling = scaling.copy()
@@ -301,16 +415,24 @@ def main() -> None:
             scaling_rows.extend(scaling.to_dict("records"))
         for col in z.columns:
             manifest_rows.append({"kernel": name, "feature": col})
-        print(f"K_{name}", K.shape, "features", z.shape[1], "mean_diag", float(np.mean(np.diag(K))))
+        print(f"K_{name}", K_scaled.shape, "features", z.shape[1], "mean_diag", mean_diag_scaled)
 
     nonempty = [name for name, features in feature_sets.items() if features.dropna(axis=1, how="all").shape[1] > 0]
-    weights = {name: (1.0 / len(nonempty) if name in nonempty else 0.0) for name in feature_sets}
+    raw_weights, weights = component_weights(nonempty, list(feature_sets))
     K_E = sum(weights[name] * kernels[name] for name in feature_sets).astype(np.float32)
     np.save(OUT / "K_E.npy", K_E)
 
-    pd.DataFrame({"kernel": list(weights.keys()), "weight": list(weights.values())}).to_csv(
-        OUT / "env_kernel_component_weights.tsv", sep="\t", index=False
-    )
+    pd.DataFrame(
+        [
+            {
+                "kernel": name,
+                "raw_weight": raw_weights[name],
+                "normalized_weight": weights[name],
+                **component_stats[name],
+            }
+            for name in feature_sets
+        ]
+    ).to_csv(OUT / "env_kernel_component_weights.tsv", sep="\t", index=False)
     pd.DataFrame(manifest_rows).to_csv(OUT / "env_kernel_feature_manifest.tsv", sep="\t", index=False)
     pd.DataFrame(coverage_rows).to_csv(OUT / "env_kernel_coverage_summary.tsv", sep="\t", index=False)
     pd.DataFrame(scaling_rows).to_csv(OUT / "env_feature_scaling_parameters.tsv", sep="\t", index=False)
