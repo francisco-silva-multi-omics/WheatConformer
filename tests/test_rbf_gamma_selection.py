@@ -27,13 +27,13 @@ def test_gamma_selection_uses_validation_not_test(tmp_path: Path) -> None:
         (run / "model_inputs").mkdir(parents=True)
         pd.DataFrame(
             [
-                {"repeat": 0, "split_mode": "loeo", "ablation": "RBF", "split": "val", "n": 10, "rmse": val_rmse, "pearson": val_pearson},
-                {"repeat": 0, "split_mode": "loeo", "ablation": "RBF", "split": "test", "n": 10, "rmse": test_rmse, "pearson": 0.9},
+                {"repeat": 0, "split_mode": "gho_environment", "ablation": "RBF", "split": "val", "n": 10, "rmse": val_rmse, "pearson": val_pearson},
+                {"repeat": 0, "split_mode": "gho_environment", "ablation": "RBF", "split": "test", "n": 10, "rmse": test_rmse, "pearson": 0.9},
             ]
         ).to_csv(run / "gamma_sweep_metrics.tsv", sep="\t", index=False)
 
     summary, selected, manifest = select_gamma(
-        "Grain Yield", [0.5, 1.0, 2.0], "loeo", validation_root, kernel_root, 2026, 1
+        "Grain Yield", [0.5, 1.0, 2.0], "gho_environment", validation_root, kernel_root, 2026, 1
     )
     assert selected["selected_gamma_multiplier"] == 2.0
     assert selected["test_metrics_used_for_selection"] is False

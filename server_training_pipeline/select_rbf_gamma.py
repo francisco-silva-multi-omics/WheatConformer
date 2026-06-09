@@ -8,6 +8,11 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+try:
+    from .run_validation_ablation_suite import canonical_split_mode
+except ImportError:
+    from run_validation_ablation_suite import canonical_split_mode
+
 
 def multiplier_label(value: float) -> str:
     return format(float(value), "g")
@@ -26,6 +31,7 @@ def select_gamma(
     seed: int,
     repeats: int,
 ) -> tuple[pd.DataFrame, dict[str, object], pd.DataFrame]:
+    split_mode = canonical_split_mode(split_mode, warn=True)
     rows: list[dict[str, object]] = []
     manifest_rows: list[dict[str, object]] = []
     slug = trait_slug(trait)
@@ -115,7 +121,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Select an RBF gamma using validation metrics only.")
     parser.add_argument("--trait", required=True)
     parser.add_argument("--multipliers", nargs="+", type=float, default=[0.25, 0.5, 1.0, 2.0, 4.0])
-    parser.add_argument("--split-mode", default="loeo")
+    parser.add_argument("--split-mode", default="gho_environment")
     parser.add_argument("--seed", type=int, default=2026)
     parser.add_argument("--repeats", type=int, default=3)
     parser.add_argument("--validation-root", type=Path, default=Path("trained_models/rbf_gamma_sweep"))

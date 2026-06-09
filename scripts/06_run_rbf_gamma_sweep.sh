@@ -2,7 +2,7 @@
 set -euo pipefail
 
 trait=""
-split_mode="loeo"
+split_mode="gho_environment"
 seed=2026
 repeats=3
 multipliers=(0.25 0.5 1.0 2.0 4.0)
