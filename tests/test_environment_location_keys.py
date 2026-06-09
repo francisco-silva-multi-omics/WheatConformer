@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
 
-from build_environment_component_kernels import add_location_keys, location_collision_audit
+from build_environment_component_kernels import add_location_keys, build_location_fallbacks, location_collision_audit
 
 
 def location_rows() -> pd.DataFrame:
@@ -57,3 +58,30 @@ def test_unresolved_location_hash_is_stable() -> None:
     second = add_location_keys(rows).loc[0, "location_key"]
     assert first == second
     assert first.startswith("UNRESOLVED_LOCATION|")
+
+
+def test_empty_location_numbers_are_excluded_from_coordinate_fallbacks() -> None:
+    work = add_location_keys(pd.DataFrame({"Country": ["", ""], "Loc_no": ["", ""]}))
+    work["latitude"] = [10.0, 30.0]
+    work["longitude"] = [20.0, 40.0]
+    work["altitude"] = [100.0, 300.0]
+    fallback = build_location_fallbacks(work)
+    assert "" not in fallback.index
+    assert fallback.empty
+
+
+def test_valid_unique_location_number_retains_legacy_fallback() -> None:
+    work = add_location_keys(pd.DataFrame({"Country": [""], "Loc_no": ["17"]}))
+    work["latitude"] = [10.0]
+    work["longitude"] = [20.0]
+    work["altitude"] = [100.0]
+    fallback = build_location_fallbacks(work)
+    assert np.isclose(fallback.loc["17", "latitude_fallback"], 10.0)
+
+
+def test_cross_country_location_number_is_excluded_from_fallback() -> None:
+    work = add_location_keys(pd.DataFrame({"Country": ["Mexico", "Kenya"], "Loc_no": ["10", "10"]}))
+    work["latitude"] = [10.0, 30.0]
+    work["longitude"] = [20.0, 40.0]
+    work["altitude"] = [100.0, 300.0]
+    assert "10" not in build_location_fallbacks(work).index

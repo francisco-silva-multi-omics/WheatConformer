@@ -166,6 +166,24 @@ def build_env_trait_matrix(env: pd.DataFrame) -> pd.DataFrame:
     return tmp.pivot_table(index="env_id", columns="Trait_name", values="feature_value", aggfunc="mean")
 
 
+def build_location_fallbacks(loc_work: pd.DataFrame) -> pd.DataFrame:
+    country_counts = loc_work[loc_work["Country_key"].ne("")].groupby("Loc_no_key")["Country_key"].nunique()
+    all_loc_numbers = pd.Index(loc_work["Loc_no_key"].drop_duplicates())
+    safe_loc_numbers = all_loc_numbers[
+        all_loc_numbers.to_series().ne("").to_numpy()
+        & country_counts.reindex(all_loc_numbers, fill_value=0).le(1).to_numpy()
+    ]
+    return (
+        loc_work[
+            loc_work["Loc_no_key"].ne("")
+            & loc_work["Loc_no_key"].isin(safe_loc_numbers)
+        ]
+        .groupby("Loc_no_key")[["latitude", "longitude", "altitude"]]
+        .mean()
+        .add_suffix("_fallback")
+    )
+
+
 def build_geo_features(env: pd.DataFrame, loc: pd.DataFrame, env_ids: pd.Index) -> pd.DataFrame:
     env_base = env[[*ID_COLS]].drop_duplicates().copy()
     env_base["env_id"] = env_id_from_frame(env_base)
@@ -176,15 +194,7 @@ def build_geo_features(env: pd.DataFrame, loc: pd.DataFrame, env_ids: pd.Index) 
     loc_work["longitude"] = decimal_degrees(loc_work["Long_degress"], loc_work["Long_minutes"], loc_work["Longitude"])
     loc_work["altitude"] = pd.to_numeric(loc_work["Altitude"], errors="coerce")
     loc_by_id = loc_work.groupby("location_key")[["latitude", "longitude", "altitude"]].mean()
-    country_counts = loc_work[loc_work["Country_key"].ne("")].groupby("Loc_no_key")["Country_key"].nunique()
-    all_loc_numbers = pd.Index(loc_work["Loc_no_key"].drop_duplicates())
-    safe_loc_numbers = all_loc_numbers[country_counts.reindex(all_loc_numbers, fill_value=0).le(1)]
-    fallback_by_loc = (
-        loc_work[loc_work["Loc_no_key"].isin(safe_loc_numbers)]
-        .groupby("Loc_no_key")[["latitude", "longitude", "altitude"]]
-        .mean()
-        .add_suffix("_fallback")
-    )
+    fallback_by_loc = build_location_fallbacks(loc_work)
 
     geo = env_base[["env_id", "location_key", "Loc_no_key"]].merge(loc_by_id, left_on="location_key", right_index=True, how="left")
     geo = geo.merge(fallback_by_loc, left_on="Loc_no_key", right_index=True, how="left")
@@ -399,6 +409,7 @@ def component_activity(feature_count: int, mean_diag_raw: float) -> tuple[bool, 
 def main() -> None:
     env = pd.read_csv(OUT / "envdata.tsv", sep="\t", dtype=str, low_memory=False)
     loc = pd.read_csv(OUT / "locdata.tsv", sep="\t", dtype=str, low_memory=False)
+    keyed_locations = add_location_keys(loc)
     location_collision_audit(loc).to_csv(OUT / "qc_location_key_collisions.tsv", sep="\t", index=False)
 
     env_base = env[[*ID_COLS]].drop_duplicates().copy()
@@ -472,6 +483,10 @@ def main() -> None:
         "active_components": active_components,
         "environment_mean_diag_raw": environment_mean_diag_raw,
         "environment_mean_diag_scaled": environment_mean_diag_scaled,
+        "loc_no_missing_count": int(keyed_locations["loc_no_missing"].sum()),
+        "location_hash_fallback_count": int(keyed_locations["location_key_method"].eq("unresolved_location_hash_fallback").sum()),
+        "country_loc_desc_fallback_count": int(keyed_locations["location_key_method"].eq("country_loc_desc_fallback").sum()),
+        "empty_loc_no_excluded_from_fallback": True,
     }, indent=2), encoding="utf-8")
 
     pd.DataFrame(
