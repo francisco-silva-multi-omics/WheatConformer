@@ -32,7 +32,7 @@ while IFS=$'\t' read -r trait trait_slug; do
     --rank-g 128 \
     --rank-g-rbf 128 \
     --rank-e 64 \
-    --split loeo \
+    --split gho_environment \
     --epochs 200 \
     --batch-size 8192
 done < "$trait_manifest"
@@ -49,7 +49,7 @@ if [[ -f model_kernels/stage1_gbs_sawyt_env/stage1_gbs_sawyt_env_model_ready_sta
     --prefix stage1_gbs_sawyt_env_mkl_gxe_tf \
     --rank-g 64 \
     --rank-e 64 \
-    --split loeo \
+    --split gho_environment \
     --epochs 200 \
     --batch-size 4096
 else

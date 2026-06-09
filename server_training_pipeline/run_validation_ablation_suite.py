@@ -215,6 +215,12 @@ def group_kfold_splits(
     return out
 
 
+try:
+    from .split_utils import canonical_split_mode, grouped_holdout, cv0_split, make_split, split_leakage_record
+except ImportError:
+    from split_utils import canonical_split_mode, grouped_holdout, cv0_split, make_split, split_leakage_record
+
+
 def split_leakage_record(
     df: pd.DataFrame,
     repeat: int,

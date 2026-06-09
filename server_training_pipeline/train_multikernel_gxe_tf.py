@@ -12,8 +12,10 @@ import tensorflow as tf
 
 try:
     from .trait_isolation import select_single_trait
+    from .split_utils import CANONICAL_SPLIT_MODES, SPLIT_ALIASES, canonical_split_mode, make_split, split_leakage_record
 except ImportError:
     from trait_isolation import select_single_trait
+    from split_utils import CANONICAL_SPLIT_MODES, SPLIT_ALIASES, canonical_split_mode, make_split, split_leakage_record
 
 
 def read_table(path: Path) -> pd.DataFrame:
@@ -240,7 +242,8 @@ def main() -> None:
     parser.add_argument("--rank-e", type=int, default=64)
     parser.add_argument("--no-ge", action="store_true")
     parser.add_argument("--no-rbf-e", action="store_true")
-    parser.add_argument("--split", choices=["random", "loeo", "loyo", "loco"], default="random")
+    parser.add_argument("--split", default="cv2_random_observation")
+    parser.add_argument("--group-kfold-col", default="env_kernel_id")
     parser.add_argument("--test-fraction", type=float, default=0.2)
     parser.add_argument("--val-fraction", type=float, default=0.1)
     parser.add_argument("--seed", type=int, default=2026)
@@ -284,8 +287,16 @@ def main() -> None:
     obs["g_compact"] = obs["g_compact"].astype(int)
     obs["e_compact"] = obs["e_compact"].astype(int)
 
-    split_col = {"random": "", "loeo": "env_kernel_id", "loyo": "cycle", "loco": "country"}[args.split]
-    train_idx, val_idx, test_idx = split_indices(obs, args.split, args.test_fraction, args.val_fraction, args.seed, split_col)
+    requested_split = args.split
+    canonical_split = canonical_split_mode(requested_split, warn=True)
+    split_col = {
+        "cv2_random_observation": None, "gho_environment": "env_kernel_id", "gho_cycle": "cycle",
+        "gho_trial": "trial_name", "gho_country": "country", "gho_family": "canonical_germplasm_key",
+        "cv1_genotype": "panel_sample_id", "cv1_environment": "env_kernel_id",
+        "cv0_genotype_environment": None, "group_kfold": args.group_kfold_col,
+    }[canonical_split]
+    train_idx, val_idx, test_idx = make_split(obs, canonical_split, args.seed, args.test_fraction, args.val_fraction, split_col)
+    leakage = split_leakage_record(obs, 0, canonical_split, train_idx, val_idx, test_idx, group_col=split_col)
     if len(train_idx) == 0 or len(val_idx) == 0 or len(test_idx) == 0:
         raise SystemExit(f"Empty split: train={len(train_idx)}, val={len(val_idx)}, test={len(test_idx)}")
 
@@ -387,7 +398,10 @@ def main() -> None:
             {"metric": "rows_train", "value": len(train_idx)},
             {"metric": "rows_val", "value": len(val_idx)},
             {"metric": "rows_test", "value": len(test_idx)},
-            {"metric": "split", "value": args.split},
+            {"metric": "requested_split_mode", "value": requested_split},
+            {"metric": "canonical_split_mode", "value": canonical_split},
+            {"metric": "split_group_column", "value": split_col or ""},
+            {"metric": "split_leakage_status", "value": leakage["leakage_status"]},
             {"metric": "rank_g", "value": Gfac.shape[1]},
             {"metric": "rank_g_rbf", "value": G_RBF_fac.shape[1] if G_RBF_fac is not None else 0},
             {"metric": "rank_e", "value": Efac.shape[1]},
@@ -404,6 +418,12 @@ def main() -> None:
         ]
     )
     summary.to_csv(args.out_dir / f"{args.prefix}_summary.tsv", sep="\t", index=False)
+    config = vars(args) | {
+        "requested_split_mode": requested_split, "canonical_split_mode": canonical_split,
+        "split_group_column": split_col or "", "train_rows": len(train_idx), "validation_rows": len(val_idx),
+        "test_rows": len(test_idx), "split_leakage_status": leakage["leakage_status"], "selected_trait": selected_trait,
+    }
+    (args.out_dir / f"{args.prefix}_config.json").write_text(json.dumps(config, default=str, indent=2), encoding="utf-8")
     print(summary.to_string(index=False), flush=True)
 
 
