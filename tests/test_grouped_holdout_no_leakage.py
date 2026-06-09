@@ -7,6 +7,7 @@ import pandas as pd
 
 from server_training_pipeline.run_validation_ablation_suite import (
     canonical_split_mode,
+    fold_skip_reason,
     group_kfold_splits,
     make_split,
     split_leakage_record,
@@ -90,3 +91,23 @@ def test_group_kfold_holds_every_group_out_once() -> None:
         assert qc["expected_env_overlap"] == "zero"
         held_out.extend(obs.iloc[test]["env_kernel_id"].unique())
     assert sorted(held_out) == sorted(obs["env_kernel_id"].unique())
+
+
+def test_leakage_failed_fold_is_skipped_before_metrics() -> None:
+    reason = fold_skip_reason(
+        {"leakage_status": "fail"},
+        np.array([0, 1]),
+        np.array([2]),
+        np.array([3]),
+    )
+    assert reason == "split leakage detected"
+
+
+def test_empty_validation_fold_is_skipped() -> None:
+    reason = fold_skip_reason(
+        {"leakage_status": "pass"},
+        np.array([0, 1]),
+        np.array([], dtype=int),
+        np.array([3]),
+    )
+    assert reason == "empty train/validation/test partition"

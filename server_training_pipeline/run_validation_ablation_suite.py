@@ -215,6 +215,19 @@ def family_group(df: pd.DataFrame, fallback_col: str) -> pd.Series:
     return raw.str.replace(r"\s+", " ", regex=True).str.split(r"[/\\]|//| X | x |-", regex=True).str[0]
 
 
+def fold_skip_reason(
+    leakage_record: dict[str, object],
+    train: np.ndarray,
+    val: np.ndarray,
+    test: np.ndarray,
+) -> str | None:
+    if len(train) == 0 or len(val) == 0 or len(test) == 0:
+        return "empty train/validation/test partition"
+    if leakage_record["leakage_status"] != "pass":
+        return "split leakage detected"
+    return None
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run scalable validation and ablation suite for low-rank multikernel baseline.")
     parser.add_argument("--observations", type=Path, required=True)
@@ -320,14 +333,16 @@ def main() -> None:
                     leakage_rows.append({"repeat": repeat, "split_mode": split_mode, "leakage_status": "skipped", "note": str(exc)})
         for repeat, (train, val, test) in enumerate(split_runs):
             try:
-                leakage_rows.append(split_leakage_record(obs, repeat, split_mode, train, val, test, group_col=group_col))
+                leakage_record = split_leakage_record(obs, repeat, split_mode, train, val, test, group_col=group_col)
+                leakage_rows.append(leakage_record)
             except SystemExit as exc:
                 leakage_rows.append({"repeat": repeat, "split_mode": split_mode, "leakage_status": "skipped", "note": str(exc)})
                 continue
-            if len(train) == 0 or len(val) == 0 or len(test) == 0:
-                note = "empty train/validation/test partition"
+            note = fold_skip_reason(leakage_record, train, val, test)
+            if note is not None:
                 rows.append({"repeat": repeat, "split_mode": split_mode, "ablation": "NA", "split": "skipped", "n": 0, "rmse": np.nan, "mae": np.nan, "pearson": np.nan, "note": note})
-                leakage_rows[-1]["leakage_status"] = "skipped"
+                if note == "empty train/validation/test partition":
+                    leakage_rows[-1]["leakage_status"] = "skipped"
                 leakage_rows[-1]["note"] = note
                 continue
             effective_factorization_mode = (
@@ -422,17 +437,19 @@ def main() -> None:
             passed=leakage_df["leakage_status"].eq("pass"),
             failed=leakage_df["leakage_status"].eq("fail"),
             skipped=leakage_df["leakage_status"].eq("skipped"),
+            skipped_empty=leakage_df.get("note", pd.Series("", index=leakage_df.index)).eq("empty train/validation/test partition"),
         )
         .groupby("split_mode", dropna=False)
         .agg(repeats_attempted=("repeat", "count"), repeats_passed=("passed", "sum"),
-             repeats_failed=("failed", "sum"), repeats_skipped=("skipped", "sum"))
+             repeats_failed=("failed", "sum"), repeats_skipped=("skipped", "sum"),
+             repeats_skipped_empty=("skipped_empty", "sum"))
         .reset_index()
     )
     leakage_summary.insert(0, "trait", selected_trait)
     leakage_summary["leakage_free"] = leakage_summary["repeats_failed"].eq(0)
     leakage_summary.to_csv(args.out_dir / "split_leakage_summary.tsv", sep="\t", index=False)
     summary = (
-        result[result["split"].eq("test")]
+        result[result["split"].eq("test") & result["ablation"].ne("NA")]
         .groupby(["split_mode", "ablation"], dropna=False)
         .agg(n_mean=("n", "mean"), rmse_mean=("rmse", "mean"), rmse_sd=("rmse", "std"), pearson_mean=("pearson", "mean"), pearson_sd=("pearson", "std"))
         .reset_index()

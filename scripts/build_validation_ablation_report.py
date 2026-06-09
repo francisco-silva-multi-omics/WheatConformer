@@ -27,6 +27,24 @@ def combine_reports(root: Path) -> pd.DataFrame:
         config = json.loads(config_path.read_text(encoding="utf-8"))
         trait = str(config.get("selected_trait", trait_dir.name))
         summary = pd.read_csv(summary_path, sep="\t")
+        summary = summary[summary["ablation"].ne("NA")].copy()
+        leakage_path = trait_dir / "split_leakage_summary.tsv"
+        if not leakage_path.exists():
+            raise SystemExit(f"Missing trait-specific leakage summary: {leakage_path}")
+        leakage = pd.read_csv(leakage_path, sep="\t").rename(
+            columns={
+                "repeats_attempted": "folds_attempted",
+                "repeats_passed": "folds_passed",
+                "repeats_failed": "folds_failed_leakage",
+                "repeats_skipped_empty": "folds_skipped_empty",
+            }
+        )
+        summary = summary.merge(
+            leakage[["split_mode", "folds_attempted", "folds_passed", "folds_failed_leakage", "folds_skipped_empty"]],
+            on="split_mode",
+            how="left",
+            validate="many_to_one",
+        )
         summary.insert(0, "trait", trait)
         rows.append(summary)
     if not rows:
@@ -53,6 +71,10 @@ def combine_reports(root: Path) -> pd.DataFrame:
         "rmse_sd",
         "pearson_mean",
         "pearson_sd",
+        "folds_attempted",
+        "folds_passed",
+        "folds_failed_leakage",
+        "folds_skipped_empty",
         "best_within_split",
         "rbf_improves_over_additive",
     ]
