@@ -4,7 +4,7 @@ from pathlib import Path
 
 import numpy as np
 
-from server_training_pipeline.run_validation_ablation_suite import kernel_factors, top_factors
+from server_training_pipeline.kernel_factorization import kernel_factors, top_factors
 
 
 def write_kernel(path: Path, matrix: np.ndarray) -> Path:

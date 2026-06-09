@@ -10,9 +10,11 @@ import pandas as pd
 try:
     from .trait_isolation import select_single_trait
     from .split_utils import canonical_split_mode, group_kfold_splits, make_split, split_leakage_record
+    from .kernel_factorization import effective_factorization_mode, kernel_factors
 except ImportError:
     from trait_isolation import select_single_trait
     from split_utils import canonical_split_mode, group_kfold_splits, make_split, split_leakage_record
+    from kernel_factorization import effective_factorization_mode, kernel_factors
 
 
 DEFAULT_ABLATIONS = [
@@ -45,68 +47,11 @@ DEFAULT_SPLIT_MODES = [
     "cv0_genotype_environment",
 ]
 
-STRICT_INDUCTIVE_SPLIT_MODES = {
-    "cv1_genotype",
-    "cv1_environment",
-    "cv0_genotype_environment",
-}
-
-
 def read_table(path: Path) -> pd.DataFrame:
     suffix = "".join(path.suffixes).lower()
     if suffix.endswith(".parquet"):
         return pd.read_parquet(path)
     return pd.read_csv(path, sep="\t", low_memory=False)
-
-
-def kernel_factors(
-    path: Path,
-    rank: int,
-    train_ids: np.ndarray | None = None,
-) -> tuple[np.ndarray, dict[str, int | str]]:
-    K = np.load(path).astype(np.float64)
-    if K.ndim != 2 or K.shape[0] != K.shape[1]:
-        raise ValueError(f"Kernel must be square: {path} has shape {K.shape}")
-    K = (K + K.T) / 2.0
-    if train_ids is None:
-        train_ids = np.arange(K.shape[0], dtype=np.int32)
-        K_train = K
-        factorization_mode = "full_transductive"
-    else:
-        train_ids = np.unique(np.asarray(train_ids, dtype=np.int32))
-        if train_ids.size == 0:
-            raise ValueError("train_nystrom requires at least one training kernel ID")
-        if train_ids.min() < 0 or train_ids.max() >= K.shape[0]:
-            raise ValueError(f"Training kernel IDs are outside kernel dimensions for {path}")
-        K_train = K[np.ix_(train_ids, train_ids)]
-        factorization_mode = "train_nystrom"
-
-    vals, vecs = np.linalg.eigh(K_train)
-    order = np.argsort(vals)[::-1]
-    vals = vals[order]
-    vecs = vecs[:, order]
-    keep = vals > 1e-8
-    vals = vals[keep][:rank]
-    vecs = vecs[:, keep][:, :rank]
-    if vals.size == 0:
-        raise ValueError(f"Kernel has no positive eigenvalues above tolerance: {path}")
-    if factorization_mode == "full_transductive":
-        factors = vecs * np.sqrt(vals)[None, :]
-    else:
-        factors = K[:, train_ids] @ (vecs / np.sqrt(vals)[None, :])
-    metadata = {
-        "factorization_mode": factorization_mode,
-        "rank_requested": int(rank),
-        "rank_retained": int(vals.size),
-        "train_kernel_dimension": int(train_ids.size),
-        "kernel_dimension": int(K.shape[0]),
-    }
-    return factors.astype(np.float32), metadata
-
-
-def top_factors(path: Path, rank: int) -> np.ndarray:
-    factors, _ = kernel_factors(path, rank)
-    return factors
 
 
 def factorization_columns(
@@ -345,12 +290,8 @@ def main() -> None:
                     leakage_rows[-1]["leakage_status"] = "skipped"
                 leakage_rows[-1]["note"] = note
                 continue
-            effective_factorization_mode = (
-                "train_nystrom"
-                if args.factorization_mode == "train_nystrom" and split_mode in STRICT_INDUCTIVE_SPLIT_MODES
-                else "full_transductive"
-            )
-            if effective_factorization_mode == "train_nystrom":
+            fold_factorization_mode = effective_factorization_mode(args.factorization_mode, split_mode)
+            if fold_factorization_mode == "train_nystrom":
                 train_g_ids = np.unique(gi[train])
                 train_e_ids = np.unique(ei[train])
                 fold_G, fold_G_metadata = kernel_factors(args.k_g_unique, args.rank_g, train_g_ids)
@@ -398,7 +339,7 @@ def main() -> None:
                     full_factors = fold_G, fold_G_RBF, fold_G_EPI2, fold_E, fold_metadata
                 else:
                     fold_G, fold_G_RBF, fold_G_EPI2, fold_E, fold_metadata = full_factors
-            factor_columns = factorization_columns(effective_factorization_mode, fold_metadata)
+            factor_columns = factorization_columns(fold_factorization_mode, fold_metadata)
             y, mu, sd = weighted_standardize(y_raw, w, train)
             for ablation in ablations:
                 X = build_features(

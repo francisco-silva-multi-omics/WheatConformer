@@ -13,9 +13,11 @@ import tensorflow as tf
 try:
     from .trait_isolation import select_single_trait
     from .split_utils import canonical_split_mode, group_kfold_splits, make_split, split_leakage_record
+    from .kernel_factorization import effective_factorization_mode, kernel_factors, retained_eigenvalues
 except ImportError:
     from trait_isolation import select_single_trait
     from split_utils import canonical_split_mode, group_kfold_splits, make_split, split_leakage_record
+    from kernel_factorization import effective_factorization_mode, kernel_factors, retained_eigenvalues
 
 
 def read_table(path: Path) -> pd.DataFrame:
@@ -67,22 +69,6 @@ def weighted_mean_std(y: np.ndarray, w: np.ndarray) -> tuple[float, float]:
     mu = float(np.sum(w * y) / np.sum(w))
     var = float(np.sum(w * (y - mu) ** 2) / np.sum(w))
     return mu, max(math.sqrt(var), 1e-8)
-
-
-def top_kernel_factors(kernel_path: Path, rank: int, jitter: float = 1e-6) -> tuple[np.ndarray, np.ndarray]:
-    K = np.load(kernel_path).astype(np.float64)
-    K = (K + K.T) / 2.0
-    if jitter > 0:
-        K.flat[:: K.shape[0] + 1] += jitter
-    vals, vecs = np.linalg.eigh(K)
-    order = np.argsort(vals)[::-1]
-    vals = vals[order]
-    vecs = vecs[:, order]
-    keep = vals > 1e-8
-    vals = vals[keep][:rank]
-    vecs = vecs[:, keep][:, :rank]
-    factors = vecs * np.sqrt(vals)[None, :]
-    return factors.astype(np.float32), vals.astype(np.float32)
 
 
 def metrics(y_true: np.ndarray, y_pred: np.ndarray, w: np.ndarray | None = None) -> dict[str, float]:
@@ -235,6 +221,11 @@ def main() -> None:
     parser.add_argument("--group-kfold-col", default="env_kernel_id")
     parser.add_argument("--group-kfold-splits", type=int, default=5)
     parser.add_argument("--group-kfold-fold", type=int, default=0)
+    parser.add_argument(
+        "--factorization-mode",
+        choices=["full_transductive", "train_nystrom"],
+        default="full_transductive",
+    )
     parser.add_argument("--test-fraction", type=float, default=0.2)
     parser.add_argument("--val-fraction", type=float, default=0.1)
     parser.add_argument("--seed", type=int, default=2026)
@@ -306,13 +297,20 @@ def main() -> None:
     ei = obs["e_compact"].to_numpy(dtype=np.int32)
 
     print("Computing low-rank kernel factors ...", flush=True)
-    Gfac, gevals = top_kernel_factors(args.k_g_unique, args.rank_g)
-    G_RBF_fac, g_rbf_evals = (
-        top_kernel_factors(args.k_g_rbf_unique, args.rank_g_rbf)
-        if args.k_g_rbf_unique is not None
-        else (None, None)
-    )
-    Efac, evals = top_kernel_factors(args.k_e_unique, args.rank_e)
+    effective_mode = effective_factorization_mode(args.factorization_mode, canonical_split, warn=True)
+    train_g_ids = np.unique(gi[train_idx]) if effective_mode == "train_nystrom" else None
+    train_e_ids = np.unique(ei[train_idx]) if effective_mode == "train_nystrom" else None
+    Gfac, g_factor_metadata = kernel_factors(args.k_g_unique, args.rank_g, train_g_ids, jitter=1e-6)
+    if args.k_g_rbf_unique is not None:
+        G_RBF_fac, g_rbf_factor_metadata = kernel_factors(
+            args.k_g_rbf_unique, args.rank_g_rbf, train_g_ids, jitter=1e-6
+        )
+    else:
+        G_RBF_fac, g_rbf_factor_metadata = None, None
+    Efac, e_factor_metadata = kernel_factors(args.k_e_unique, args.rank_e, train_e_ids, jitter=1e-6)
+    gevals = retained_eigenvalues(Gfac, train_g_ids)
+    g_rbf_evals = retained_eigenvalues(G_RBF_fac, train_g_ids) if G_RBF_fac is not None else None
+    evals = retained_eigenvalues(Efac, train_e_ids)
     model = LowRankGxE(
         Gfac,
         Efac,
@@ -380,6 +378,16 @@ def main() -> None:
         e_eigenvalues=evals,
         y_mu=np.array([y_mu], dtype=np.float32),
         y_sd=np.array([y_sd], dtype=np.float32),
+        requested_factorization_mode=np.array([args.factorization_mode]),
+        effective_factorization_mode=np.array([effective_mode]),
+        train_genotype_kernel_dimension=np.array([g_factor_metadata["train_kernel_dimension"]], dtype=np.int32),
+        train_environment_kernel_dimension=np.array([e_factor_metadata["train_kernel_dimension"]], dtype=np.int32),
+        rank_g_requested=np.array([args.rank_g], dtype=np.int32),
+        rank_g_retained=np.array([g_factor_metadata["rank_retained"]], dtype=np.int32),
+        rank_g_rbf_requested=np.array([args.rank_g_rbf], dtype=np.int32),
+        rank_g_rbf_retained=np.array([g_rbf_factor_metadata["rank_retained"] if g_rbf_factor_metadata else 0], dtype=np.int32),
+        rank_e_requested=np.array([args.rank_e], dtype=np.int32),
+        rank_e_retained=np.array([e_factor_metadata["rank_retained"]], dtype=np.int32),
     )
     pd.DataFrame(history).to_csv(args.out_dir / f"{args.prefix}_training_history.tsv", sep="\t", index=False)
 
@@ -400,6 +408,16 @@ def main() -> None:
             {"metric": "canonical_split_mode", "value": canonical_split},
             {"metric": "split_group_column", "value": split_col or ""},
             {"metric": "split_leakage_status", "value": leakage["leakage_status"]},
+            {"metric": "requested_factorization_mode", "value": args.factorization_mode},
+            {"metric": "effective_factorization_mode", "value": effective_mode},
+            {"metric": "train_genotype_kernel_dimension", "value": g_factor_metadata["train_kernel_dimension"]},
+            {"metric": "train_environment_kernel_dimension", "value": e_factor_metadata["train_kernel_dimension"]},
+            {"metric": "rank_g_requested", "value": args.rank_g},
+            {"metric": "rank_g_retained", "value": g_factor_metadata["rank_retained"]},
+            {"metric": "rank_g_rbf_requested", "value": args.rank_g_rbf},
+            {"metric": "rank_g_rbf_retained", "value": g_rbf_factor_metadata["rank_retained"] if g_rbf_factor_metadata else 0},
+            {"metric": "rank_e_requested", "value": args.rank_e},
+            {"metric": "rank_e_retained", "value": e_factor_metadata["rank_retained"]},
             {"metric": "rank_g", "value": Gfac.shape[1]},
             {"metric": "rank_g_rbf", "value": G_RBF_fac.shape[1] if G_RBF_fac is not None else 0},
             {"metric": "rank_e", "value": Efac.shape[1]},
@@ -420,6 +438,12 @@ def main() -> None:
         "requested_split_mode": requested_split, "canonical_split_mode": canonical_split,
         "split_group_column": split_col or "", "train_rows": len(train_idx), "validation_rows": len(val_idx),
         "test_rows": len(test_idx), "split_leakage_status": leakage["leakage_status"], "selected_trait": selected_trait,
+        "requested_factorization_mode": args.factorization_mode, "effective_factorization_mode": effective_mode,
+        "train_genotype_kernel_dimension": g_factor_metadata["train_kernel_dimension"],
+        "train_environment_kernel_dimension": e_factor_metadata["train_kernel_dimension"],
+        "rank_g_retained": g_factor_metadata["rank_retained"],
+        "rank_g_rbf_retained": g_rbf_factor_metadata["rank_retained"] if g_rbf_factor_metadata else 0,
+        "rank_e_retained": e_factor_metadata["rank_retained"],
     }
     (args.out_dir / f"{args.prefix}_config.json").write_text(json.dumps(config, default=str, indent=2), encoding="utf-8")
     print(summary.to_string(index=False), flush=True)
