@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 
 import numpy as np
@@ -20,6 +21,33 @@ def squared_distance_block(K: np.ndarray, diag: np.ndarray, start: int, end: int
     d2 = diag[start:end, None] + diag[None, :] - 2.0 * block
     np.maximum(d2, 0.0, out=d2)
     return d2
+
+
+def resolve_gamma(
+    explicit_gamma: float | None,
+    cli_multiplier: float | None,
+    environment_multiplier: str | None,
+    median_squared_distance: float,
+) -> tuple[float, str, float | None]:
+    if explicit_gamma is not None:
+        if not np.isfinite(explicit_gamma) or explicit_gamma <= 0:
+            raise ValueError("--gamma must be finite and positive")
+        return float(explicit_gamma), "explicit_gamma", None
+    if cli_multiplier is not None:
+        multiplier = float(cli_multiplier)
+        source = "cli_gamma_multiplier"
+    elif environment_multiplier is not None and environment_multiplier.strip():
+        try:
+            multiplier = float(environment_multiplier)
+        except ValueError as exc:
+            raise ValueError(f"GAUSSIAN_GAMMA_MULTIPLIER must be numeric; found {environment_multiplier!r}") from exc
+        source = "environment_gamma_multiplier"
+    else:
+        multiplier = 1.0
+        source = "default_gamma_multiplier"
+    if not np.isfinite(multiplier) or multiplier <= 0:
+        raise ValueError("Gamma multiplier must be finite and positive")
+    return float(multiplier / median_squared_distance), source, multiplier
 
 
 def main() -> None:
@@ -48,17 +76,13 @@ def main() -> None:
         default=Path("genotype_panels/hmp/K_HMP.QCfiltered.gaussian.qc.json"),
     )
     parser.add_argument("--gamma", type=float, help="Explicit RBF gamma. Default: multiplier / median sampled squared distance.")
-    parser.add_argument("--gamma-multiplier", type=float, default=1.0)
+    parser.add_argument("--gamma-multiplier", type=float)
     parser.add_argument("--median-sample-size", type=int, default=2048)
     parser.add_argument("--psd-sample-size", type=int, default=512)
     parser.add_argument("--chunk-size", type=int, default=256)
     parser.add_argument("--seed", type=int, default=2026)
     args = parser.parse_args()
 
-    if args.gamma is not None and (not np.isfinite(args.gamma) or args.gamma <= 0):
-        raise SystemExit("--gamma must be finite and positive")
-    if not np.isfinite(args.gamma_multiplier) or args.gamma_multiplier <= 0:
-        raise SystemExit("--gamma-multiplier must be finite and positive")
     if args.chunk_size <= 0:
         raise SystemExit("--chunk-size must be positive")
 
@@ -88,7 +112,15 @@ def main() -> None:
     if positive.size == 0:
         raise SystemExit("Could not estimate Gaussian bandwidth: no positive finite sampled distances")
     median_d2 = float(np.median(positive))
-    gamma = float(args.gamma) if args.gamma is not None else float(args.gamma_multiplier / median_d2)
+    try:
+        gamma, gamma_source, gamma_multiplier = resolve_gamma(
+            args.gamma,
+            args.gamma_multiplier,
+            os.environ.get("GAUSSIAN_GAMMA_MULTIPLIER"),
+            median_d2,
+        )
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
 
     args.out_kernel.parent.mkdir(parents=True, exist_ok=True)
     out = np.lib.format.open_memmap(args.out_kernel, mode="w+", dtype=np.float32, shape=(n, n))
@@ -110,9 +142,10 @@ def main() -> None:
         "sample_order": str(args.sample_order),
         "output_kernel": str(args.out_kernel),
         "samples": n,
+        "number_of_samples": n,
         "gamma": gamma,
-        "gamma_source": "explicit" if args.gamma is not None else "median_squared_distance",
-        "gamma_multiplier": float(args.gamma_multiplier),
+        "gamma_source": gamma_source,
+        "gamma_multiplier": gamma_multiplier,
         "sampled_median_squared_distance": median_d2,
         "sampled_positive_distances": int(positive.size),
         "kernel_mean_diagonal": float(np.mean(np.diag(out))),
