@@ -13,6 +13,14 @@ echo "[2b/9] Build Gaussian/RBF genomic kernel"
 python build_gaussian_genomic_kernel.py \
   --gamma-multiplier "${GAUSSIAN_GAMMA_MULTIPLIER:-1.0}"
 
+echo "[2c/9] Analyze additive versus Gaussian genomic-kernel redundancy"
+python analyze_kernel_redundancy.py \
+  --linear-kernel genotype_panels/hmp/K_HMP.QCfiltered.meanDiag1.npy \
+  --rbf-kernel genotype_panels/hmp/K_HMP.QCfiltered.gaussian.npy \
+  --sample-order genotype_panels/hmp/hmp_K_sample_order.QCfiltered.tsv \
+  --out-json genotype_panels/hmp/K_HMP.linear_vs_gaussian_diagnostics.json \
+  --out-tsv genotype_panels/hmp/K_HMP.linear_vs_gaussian_eigen_summary.tsv
+
 echo "[3/9] Build harmonized phenotype/MAS/functional integration layer"
 python build_next_integration_layer.py
 

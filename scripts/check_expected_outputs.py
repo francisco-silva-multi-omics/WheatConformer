@@ -11,6 +11,8 @@ EXPECTED = [
     "genotype_panels/hmp/K_HMP.QCfiltered.meanDiag1.npy",
     "genotype_panels/hmp/K_HMP.QCfiltered.gaussian.npy",
     "genotype_panels/hmp/K_HMP.QCfiltered.gaussian.qc.json",
+    "genotype_panels/hmp/K_HMP.linear_vs_gaussian_diagnostics.json",
+    "genotype_panels/hmp/K_HMP.linear_vs_gaussian_eigen_summary.tsv",
     "genotype_panels/hmp/hmp_K_sample_order.QCfiltered.tsv",
     "phenotypes/stage1_adjusted_phenotypes.parquet",
     "environment/K_E.npy",

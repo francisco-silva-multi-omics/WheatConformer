@@ -16,7 +16,7 @@ CHECKS = [
     ("stage1_adjusted_phenotypes", "phenotypes/stage1_adjusted_phenotypes.parquet", "implemented"),
     ("hmp_kernel", "genotype_panels/hmp/K_HMP.QCfiltered.meanDiag1.npy", "implemented"),
     ("hmp_gaussian_kernel", "genotype_panels/hmp/K_HMP.QCfiltered.gaussian.npy", "implemented"),
-    ("linear_vs_gaussian_diagnostics", "genotype_panels/hmp/K_HMP.linear_vs_gaussian_diagnostics.json", "missing_methodology_component"),
+    ("linear_vs_gaussian_diagnostics", "genotype_panels/hmp/K_HMP.linear_vs_gaussian_diagnostics.json", "implemented"),
     ("rbf_gamma_sweep_manifest", "genotype_panels/hmp/rbf_gamma_sweep/gamma_sweep_manifest.tsv", "missing_methodology_component"),
     ("environment_kernel", "environment/K_E.npy", "implemented"),
     ("environment_geo_kernel", "environment/K_geo.npy", "implemented"),
