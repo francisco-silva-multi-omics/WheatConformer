@@ -38,20 +38,32 @@ while IFS=$'\t' read -r trait trait_slug; do
 done < "$trait_manifest"
 
 echo "[2/2] TensorFlow multikernel GBS baseline, if model inputs exist"
-if [[ -f model_kernels/stage1_gbs_sawyt_env/stage1_gbs_sawyt_env_model_ready_stage1_observations.parquet ]]; then
-  python server_training_pipeline/train_multikernel_gxe_tf.py \
-    --observations model_kernels/stage1_gbs_sawyt_env/stage1_gbs_sawyt_env_model_ready_stage1_observations.parquet \
+GBS_OBSERVATIONS="model_kernels/stage1_gbs_sawyt_env/stage1_gbs_sawyt_env_model_ready_stage1_observations.parquet"
+if [[ ! -s "$GBS_OBSERVATIONS" && -s "model_kernels/stage1_gbs_sawyt_env/stage1_gbs_sawyt_env_model_ready_stage1_observations.tsv.gz" ]]; then
+  GBS_OBSERVATIONS="model_kernels/stage1_gbs_sawyt_env/stage1_gbs_sawyt_env_model_ready_stage1_observations.tsv.gz"
+fi
+if [[ -s "$GBS_OBSERVATIONS" ]]; then
+  gbs_trait_manifest="$(mktemp)"
+  trap 'rm -f "$trait_manifest" "$gbs_trait_manifest"' EXIT
+  python scripts/resolve_training_traits.py --observations "$GBS_OBSERVATIONS" \
+    --train-traits "${GBS_TRAIN_TRAITS:-${TRAIN_TRAITS:-}}" > "$gbs_trait_manifest"
+  while IFS=$'\t' read -r trait trait_slug; do
+    [[ -n "$trait" ]] || continue
+    python server_training_pipeline/train_multikernel_gxe_tf.py \
+    --observations "$GBS_OBSERVATIONS" \
     --k-g-unique model_kernels/stage1_gbs_sawyt_env/stage1_gbs_sawyt_env_K_G_unique.npy \
     --k-e-unique model_kernels/stage1_gbs_sawyt_env/stage1_gbs_sawyt_env_K_E_unique.npy \
     --k-g-order model_kernels/stage1_gbs_sawyt_env/stage1_gbs_sawyt_env_K_G_unique_order.tsv \
     --k-e-order model_kernels/stage1_gbs_sawyt_env/stage1_gbs_sawyt_env_K_E_unique_order.tsv \
-    --out-dir trained_models/stage1_gbs_sawyt_mkl \
-    --prefix stage1_gbs_sawyt_env_mkl_gxe_tf \
+    --out-dir "trained_models/stage1_gbs_sawyt_mkl/$trait_slug" \
+    --prefix "stage1_gbs_sawyt_env_mkl_gxe_tf_$trait_slug" \
+    --trait "$trait" \
     --rank-g 64 \
     --rank-e 64 \
     --split gho_environment \
     --epochs 200 \
     --batch-size 4096
+  done < "$gbs_trait_manifest"
 else
   echo "GBS model inputs not found; skipping GBS training."
 fi

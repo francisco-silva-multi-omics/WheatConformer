@@ -8,6 +8,10 @@ import numpy as np
 import pandas as pd
 from scipy.linalg import cho_factor, cho_solve
 from scipy.optimize import minimize
+try:
+    from .trait_isolation import select_single_trait
+except ImportError:
+    from trait_isolation import select_single_trait
 
 
 def read_table(path: Path) -> pd.DataFrame:
@@ -80,6 +84,18 @@ def standardize_y(y: np.ndarray, w: np.ndarray) -> tuple[np.ndarray, float, floa
     return (y - mu) / sd, mu, sd
 
 
+def validate_kernel_dependencies(args: argparse.Namespace) -> None:
+    for flag, kernel, message in [
+        ("include_rbf_e", "k_g_rbf", "--include-rbf-e requires --k-g-rbf"),
+        ("include_epi2", "geno_epi2_kernel", "--include-epi2 requires --geno-epi2-kernel"),
+        ("include_epi2_e", "geno_epi2_kernel", "--include-epi2-e requires --geno-epi2-kernel"),
+        ("include_ae", "k_a", "--include-ae requires --k-a"),
+        ("include_ze", "k_z", "--include-ze requires --k-z"),
+    ]:
+        if getattr(args, flag, False) and not getattr(args, kernel, None):
+            raise SystemExit(message)
+
+
 def reml_objective(theta: np.ndarray, kernels: list[np.ndarray], r_diag: np.ndarray, X: np.ndarray, y: np.ndarray) -> float:
     variances = np.exp(theta)
     V = np.zeros_like(kernels[0], dtype=np.float64)
@@ -138,11 +154,17 @@ def main() -> None:
     parser.add_argument("--ridge-jitter", type=float, default=1e-6)
     parser.add_argument("--maxiter", type=int, default=200)
     args = parser.parse_args()
+    validate_kernel_dependencies(args)
 
     args.out_dir.mkdir(parents=True, exist_ok=True)
     obs = read_table(args.observations)
-    if args.trait:
-        obs = obs[clean(obs[args.trait_col]).str.upper().eq(args.trait.upper())].copy()
+    if args.trait_col != "trait_name_canonical":
+        if args.trait_col not in obs.columns:
+            raise SystemExit(f"Observation table is missing trait column: {args.trait_col}")
+        obs = obs.copy()
+        obs["trait_name_canonical"] = obs[args.trait_col]
+    obs, selected_trait = select_single_trait(obs, [args.trait] if args.trait else None)
+    print(f"Selected trait: {selected_trait}; rows before filtering: {len(obs):,}", flush=True)
     obs[args.response_col] = pd.to_numeric(obs[args.response_col], errors="coerce")
     obs[args.weight_col] = pd.to_numeric(obs[args.weight_col], errors="coerce")
     obs = obs[obs[args.response_col].notna()].copy()
@@ -270,6 +292,7 @@ def main() -> None:
                 "message": str(opt.message),
                 "negative_reml": float(opt.fun),
                 "observations": int(n),
+                "selected_trait": selected_trait,
                 "fixed_effects": int(X.shape[1]),
                 "response_mean": y_mu,
                 "response_sd": y_sd,
