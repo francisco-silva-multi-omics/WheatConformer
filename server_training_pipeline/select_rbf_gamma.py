@@ -48,6 +48,7 @@ def select_gamma(
         label = multiplier_label(multiplier)
         run_dir = validation_root / slug / f"gammaMultiplier_{label}"
         metrics_path = run_dir / "gamma_sweep_metrics.tsv"
+        leakage_path = run_dir / "split_leakage_qc.tsv"
         trait_kernel_root = kernel_root / slug
         qc_path = trait_kernel_root / f"K_HMP.gaussian.gammaMultiplier_{label}.qc.json"
         kernel_path = trait_kernel_root / f"K_HMP.gaussian.gammaMultiplier_{label}.npy"
@@ -57,6 +58,11 @@ def select_gamma(
         if not qc_path.exists() or not kernel_path.exists():
             raise SystemExit(f"Missing Gaussian kernel or QC for multiplier {label}")
         metrics = pd.read_csv(metrics_path, sep="\t")
+        if leakage_path.exists():
+            leakage = pd.read_csv(leakage_path, sep="\t")
+            relevant = leakage[leakage["split_mode"].eq(split_mode)]
+            if relevant.empty or not relevant["leakage_status"].eq("pass").all():
+                raise SystemExit(f"Gamma selection requires leakage-free validation folds: {leakage_path}")
         validation = metrics[
             metrics["split"].eq("val")
             & metrics["split_mode"].eq(split_mode)

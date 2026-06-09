@@ -32,6 +32,9 @@ def test_gamma_selection_uses_validation_not_test(tmp_path: Path) -> None:
                     {"repeat": 0, "split_mode": "gho_environment", "ablation": "RBF", "split": "val", "n": 10, "rmse": 99, "pearson": 0.0},
             ]
         ).to_csv(run / "gamma_sweep_metrics.tsv", sep="\t", index=False)
+        pd.DataFrame([{"split_mode": "gho_environment", "leakage_status": "pass"}]).to_csv(
+            run / "split_leakage_qc.tsv", sep="\t", index=False
+        )
 
     summary, selected, manifest = select_gamma(
         "Grain Yield", [0.5, 1.0, 2.0], "gho_environment", validation_root, kernel_root, 2026, 1

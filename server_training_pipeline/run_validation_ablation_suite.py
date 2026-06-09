@@ -267,6 +267,12 @@ def split_leakage_record(
     }
 
 
+try:
+    from .split_utils import split_leakage_record
+except ImportError:
+    from split_utils import split_leakage_record
+
+
 def build_features(
     ablation: str,
     G: np.ndarray,
@@ -443,8 +449,11 @@ def main() -> None:
             except SystemExit as exc:
                 leakage_rows.append({"repeat": repeat, "split_mode": split_mode, "leakage_status": "skipped", "note": str(exc)})
                 continue
-            if len(train) == 0 or len(test) == 0:
-                rows.append({"repeat": repeat, "split_mode": split_mode, "ablation": "NA", "split": "skipped", "n": 0, "rmse": np.nan, "mae": np.nan, "pearson": np.nan, "note": "empty train/test"})
+            if len(train) == 0 or len(val) == 0 or len(test) == 0:
+                note = "empty train/validation/test partition"
+                rows.append({"repeat": repeat, "split_mode": split_mode, "ablation": "NA", "split": "skipped", "n": 0, "rmse": np.nan, "mae": np.nan, "pearson": np.nan, "note": note})
+                leakage_rows[-1]["leakage_status"] = "skipped"
+                leakage_rows[-1]["note"] = note
                 continue
             y, mu, sd = weighted_standardize(y_raw, w, train)
             for ablation in ablations:
@@ -459,7 +468,22 @@ def main() -> None:
 
     result = pd.DataFrame(rows)
     result.to_csv(args.out_dir / f"{args.prefix}_metrics.tsv", sep="\t", index=False)
-    pd.DataFrame(leakage_rows).to_csv(args.out_dir / "split_leakage_qc.tsv", sep="\t", index=False)
+    leakage_df = pd.DataFrame(leakage_rows)
+    leakage_df.to_csv(args.out_dir / "split_leakage_qc.tsv", sep="\t", index=False)
+    leakage_summary = (
+        leakage_df.assign(
+            passed=leakage_df["leakage_status"].eq("pass"),
+            failed=leakage_df["leakage_status"].eq("fail"),
+            skipped=leakage_df["leakage_status"].eq("skipped"),
+        )
+        .groupby("split_mode", dropna=False)
+        .agg(repeats_attempted=("repeat", "count"), repeats_passed=("passed", "sum"),
+             repeats_failed=("failed", "sum"), repeats_skipped=("skipped", "sum"))
+        .reset_index()
+    )
+    leakage_summary.insert(0, "trait", selected_trait)
+    leakage_summary["leakage_free"] = leakage_summary["repeats_failed"].eq(0)
+    leakage_summary.to_csv(args.out_dir / "split_leakage_summary.tsv", sep="\t", index=False)
     summary = (
         result[result["split"].eq("test")]
         .groupby(["split_mode", "ablation"], dropna=False)

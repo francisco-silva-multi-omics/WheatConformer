@@ -100,13 +100,17 @@ def split_leakage_record(df, repeat, split_mode, train, val, test, group_col=Non
     if mode == "group_kfold":
         expected_g = "zero" if group_col in {geno_col, "panel_sample_id"} else expected_g
         expected_e = "zero" if group_col in {env_col, "env_kernel_id"} else expected_e
-    go, eo = len(train_g & test_g), len(train_e & test_e)
-    failed = (expected_g == "zero" and go) or (expected_e == "zero" and eo)
+    overlaps_g = [len(train_g & val_g), len(train_g & test_g), len(val_g & test_g)]
+    overlaps_e = [len(train_e & val_e), len(train_e & test_e), len(val_e & test_e)]
+    failed = (expected_g == "zero" and any(overlaps_g)) or (expected_e == "zero" and any(overlaps_e))
     return {
         "repeat": repeat, "split_mode": mode, "train_rows": len(train), "val_rows": len(val), "test_rows": len(test),
         "train_unique_genotypes": len(train_g), "val_unique_genotypes": len(val_g), "test_unique_genotypes": len(test_g),
         "train_unique_environments": len(train_e), "val_unique_environments": len(val_e), "test_unique_environments": len(test_e),
-        "geno_overlap_train_test": go, "env_overlap_train_test": eo,
+        "geno_overlap_train_val": overlaps_g[0], "geno_overlap_train_test": overlaps_g[1], "geno_overlap_val_test": overlaps_g[2],
+        "env_overlap_train_val": overlaps_e[0], "env_overlap_train_test": overlaps_e[1], "env_overlap_val_test": overlaps_e[2],
+        "expected_geno_overlap_train_val": expected_g, "expected_geno_overlap_train_test": expected_g, "expected_geno_overlap_val_test": expected_g,
+        "expected_env_overlap_train_val": expected_e, "expected_env_overlap_train_test": expected_e, "expected_env_overlap_val_test": expected_e,
         "expected_geno_overlap": expected_g, "expected_env_overlap": expected_e,
         "leakage_status": "fail" if failed else "pass",
     }

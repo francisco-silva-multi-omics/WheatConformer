@@ -42,6 +42,8 @@ def test_grouped_holdout_has_no_environment_leakage() -> None:
     qc = split_leakage_record(obs, 0, "gho_environment", train, val, test)
     assert qc["leakage_status"] == "pass"
     assert qc["env_overlap_train_test"] == 0
+    assert qc["env_overlap_train_val"] == 0
+    assert qc["env_overlap_val_test"] == 0
 
 
 def test_cv1_genotype_has_zero_genotype_overlap() -> None:
@@ -49,6 +51,8 @@ def test_cv1_genotype_has_zero_genotype_overlap() -> None:
     train, val, test = make_split(obs, "cv1_genotype", 2026, 0.2, 0.2, "panel_sample_id")
     qc = split_leakage_record(obs, 0, "cv1_genotype", train, val, test)
     assert qc["geno_overlap_train_test"] == 0
+    assert qc["geno_overlap_train_val"] == 0
+    assert qc["geno_overlap_val_test"] == 0
     assert qc["leakage_status"] == "pass"
 
 
