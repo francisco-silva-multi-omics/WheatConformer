@@ -33,13 +33,21 @@ BASELINE_REQUIRED = [
 
 OPTIONAL = [
     ("tensorflow_multikernel_baseline", "trained_models/stage1_mkl"),
+    ("pangenome_zenodo_gfa", "pangenome_resources/graph/15-wheat10+.gfa.gz"),
+    ("pangenome_zenodo_bed", "pangenome_resources/graph/15-wheat10+.bed.gz"),
+    ("pangenome_zenodo_gbz", "pangenome_resources/graph/index.giraffe.gbz"),
+    ("pangenome_zenodo_min", "pangenome_resources/graph/index.min"),
+    ("pangenome_zenodo_dist", "pangenome_resources/graph/index.dist"),
+    ("pangenome_graph_artifact_readiness", "model_kernels/readiness/pangenome_graph_artifact_readiness.tsv"),
 ]
 
 FUTURE = [
     ("pedigree_kernel_K_A", "genotype_panels/pedigree/K_A.npy"),
     ("functional_embedding_kernel_K_z", "model_kernels/K_z.npy"),
-    ("pangenome_graph_gfa", "pangenome_resources/graph/iwgsc_plus_panel.gfa"),
+    ("functional_embedding_kernel_K_z_provenance", "model_kernels/K_z_provenance.tsv"),
+    ("pangenome_marker_projection", "pangenome_resources/graph/marker_to_graph_interval.tsv"),
     ("pangenome_path_dictionary", "pangenome_resources/graph/genotype_path_dictionary.tsv"),
+    ("post_pangenome_full_methodology_readiness", "model_kernels/readiness/post_pangenome_full_methodology_readiness.tsv"),
     ("future_rcp_environment_features", "environment/future_rcp_weather_features.tsv"),
     ("future_rcp_environment_kernel", "environment/future/K_E_future.npy"),
 ]

@@ -233,14 +233,45 @@ sbatch server_training_pipeline/run_enformer_like_training.slurm
 
 ## Phase 6: Pangenome Graph
 
-The pangenome graph layer requires external genome assemblies and graph tools. See:
+The default graph layer uses the published Zenodo 6085239 wheat graph pangenome. It does not build a new Minigraph-Cactus graph.
+
+```bash
+bash scripts/07_download_zenodo_pangenome_graph.sh pangenome_resources/graph
+
+python scripts/06_validate_post_pangenome_readiness.py \
+  --root . \
+  --graph-source zenodo_6085239 \
+  --graph-only \
+  --graph-dir pangenome_resources/graph
+```
+
+See:
 
 ```text
 docs/PANGENOME_GRAPH_INSTRUCTIONS.md
 docs/CODE_AND_METHODS_EXPLANATION.md
 ```
 
-This step is documented but not run by the default core pipeline.
+This step is documented but not run by the default core pipeline because the graph artifacts are external and large.
+
+## Phase 7: Post-Pangenome Full-Methodology Readiness
+
+After the Zenodo graph is present, the graph must still be projected into HMP marker/path features and audited. See:
+
+```text
+docs/POST_PANGENOME_HPC_READINESS.md
+```
+
+The strict final gate is:
+
+```bash
+python scripts/06_validate_post_pangenome_readiness.py \
+  --root . \
+  --graph-source zenodo_6085239 \
+  --graph-dir pangenome_resources/graph \
+  --marker-projection pangenome_resources/graph/marker_to_graph_interval.tsv \
+  --path-dictionary pangenome_resources/graph/genotype_path_dictionary.tsv
+```
 
 ## Check Outputs
 

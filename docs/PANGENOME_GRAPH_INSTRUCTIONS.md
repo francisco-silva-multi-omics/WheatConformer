@@ -1,133 +1,98 @@
 # Pangenome Graph Instructions
 
-The GitHub bundle includes instructions for the pangenome layer, but it does not build a real graph by default because the required assemblies, graph indexes, and coordinate-lift resources are external and large.
+The default graph workflow now uses the published wheat graph pangenome in Zenodo record 6085239 instead of building a new graph with Minigraph-Cactus. This is the correct disk-conservative path for the current project.
 
-This is the intended reproducible layout:
-
-```text
-pangenome_resources/
-  assemblies/
-    ChineseSpring.fa
-    accession_001.fa
-    accession_002.fa
-    ...
-  assemblies.tsv
-  reference/
-    IWGSC_RefSeq_v1.0.fa
-    IWGSC_RefSeq_v1.0.fa.fai
-  graph/
-  liftover/
-  marker_projection/
-```
-
-## Assembly Manifest
-
-Create:
+Source record:
 
 ```text
-pangenome_resources/assemblies.tsv
+https://zenodo.org/records/6085239
 ```
 
-with:
+Expected graph artifacts:
 
 ```text
-sample_id	path	role	ploidy	notes
-ChineseSpring	pangenome_resources/assemblies/ChineseSpring.fa	reference	hexaploid	IWGSC backbone
-ACC001	pangenome_resources/assemblies/accession_001.fa	query	hexaploid	
+pangenome_resources/graph/15-wheat10+.gfa.gz
+pangenome_resources/graph/15-wheat10+.bed.gz
+pangenome_resources/graph/index.giraffe.gbz
+pangenome_resources/graph/index.min
+pangenome_resources/graph/index.dist
 ```
 
-## Minigraph-Cactus Build
+Approximate download size is 127 GB. Keep additional free space for partial downloads, validation reports, and downstream projected features.
 
-Example command skeleton:
+## Download
+
+Run from the repository root:
 
 ```bash
-mkdir -p pangenome_resources/graph
-
-cactus-pangenome ./js \
-  pangenome_resources/assemblies.tsv \
-  --outDir pangenome_resources/graph \
-  --outName wheat_pangenome \
-  --reference ChineseSpring \
-  --vcf \
-  --giraffe \
-  --gbz \
-  --gfa \
-  --odgi \
-  --chrom-vg \
-  --workDir pangenome_resources/graph/work \
-  --maxCores 48
+bash scripts/07_download_zenodo_pangenome_graph.sh pangenome_resources/graph
 ```
 
-Exact options may need adjustment for the installed Minigraph-Cactus version and cluster scheduler.
-
-## Marker Projection
-
-The phenotype/genotype pipeline already creates coordinate hooks:
+The downloader resumes partial files and writes:
 
 ```text
-functional_annotation/marker_to_graph_region.tsv
-functional_annotation/marker_to_chinese_spring_omics.tsv
-functional_annotation/marker_to_gene.tsv
+pangenome_resources/graph/zenodo_6085239_graph_manifest.tsv
 ```
 
-For true graph integration, replace coordinate-only placeholders with graph-aware mappings:
+## Graph Artifact Validation
 
-```text
-marker_id
-source_panel
-reference_chrom
-reference_pos
-graph_node
-graph_path
-graph_start
-graph_end
-path_support_count
-is_reference_biased
-is_structurally_variable
-```
-
-Recommended tools:
+Validate only the downloaded graph artifacts:
 
 ```bash
-vg
-odgi
-bcftools
-paftools/liftover tools appropriate to your graph outputs
+python scripts/06_validate_post_pangenome_readiness.py \
+  --root . \
+  --graph-source zenodo_6085239 \
+  --graph-only \
+  --graph-dir pangenome_resources/graph
 ```
 
-## Multi-omics Projection
+This checks that the required Zenodo GFA, BED, GBZ, minimizer, and distance index files exist and that the GFA/BED are structurally readable.
 
-The `.bw` and `.bed` files are Chinese Spring/IWGSC coordinate resources. Use them first on the reference backbone:
+## What This Replaces
+
+This replaces the local Minigraph-Cactus construction step:
 
 ```text
-multi_omics_data/*.bw
-multi_omics_data/*.bed
-reference/IWGSC_RefSeq_v1.0.fa
+download many assemblies -> build seqfile -> cactus-pangenome -> export GFA/GBZ/VCF/ODGI
 ```
 
-Then project important intervals to graph paths only after graph coordinates are available.
+The local build can remain as an optional legacy path, but it is no longer required for the current disk-constrained workflow.
 
-Correct interpretation:
+## What This Does Not Replace
+
+The Zenodo graph does not automatically solve the graph-aware modeling pieces for the HMP genotype panel. These outputs are still required before claiming the full graph-genotype-specific methodology:
 
 ```text
-important SNP -> Chinese Spring coordinate -> nearby gene/regulatory region -> omics support -> graph context
+pangenome_resources/graph/marker_to_graph_interval.tsv
+pangenome_resources/graph/genotype_path_dictionary.tsv
+model_kernels/K_z.npy
+model_kernels/K_z_sample_order.tsv
+model_kernels/K_z_provenance.tsv
 ```
 
-Avoid claiming genotype-specific expression unless genotype-specific RNA/omics are available.
-
-## Connection to Model
-
-The graph layer should eventually produce:
+The key distinction is:
 
 ```text
-genotype/haplotype sequence windows
-path presence/absence features
-latent regulatory embeddings z_g
-K_z.npy
-K_z_sample_order.tsv
+Published graph artifact present != HMP genotypes threaded through the graph
 ```
 
-Then rerun the multikernel baseline with:
+The HMP panel samples are not automatically equivalent to the graph cultivar paths. A genotype-to-path dictionary must be supported by assembly identity, phased sequence, graph-genotyped reads, or defensible haplotype assignment.
+
+## Marker And Multi-omics Projection
+
+The multi-omics `.bed` and `.bw` tracks were processed against IWGSC RefSeq v1.0. Keep measured signal on its original RefSeq v1 coordinate system for QC and regulatory pretraining. For graph-aware modeling:
+
+1. Validate BED/BigWig tracks on RefSeq v1.
+2. Lift or bridge marker/regulatory intervals to the graph reference coordinate system when necessary.
+3. Project supported marker and regulatory intervals onto graph paths.
+4. Extract path/genotype sequence windows only where the genotype-path assignment is defensible.
+5. Build graph-derived regulatory embeddings and `K_z`.
+
+Do not directly lift a BigWig and assume signal equivalence across graph paths. The signal is reference-measured; graph-specific modeling should substitute genotype/path sequence with explicit provenance.
+
+## Model Connection
+
+After the graph-derived pieces exist, rerun the multikernel baseline with:
 
 ```text
 K_G + K_G_RBF + K_E + K_GE + K_G_RBF_E + K_z + K_zE
@@ -136,6 +101,17 @@ K_G + K_G_RBF + K_E + K_GE + K_G_RBF_E + K_z + K_zE
 Current repository status:
 
 ```text
-Implemented: coordinate hooks and regulatory pretraining from reference multi-omics.
-Pending: true Minigraph-Cactus graph, path threading, marker-to-node mapping, genotype-to-path dictionary, K_z integration.
+Implemented: Zenodo graph artifact download and validation; reference multi-omics QC; Gaussian and linear genomic kernels; model-matrix readiness checks.
+Pending: marker-to-graph projection, HMP genotype-to-path dictionary, graph-derived K_z, final full-methodology readiness pass.
+```
+
+Use the strict full-methodology gate after those derived files are produced:
+
+```bash
+python scripts/06_validate_post_pangenome_readiness.py \
+  --root . \
+  --graph-source zenodo_6085239 \
+  --graph-dir pangenome_resources/graph \
+  --marker-projection pangenome_resources/graph/marker_to_graph_interval.tsv \
+  --path-dictionary pangenome_resources/graph/genotype_path_dictionary.tsv
 ```

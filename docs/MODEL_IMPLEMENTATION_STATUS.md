@@ -32,14 +32,16 @@ Validation-only integrated-model ridge and factor-rank selection
 Trait-isolated HMP, GBS, validation, and dense REML workflows
 Toy-data-only pytest suite and GitHub Actions workflow
 Reference-based TensorFlow CNN+Transformer regulatory pretraining prototype
+Zenodo 6085239 wheat graph pangenome artifact download and validation
 ```
 
 ## Still Missing For The Full Methodology
 
 ```text
 Pedigree relationship kernel K_A, unless built with build_pedigree_kernel.py
-Pedigree-by-environment interaction K_AE, available only inside fit_multikernel_reml.py after K_A exists
-True pangenome graph paths and genotype-to-path dictionary
+Pedigree-by-environment interaction K_AE, available after K_A exists
+Marker-to-graph projection for HMP markers
+HMP genotype-to-Zenodo-graph path dictionary
 Genotype/path-specific sequence windows from the graph
 Regulatory latent genotype embeddings z_g, unless exported with extract_regulatory_embeddings_tf.py
 Functional embedding kernel K_z and K_zE, unless built with build_Kz_from_embeddings.py
@@ -50,7 +52,7 @@ Attribution-supported prioritized loci/haplotypes
 
 ## Practical Baseline Interpretation
 
-The current TensorFlow multikernel script is a scalable predictive baseline. It uses low-rank factors of `K_G`, `K_G_RBF`, and `K_E`, with additive and Gaussian genomic reaction-norm terms. It is not yet a formal REML mixed model with variance components.
+The current TensorFlow multikernel script is a scalable predictive model. It uses low-rank factors of `K_G`, `K_G_RBF`, `K_E`, and optional `K_A`/`K_z`, with corresponding environment interaction terms. It is not yet a formal REML mixed model with variance components.
 
 Use it as:
 

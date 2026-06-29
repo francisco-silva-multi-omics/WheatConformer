@@ -7,7 +7,8 @@ set -euo pipefail
 # optional regulatory K_z, optional RCP matrices, then matrix-readiness checks.
 #
 # This script intentionally does not call Minigraph-Cactus, cactus-pangenome,
-# minigraph, vg, odgi, or any pangenome graph builder.
+# minigraph, vg, odgi, or any pangenome graph builder. The graph pangenome is
+# treated as an external artifact, preferably Zenodo record 6085239.
 
 ROOT="${1:-$(pwd)}"
 cd "$ROOT"
@@ -26,8 +27,12 @@ RUN_KZ="${RUN_KZ:-1}"
 STAGE1_CHUNKSIZE="${STAGE1_CHUNKSIZE:-250000}"
 RAW_CHUNKSIZE="${RAW_CHUNKSIZE:-250000}"
 TRAIT_REGEX="${TRAIT_REGEX:-}"
-PANGENOME_GFA="${PANGENOME_GFA:-}"
-PANGENOME_GBZ="${PANGENOME_GBZ:-}"
+ZENODO_PANGENOME_DIR="${ZENODO_PANGENOME_DIR:-pangenome_resources/graph}"
+PANGENOME_GFA="${PANGENOME_GFA:-${ZENODO_PANGENOME_DIR}/15-wheat10+.gfa.gz}"
+PANGENOME_BED="${PANGENOME_BED:-${ZENODO_PANGENOME_DIR}/15-wheat10+.bed.gz}"
+PANGENOME_GBZ="${PANGENOME_GBZ:-${ZENODO_PANGENOME_DIR}/index.giraffe.gbz}"
+PANGENOME_MIN="${PANGENOME_MIN:-${ZENODO_PANGENOME_DIR}/index.min}"
+PANGENOME_DIST="${PANGENOME_DIST:-${ZENODO_PANGENOME_DIR}/index.dist}"
 PANGENOME_HAL="${PANGENOME_HAL:-}"
 PEDIGREE_TABLE="${PEDIGREE_TABLE:-}"
 MULTIOMICS_DIR="${MULTIOMICS_DIR:-multi_omics_data}"
@@ -66,7 +71,7 @@ require_file() {
 
 log "Root: ${ROOT}"
 log "Logs: ${LOG_DIR}"
-log "Pangenome is external only. GFA='${PANGENOME_GFA}' GBZ='${PANGENOME_GBZ}' HAL='${PANGENOME_HAL}'"
+log "Pangenome is external only. GFA='${PANGENOME_GFA}' BED='${PANGENOME_BED}' GBZ='${PANGENOME_GBZ}' MIN='${PANGENOME_MIN}' DIST='${PANGENOME_DIST}' HAL='${PANGENOME_HAL}'"
 
 run_step 01_trial_gid_map "$PYTHON" trial_GID_map.py
 run_step 02_requested_outputs "$PYTHON" build_requested_outputs.py
@@ -231,8 +236,17 @@ validate_args=(
 if [[ -n "$PANGENOME_GFA" ]]; then
   validate_args+=(--pangenome-output "$PANGENOME_GFA")
 fi
+if [[ -n "$PANGENOME_BED" ]]; then
+  validate_args+=(--pangenome-output "$PANGENOME_BED")
+fi
 if [[ -n "$PANGENOME_GBZ" ]]; then
   validate_args+=(--pangenome-output "$PANGENOME_GBZ")
+fi
+if [[ -n "$PANGENOME_MIN" ]]; then
+  validate_args+=(--pangenome-output "$PANGENOME_MIN")
+fi
+if [[ -n "$PANGENOME_DIST" ]]; then
+  validate_args+=(--pangenome-output "$PANGENOME_DIST")
 fi
 if [[ -n "$PANGENOME_HAL" ]]; then
   validate_args+=(--pangenome-output "$PANGENOME_HAL")

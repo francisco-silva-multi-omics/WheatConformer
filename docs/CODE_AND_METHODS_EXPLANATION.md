@@ -697,16 +697,25 @@ instead of:
 What is the Chinese Spring reference sequence near locus l?
 ```
 
-Expected graph resources:
+Expected external graph resources from Zenodo record 6085239:
 
 ```text
-pangenome_resources/graph/iwgsc_plus_panel.gfa
-pangenome_resources/graph/genotype_path_dictionary.tsv
+pangenome_resources/graph/15-wheat10+.gfa.gz
+pangenome_resources/graph/15-wheat10+.bed.gz
+pangenome_resources/graph/index.giraffe.gbz
+pangenome_resources/graph/index.min
+pangenome_resources/graph/index.dist
+```
+
+Expected derived graph-aware model resources:
+
+```text
 pangenome_resources/graph/marker_to_graph_interval.tsv
+pangenome_resources/graph/genotype_path_dictionary.tsv
 pangenome_resources/graph/gene_to_graph_interval.tsv
 ```
 
-The current repository documents this step, but the true graph requires external assemblies and tools such as Minigraph-Cactus. Until that graph exists, the regulatory model should be described as reference-based, not graph-genotype-specific.
+The repository now treats the Zenodo graph as the default graph artifact source. This removes the need to rebuild the pangenome locally, but it does not automatically thread the HMP genotype panel through the graph. Until marker-to-graph projection, genotype-to-path assignment, and graph-derived `K_z` exist, the regulatory model should be described as reference-based, not graph-genotype-specific.
 
 ## 17. Multi-Omics Manifest And Window Construction
 

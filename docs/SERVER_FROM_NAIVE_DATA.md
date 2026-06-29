@@ -100,7 +100,7 @@ Expected remaining gaps until explicitly implemented:
 ```text
 genotype_panels/pedigree/K_A.npy
 model_kernels/K_z.npy
-pangenome_resources/graph/iwgsc_plus_panel.gfa
+pangenome_resources/graph/marker_to_graph_interval.tsv
 pangenome_resources/graph/genotype_path_dictionary.tsv
 trained_models/validation_ablation_report.tsv
 ```

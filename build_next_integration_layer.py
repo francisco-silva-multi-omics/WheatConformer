@@ -472,7 +472,7 @@ def build_annotation_and_graph_gap_reports() -> None:
         [
             {
                 "requirement": "pangenome graph file",
-                "expected_examples": "*.gfa; *.vg; *.gbz; *.og; Minigraph-Cactus output",
+                "expected_examples": "Zenodo 6085239: 15-wheat10+.gfa.gz; 15-wheat10+.bed.gz; index.giraffe.gbz; index.min; index.dist",
                 "status": "missing_local_source",
                 "current_proxy": "",
             },
