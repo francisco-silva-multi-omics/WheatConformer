@@ -45,6 +45,7 @@ FUTURE = [
     ("pedigree_kernel_K_A", "genotype_panels/pedigree/K_A.npy"),
     ("functional_embedding_kernel_K_z", "model_kernels/K_z.npy"),
     ("functional_embedding_kernel_K_z_provenance", "model_kernels/K_z_provenance.tsv"),
+    ("pangenome_graph_gfa", "pangenome_resources/graph/15-wheat10+.gfa.gz"),
     ("pangenome_marker_projection", "pangenome_resources/graph/marker_to_graph_interval.tsv"),
     ("pangenome_path_dictionary", "pangenome_resources/graph/genotype_path_dictionary.tsv"),
     ("post_pangenome_full_methodology_readiness", "model_kernels/readiness/post_pangenome_full_methodology_readiness.tsv"),
