@@ -71,6 +71,11 @@ def requested_traits_from_environment() -> list[str]:
     return [trait.strip() for trait in os.environ.get("TRAIN_TRAITS", "").split(",") if trait.strip()]
 
 
+def lower_trait_slug(trait: str) -> str:
+    slug = sanitize_trait_name(trait).lower()
+    return slug or "trait"
+
+
 def readiness_rows(root: Path, requested_traits: list[str]) -> list[dict[str, object]]:
     rows: list[dict[str, object]] = []
     for category, checks in [
@@ -101,8 +106,9 @@ def readiness_rows(root: Path, requested_traits: list[str]) -> list[dict[str, ob
                 }
             )
         for workflow, filenames in TRAIT_OPTIONAL_FILES.items():
+            optional_slug = lower_trait_slug(trait)
             for filename in filenames:
-                relative_path = f"trained_models/{workflow}/{slug}/{filename}"
+                relative_path = f"trained_models/{workflow}/{optional_slug}/{filename}"
                 rows.append(
                     {
                         "category": "optional",
