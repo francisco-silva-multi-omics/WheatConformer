@@ -40,6 +40,13 @@ NAME_COLUMNS = [
     "aliases",
     "synonyms",
 ]
+MARKER_GENOTYPE_PANELS = {
+    "HMP",
+    "GBS_SAWYT",
+    "DARTSEQ_LANDRACE",
+    "DIVERSITY_80K",
+    "MAS",
+}
 
 
 def read_table(path: Path) -> pd.DataFrame:
@@ -167,6 +174,7 @@ def add_index_rows_from_table(path: Path, rows: list[dict[str, object]]) -> None
                 "source_file": str(path),
                 "source_column": "",
                 "has_kernel_order": False,
+                "is_marker_genotype_panel": False,
             }
         )
         return
@@ -177,6 +185,7 @@ def add_index_rows_from_table(path: Path, rows: list[dict[str, object]]) -> None
     sample_col = first_existing(columns, ["sample_id", "panel_sample_id", "panel_sample_id_expected", "canonical_sample_id"])
     gid_col = first_existing(columns, ["resolved_gid", "GID", "gid", "panel_gid", "fieldbook_gid", "glis_gid", "doi_gid"])
     has_kernel_order = "order" in path.name.lower() or "K_sample_order" in path.name
+    is_marker_genotype_panel = panel in MARKER_GENOTYPE_PANELS
 
     matched_sample = pd.Series("", index=df.index, dtype=object)
     if sample_col:
@@ -219,6 +228,7 @@ def add_index_rows_from_table(path: Path, rows: list[dict[str, object]]) -> None
                             "source_file": str(path),
                             "source_column": col,
                             "has_kernel_order": bool(has_kernel_order),
+                            "is_marker_genotype_panel": bool(is_marker_genotype_panel),
                         }
                     )
 
@@ -282,7 +292,11 @@ def build_matches(query: pd.DataFrame, index: pd.DataFrame) -> pd.DataFrame:
         ["key", "matched_sample_id", "matched_panel", "source_file", "source_column", "raw_value"]
     )
     index_by_key = {key: group for key, group in index.groupby("key", sort=False)}
-    kernel_index = index[index["has_kernel_order"] & index["matched_sample_id"].ne("")].copy()
+    kernel_index = index[
+        index["has_kernel_order"]
+        & index["is_marker_genotype_panel"]
+        & index["matched_sample_id"].ne("")
+    ].copy()
     sample_to_panels = (
         kernel_index.groupby("matched_sample_id")["matched_panel"]
         .apply(lambda x: sorted(set(map(str, x))))
@@ -323,6 +337,7 @@ def build_matches(query: pd.DataFrame, index: pd.DataFrame) -> pd.DataFrame:
                             "source_file": "trial_manifest_cross_family",
                             "source_column": "cross_name",
                             "has_kernel_order": True,
+                            "is_marker_genotype_panel": True,
                         }
                     )
             family = pd.DataFrame(family_rows)
@@ -350,6 +365,7 @@ def build_matches(query: pd.DataFrame, index: pd.DataFrame) -> pd.DataFrame:
                 "source_file",
                 "source_column",
                 "has_kernel_order",
+                "is_marker_genotype_panel",
             ]
         )
     matches = pd.concat(rows, ignore_index=True)
@@ -368,7 +384,10 @@ def classify(query: pd.DataFrame, matches: pd.DataFrame) -> pd.DataFrame:
         out["n_family_matches"] = 0
         return out
 
-    kernel_hits = matches[matches["has_kernel_order"].astype(bool)].copy()
+    kernel_hits = matches[
+        matches["has_kernel_order"].astype(bool)
+        & matches["is_marker_genotype_panel"].astype(bool)
+    ].copy()
     direct = kernel_hits[kernel_hits["evidence_type"].isin(["direct_sample_id", "direct_gid"])].groupby("sample_id")["matched_panel"].apply(lambda x: ";".join(sorted(set(x))))
     parent_counts = (
         kernel_hits[kernel_hits["evidence_type"].isin(["parent1_lookup", "parent2_lookup"])]
