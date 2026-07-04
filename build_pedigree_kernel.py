@@ -55,15 +55,27 @@ def first_existing(columns: list[str], candidates: list[str]) -> str | None:
 
 
 def parse_cross(text: str) -> tuple[str, str]:
-    text = clean_id(text)
-    if not text:
+    raw = clean_id(text)
+    if not raw:
         return "", ""
-    text = re.sub(r"\s+", "", text)
-    for sep in ["//", "/", "\\", " X ", " x ", "X", "*"]:
-        if sep in text:
-            parts = [clean_id(p) for p in text.split(sep) if clean_id(p)]
+
+    # CIMMYT wheat pedigrees commonly use A/B, A//B/C, and occasionally
+    # explicit "A x B". Do not split on a bare "X"; it occurs inside names.
+    compact = re.sub(r"\s+", "", raw)
+    if "//" in compact:
+        parts = [clean_id(p) for p in compact.split("//", 1) if clean_id(p)]
+        if len(parts) >= 2:
+            return parts[0], parts[1]
+    for sep in ["/", "\\"]:
+        if sep in compact:
+            parts = [clean_id(p) for p in compact.split(sep) if clean_id(p)]
             if len(parts) >= 2:
                 return parts[0], parts[1]
+    x_match = re.split(r"\s+[xX]\s+", raw, maxsplit=1)
+    if len(x_match) >= 2:
+        parts = [clean_id(p) for p in x_match if clean_id(p)]
+        if len(parts) >= 2:
+            return parts[0], parts[1]
     return "", ""
 
 
@@ -140,13 +152,14 @@ def additive_relationship(ped: pd.DataFrame, requested_order: list[str] | None) 
         p1, p2 = parent_map[gid]
         has1 = p1 in idx and idx[p1] < i
         has2 = p2 in idx and idx[p2] < i
-        for j in range(i):
-            v = 0.0
+        if i:
+            row = np.zeros(i, dtype=np.float64)
             if has1:
-                v += 0.5 * A[idx[p1], j]
+                row += 0.5 * A[idx[p1], :i]
             if has2:
-                v += 0.5 * A[idx[p2], j]
-            A[i, j] = A[j, i] = v
+                row += 0.5 * A[idx[p2], :i]
+            A[i, :i] = row
+            A[:i, i] = row
         if has1 and has2:
             A[i, i] = 1.0 + 0.5 * A[idx[p1], idx[p2]]
         else:
@@ -168,10 +181,14 @@ def additive_relationship(ped: pd.DataFrame, requested_order: list[str] | None) 
         A = A[np.ix_(keep, keep)]
         resolved = requested_order
 
+    child_has_parent = sum(1 for p1, p2 in parent_map.values() if p1 or p2)
+    relationship_parent_ids = sorted({p for parents in parent_map.values() for p in parents if p})
     qc = pd.DataFrame(
         {
             "metric": [
                 "pedigree_rows",
+                "pedigree_rows_with_parent",
+                "relationship_parent_ids",
                 "relationship_samples",
                 "mean_diagonal",
                 "min_diagonal",
@@ -179,6 +196,8 @@ def additive_relationship(ped: pd.DataFrame, requested_order: list[str] | None) 
             ],
             "value": [
                 len(ped),
+                child_has_parent,
+                len(relationship_parent_ids),
                 len(resolved),
                 float(np.mean(np.diag(A))),
                 float(np.min(np.diag(A))),

@@ -35,6 +35,7 @@ PANGENOME_MIN="${PANGENOME_MIN:-${ZENODO_PANGENOME_DIR}/index.min}"
 PANGENOME_DIST="${PANGENOME_DIST:-${ZENODO_PANGENOME_DIR}/index.dist}"
 PANGENOME_HAL="${PANGENOME_HAL:-}"
 PEDIGREE_TABLE="${PEDIGREE_TABLE:-}"
+PEDIGREE_MANIFEST="${PEDIGREE_MANIFEST:-metadata_outputs/all_trials_genotype_manifest_resolved.tsv}"
 MULTIOMICS_DIR="${MULTIOMICS_DIR:-multi_omics_data}"
 
 log() {
@@ -189,16 +190,28 @@ else
   log "SKIP 12_gbs_stage1_model_inputs: missing GBS QC kernel"
 fi
 
-if [[ "$RUN_PEDIGREE" == "1" && -n "$PEDIGREE_TABLE" && -s "$PEDIGREE_TABLE" ]]; then
+if [[ "$RUN_PEDIGREE" == "1" ]]; then
+  if [[ -z "$PEDIGREE_TABLE" && -s "$PEDIGREE_MANIFEST" ]]; then
+    PEDIGREE_TABLE="genotype_panels/pedigree/trial_derived_pedigree_table.tsv"
+    run_optional_step 13a_extract_trial_pedigree "$PYTHON" extract_trial_pedigree_from_manifest.py \
+      --manifest "$PEDIGREE_MANIFEST" \
+      --out-table "$PEDIGREE_TABLE" \
+      --out-qc genotype_panels/pedigree/trial_derived_pedigree_qc.tsv
+  fi
+
+  if [[ -n "$PEDIGREE_TABLE" && -s "$PEDIGREE_TABLE" ]]; then
   run_optional_step 13_pedigree_kernel "$PYTHON" build_pedigree_kernel.py \
     --pedigree-table "$PEDIGREE_TABLE" \
-    --sample-order genotype_panels/hmp/hmp_K_sample_order.QCfiltered.tsv \
-    --sample-order-col sample_id \
+    --id-col sample_id \
+    --cross-col cross_name \
     --out-dir genotype_panels/pedigree \
     --prefix K_A \
     --scale-mean-diagonal
+  else
+    log "SKIP 13_pedigree_kernel: no PEDIGREE_TABLE and missing PEDIGREE_MANIFEST=${PEDIGREE_MANIFEST}"
+  fi
 else
-  log "SKIP 13_pedigree_kernel: set PEDIGREE_TABLE=/path/to/pedigree.tsv to build K_A"
+  log "SKIP 13_pedigree_kernel: RUN_PEDIGREE=${RUN_PEDIGREE}"
 fi
 
 if [[ "$RUN_MULTIOMICS_MANIFEST" == "1" && -d "$MULTIOMICS_DIR" ]]; then
