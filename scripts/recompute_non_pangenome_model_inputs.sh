@@ -20,6 +20,7 @@ mkdir -p "$LOG_DIR" model_kernels
 FETCH_WEATHER="${FETCH_WEATHER:-0}"
 RUN_GBS="${RUN_GBS:-1}"
 RUN_80K_PRIORS="${RUN_80K_PRIORS:-1}"
+RUN_GERMPLASM_RESOLVER="${RUN_GERMPLASM_RESOLVER:-1}"
 RUN_PEDIGREE="${RUN_PEDIGREE:-1}"
 RUN_RCP="${RUN_RCP:-1}"
 RUN_MULTIOMICS_MANIFEST="${RUN_MULTIOMICS_MANIFEST:-1}"
@@ -36,6 +37,7 @@ PANGENOME_DIST="${PANGENOME_DIST:-${ZENODO_PANGENOME_DIR}/index.dist}"
 PANGENOME_HAL="${PANGENOME_HAL:-}"
 PEDIGREE_TABLE="${PEDIGREE_TABLE:-}"
 PEDIGREE_MANIFEST="${PEDIGREE_MANIFEST:-metadata_outputs/all_trials_genotype_manifest_resolved.tsv}"
+EXTERNAL_GERMPLASM_TABLES="${EXTERNAL_GERMPLASM_TABLES:-}"
 MULTIOMICS_DIR="${MULTIOMICS_DIR:-multi_omics_data}"
 
 log() {
@@ -188,6 +190,29 @@ if [[ "$RUN_GBS" == "1" && -s genotype_panels/gbs_sawyt/K_GBS_SAWYT.QCfiltered.n
   run_optional_step 12_gbs_stage1_model_inputs "$PYTHON" "${gbs_model_args[@]}"
 else
   log "SKIP 12_gbs_stage1_model_inputs: missing GBS QC kernel"
+fi
+
+if [[ "$RUN_GERMPLASM_RESOLVER" == "1" && -s "$PEDIGREE_MANIFEST" ]]; then
+  resolver_args=(
+    build_cross_germplasm_resolver.py
+    --root "$ROOT"
+    --manifest "$PEDIGREE_MANIFEST"
+    --stage1-phenotypes "$STAGE1_PHENOTYPES"
+    --out-dir genotype_panels/germplasm_resolver
+  )
+  if [[ -n "$EXTERNAL_GERMPLASM_TABLES" ]]; then
+    IFS=':' read -r -a external_tables <<< "$EXTERNAL_GERMPLASM_TABLES"
+    for table in "${external_tables[@]}"; do
+      if [[ -s "$table" ]]; then
+        resolver_args+=(--external-table "$table")
+      else
+        log "WARN external germplasm table missing or empty: $table"
+      fi
+    done
+  fi
+  run_optional_step 12b_cross_germplasm_resolver "$PYTHON" "${resolver_args[@]}"
+else
+  log "SKIP 12b_cross_germplasm_resolver: RUN_GERMPLASM_RESOLVER=${RUN_GERMPLASM_RESOLVER}, manifest present=$([[ -s "$PEDIGREE_MANIFEST" ]] && echo yes || echo no)"
 fi
 
 if [[ "$RUN_PEDIGREE" == "1" ]]; then
