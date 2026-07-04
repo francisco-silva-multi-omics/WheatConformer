@@ -2,6 +2,8 @@
 
 This file separates implemented reproducible steps from thesis-level components that still need explicit modeling work.
 
+For the latest server-side generated-file audit and QC interpretation, see `docs/SERVER_QC_AUDIT_STATUS.md`.
+
 ## Implemented Or Scripted
 
 ```text
