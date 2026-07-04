@@ -80,15 +80,16 @@ The HMP panel samples are not automatically equivalent to the graph cultivar pat
 
 ## Marker And Multi-omics Projection
 
-The multi-omics `.bed` and `.bw` tracks were processed against IWGSC RefSeq v1.0. Keep measured signal on its original RefSeq v1 coordinate system for QC and regulatory pretraining. For graph-aware modeling:
+The multi-omics `.bed` and `.bw` tracks were processed against IWGSC RefSeq v1.0, and the Zenodo 6085239 graph is used as the v1-aligned graph source in this workflow. Keep measured signal on its original RefSeq v1 coordinate system for QC and regulatory pretraining. For graph-aware modeling:
 
 1. Validate BED/BigWig tracks on RefSeq v1.
-2. Lift or bridge marker/regulatory intervals to the graph reference coordinate system when necessary.
-3. Project supported marker and regulatory intervals onto graph paths.
-4. Extract path/genotype sequence windows only where the genotype-path assignment is defensible.
-5. Build graph-derived regulatory embeddings and `K_z`.
+2. Project supported marker and regulatory intervals onto graph paths in the same v1 coordinate context.
+3. Extract path/genotype sequence windows only where the genotype-path assignment is defensible.
+4. Build graph-derived regulatory embeddings and `K_z`.
 
 Do not directly lift a BigWig and assume signal equivalence across graph paths. The signal is reference-measured; graph-specific modeling should substitute genotype/path sequence with explicit provenance.
+
+A v1-to-v2 coordinate bridge is not required for the default Zenodo graph workflow. It is only relevant for custom graph builds whose reference coordinate system differs from the RefSeq v1 multi-omics coordinate system.
 
 ## Model Connection
 

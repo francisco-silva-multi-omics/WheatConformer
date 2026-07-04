@@ -381,7 +381,8 @@ def main() -> None:
     if args.graph_source == "zenodo_6085239":
         validate_zenodo_graph(rows, graph_dir, args.gfa_max_lines, args.bed_max_lines)
         validate_seqfile(rows, seqfile, args.min_assemblies, required=False)
-        validate_coordinate_bridge(rows, bridge_dir, args.min_marker_lift_fraction, args.max_marker_liftover_multimap_fraction, required=False)
+        if bridge_dir is not None:
+            validate_coordinate_bridge(rows, bridge_dir, args.min_marker_lift_fraction, args.max_marker_liftover_multimap_fraction, required=False)
     else:
         seq = validate_seqfile(rows, seqfile, args.min_assemblies, required=True)
         gfas = check_artifact_group(rows, graph_dir, "pangenome_GFA", ["*.gfa", "*.gfa.gz"], True)

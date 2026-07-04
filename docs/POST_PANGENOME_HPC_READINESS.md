@@ -83,7 +83,7 @@ python server_training_pipeline/validate_regulatory_dataset.py \
   --strict
 ```
 
-Keep the measured multi-omics signal on its original RefSeq v1 coordinate system. Do not directly lift a BigWig and assume signal equivalence across graph paths.
+Keep the measured multi-omics signal on its original RefSeq v1 coordinate system. The default Zenodo graph workflow uses the same v1 coordinate context, so a v1-to-v2 coordinate bridge is not part of graph-only readiness. Do not directly lift a BigWig and assume signal equivalence across graph paths.
 
 ## Step 4: Compute Derived Graph-Aware Inputs
 
@@ -115,6 +115,8 @@ graph_path
 ```
 
 The HMP panel must not be assigned to graph cultivar paths by name similarity alone. Path assignment must be supported by assembly identity, phased sequence, graph-genotyped reads, or defensible haplotype evidence.
+
+Do not add a RefSeq v1-to-v2 bridge requirement unless a custom graph or annotation source is introduced on a different coordinate system.
 
 When building a graph-derived `K_z`, record provenance:
 
