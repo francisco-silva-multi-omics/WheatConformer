@@ -1,0 +1,102 @@
+from __future__ import annotations
+
+import argparse
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+
+
+def read_prediction(prefix_dir: Path, prefix: str, split: str) -> pd.DataFrame:
+    for suffix in [".tsv.gz", ".parquet"]:
+        path = prefix_dir / f"{prefix}_{split}_predictions{suffix}"
+        if path.exists():
+            if suffix == ".parquet":
+                return pd.read_parquet(path)
+            return pd.read_csv(path, sep="\t", low_memory=False)
+    raise FileNotFoundError(f"Missing {split} predictions for {prefix} in {prefix_dir}")
+
+
+def metrics(y: np.ndarray, pred: np.ndarray) -> dict[str, float]:
+    y = np.asarray(y, dtype=float)
+    pred = np.asarray(pred, dtype=float)
+    ok = np.isfinite(y) & np.isfinite(pred)
+    y = y[ok]
+    pred = pred[ok]
+    err = pred - y
+    corr = float(np.corrcoef(y, pred)[0, 1]) if len(y) > 2 and np.std(y) > 0 and np.std(pred) > 0 else np.nan
+    return {
+        "rmse": float(np.sqrt(np.mean(err * err))),
+        "mae": float(np.mean(np.abs(err))),
+        "pearson": corr,
+        "pred_sd": float(np.std(pred, ddof=1)) if len(pred) > 1 else np.nan,
+    }
+
+
+def score_grid(df: pd.DataFrame, split: str, grid: list[float]) -> pd.DataFrame:
+    y = df["original_phenotype_value"].to_numpy(float)
+    base = df["env_baseline_pred"].to_numpy(float)
+    residual = df["y_pred"].to_numpy(float)
+    rows = []
+    for lam in grid:
+        m = metrics(y, base + lam * residual)
+        rows.append({"split": split, "lambda": lam, **m})
+    return pd.DataFrame(rows)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Tune DTH residual shrinkage on validation and report test metrics.")
+    parser.add_argument("--prediction-dir", type=Path, required=True)
+    parser.add_argument("--prefix", required=True)
+    parser.add_argument("--out", type=Path, default=Path("trained_models/model_comparisons/dth_residual_shrinkage.tsv"))
+    parser.add_argument("--lambda-grid", default="0,0.05,0.1,0.2,0.3,0.4,0.5,0.75,1")
+    parser.add_argument("--min-rmse-relative-gain", type=float, default=0.02)
+    parser.add_argument("--min-rmse-absolute-gain", type=float, default=0.5)
+    parser.add_argument("--max-pearson-drop", type=float, default=0.02)
+    args = parser.parse_args()
+
+    grid = [float(x) for x in args.lambda_grid.split(",") if x.strip()]
+    val = read_prediction(args.prediction_dir, args.prefix, "val")
+    test = read_prediction(args.prediction_dir, args.prefix, "test")
+    val_scores = score_grid(val, "val", grid)
+    test_scores = score_grid(test, "test", grid)
+    base_val = val_scores[val_scores["lambda"].eq(0)].iloc[0]
+    candidate = val_scores.sort_values(["rmse", "lambda"]).iloc[0]
+    rmse_gain = float(base_val["rmse"] - candidate["rmse"])
+    rel_gain = rmse_gain / max(float(base_val["rmse"]), 1e-12)
+    pearson_drop = float(base_val["pearson"] - candidate["pearson"]) if np.isfinite(base_val["pearson"]) else 0.0
+    accepted = (
+        (rel_gain >= args.min_rmse_relative_gain or rmse_gain >= args.min_rmse_absolute_gain)
+        and pearson_drop <= args.max_pearson_drop
+    )
+    selected_lambda = float(candidate["lambda"]) if accepted else 0.0
+    selected_test = test_scores[test_scores["lambda"].eq(selected_lambda)].iloc[0].to_dict()
+    selected_val = val_scores[val_scores["lambda"].eq(selected_lambda)].iloc[0].to_dict()
+    out = pd.concat([val_scores, test_scores], ignore_index=True)
+    args.out.parent.mkdir(parents=True, exist_ok=True)
+    out.to_csv(args.out, sep="\t", index=False)
+    decision = pd.DataFrame(
+        [
+            {
+                "selected_lambda": selected_lambda,
+                "accepted_residual": bool(accepted),
+                "best_val_lambda": float(candidate["lambda"]),
+                "val_rmse_gain": rmse_gain,
+                "val_relative_rmse_gain": rel_gain,
+                "val_pearson_drop": pearson_drop,
+                "selected_val_rmse": selected_val["rmse"],
+                "selected_val_pearson": selected_val["pearson"],
+                "selected_test_rmse": selected_test["rmse"],
+                "selected_test_pearson": selected_test["pearson"],
+            }
+        ]
+    )
+    decision_path = args.out.with_name(args.out.stem + "_decision.tsv")
+    decision.to_csv(decision_path, sep="\t", index=False)
+    print(decision.to_string(index=False))
+    print(f"Wrote {args.out}")
+    print(f"Wrote {decision_path}")
+
+
+if __name__ == "__main__":
+    main()

@@ -12,10 +12,22 @@
 # Root-level pipeline scripts
 !*.py
 !*.sh
+!scripts/
+!scripts/**
+!docs/
+!docs/**
 
 # Server pipeline code
 !server_80k_pipeline/
 !server_80k_pipeline/**
+!server_stage1_pipeline/
+!server_stage1_pipeline/**
+!server_training_pipeline/
+!server_training_pipeline/**
+!server_gbs_pipeline/
+!server_gbs_pipeline/**
+!github_reproducible_pipeline/
+!github_reproducible_pipeline/**
 
 # Keep generated/cache artifacts out of Git even inside tracked code folders
 __pycache__/
@@ -26,9 +38,13 @@ __pycache__/
 *.tmp
 *.swp
 .DS_Store
+.ipynb_checkpoints/
+**/.ipynb_checkpoints/
+Untitled.ipynb
+*-checkpoint.ipynb
 
 # Large or restricted data/output directories
-.codex_deps/
+local_python_deps/
 80k/
 GBS/
 genotype_panels/
@@ -87,3 +103,24 @@ multi_omics_data/
 !server_80k_pipeline/README_80k_server_pipeline.md
 !server_80k_pipeline/requirements_server.txt
 !server_80k_pipeline/run_80k_pipeline.slurm
+!server_stage1_pipeline/README_stage1_adjusted_phenotypes.md
+!server_stage1_pipeline/run_stage1_adjusted_phenotypes.slurm
+!server_stage1_pipeline/run_stage1_model_kernels.slurm
+!server_training_pipeline/README_training_pipeline.md
+!server_training_pipeline/requirements_training.txt
+!server_training_pipeline/*.py
+!server_training_pipeline/*.slurm
+!server_gbs_pipeline/README_GBS_SAWYT_pipeline.md
+!server_gbs_pipeline/*.slurm
+!github_reproducible_pipeline/**
+
+# Never publish notebook scratch/checkpoint artifacts, even under allowed folders
+.ipynb_checkpoints/
+**/.ipynb_checkpoints/
+**/.ipynb_checkpoints/**
+Untitled.ipynb
+**/Untitled.ipynb
+*-checkpoint.ipynb
+**/*-checkpoint.ipynb
+*-checkpoint.md
+**/*-checkpoint.md
