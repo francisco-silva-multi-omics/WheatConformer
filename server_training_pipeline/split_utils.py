@@ -22,6 +22,19 @@ CANONICAL_SPLIT_MODES = [
     "cv0_genotype_environment", "group_kfold",
 ]
 
+SPLIT_GROUP_COLUMNS = {
+    "cv2_random_observation": None,
+    "gho_environment": "env_kernel_id",
+    "gho_cycle": "cycle",
+    "gho_trial": "trial_name",
+    "gho_country": "country",
+    "gho_family": "canonical_germplasm_key",
+    "cv1_genotype": "panel_sample_id",
+    "cv1_environment": "env_kernel_id",
+    "cv0_genotype_environment": None,
+    "group_kfold": None,
+}
+
 
 def canonical_split_mode(mode: str, warn: bool = False) -> str:
     normalized = mode.strip().lower()
@@ -31,6 +44,11 @@ def canonical_split_mode(mode: str, warn: bool = False) -> str:
     if warn and canonical != normalized:
         warnings.warn(f"Split mode {mode!r} is a legacy alias; recording canonical mode {canonical!r}.", stacklevel=2)
     return canonical
+
+
+def split_group_column(mode: str) -> str | None:
+    canonical = canonical_split_mode(mode)
+    return SPLIT_GROUP_COLUMNS[canonical]
 
 
 def grouped_holdout(df: pd.DataFrame, group_col: str, seed: int, test_fraction: float, val_fraction: float):
