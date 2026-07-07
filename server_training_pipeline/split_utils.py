@@ -55,7 +55,7 @@ def grouped_holdout(df: pd.DataFrame, group_col: str, seed: int, test_fraction: 
     if group_col not in df.columns:
         raise SystemExit(f"Grouped holdout requires group column {group_col}")
     rng = np.random.default_rng(seed)
-    groups = np.asarray(df[group_col].fillna("").astype(str).unique(), dtype=object).copy()
+    groups = np.asarray(sorted(df[group_col].fillna("").astype(str).unique()), dtype=object)
     if len(groups) < 3:
         raise SystemExit(f"Grouped holdout requires at least three groups in {group_col}; found {len(groups)}")
     rng.shuffle(groups)
@@ -77,7 +77,7 @@ def cv0_split(df: pd.DataFrame, seed: int, test_fraction: float, val_fraction: f
     geno = df["panel_sample_id"].fillna("").astype(str)
     env = df["env_kernel_id"].fillna("").astype(str)
     def partition(values):
-        groups = np.asarray(values.unique(), dtype=object).copy()
+        groups = np.asarray(sorted(values.unique()), dtype=object)
         if len(groups) < 3:
             raise SystemExit("cv0_genotype_environment requires at least three groups on each axis")
         rng.shuffle(groups)
