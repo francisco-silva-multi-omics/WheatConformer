@@ -397,6 +397,12 @@ def main() -> None:
     pred_df["split"] = "test"
     write_table(pred_df, args.out_dir / f"{args.prefix}_test_predictions.parquet")
 
+    val_pred_df = obs.iloc[val_idx].copy()
+    val_pred_df["y_true"] = vy
+    val_pred_df["y_pred"] = vp
+    val_pred_df["split"] = "val"
+    write_table(val_pred_df, args.out_dir / f"{args.prefix}_val_predictions.parquet")
+
     summary = pd.DataFrame(
         [
             {"metric": "rows_total", "value": len(obs)},
