@@ -17,19 +17,27 @@ def read_prediction(prefix_dir: Path, prefix: str, split: str) -> pd.DataFrame:
     raise FileNotFoundError(f"Missing {split} predictions for {prefix} in {prefix_dir}")
 
 
-def metrics(y: np.ndarray, pred: np.ndarray) -> dict[str, float]:
+def metrics(y: np.ndarray, pred: np.ndarray, w: np.ndarray | None = None) -> dict[str, float]:
     y = np.asarray(y, dtype=float)
     pred = np.asarray(pred, dtype=float)
     ok = np.isfinite(y) & np.isfinite(pred)
     y = y[ok]
     pred = pred[ok]
+    if w is None:
+        w = np.ones_like(y)
+    else:
+        w = np.asarray(w, dtype=float)[ok]
+        w = np.where(np.isfinite(w) & (w > 0), w, 1.0)
     err = pred - y
     corr = float(np.corrcoef(y, pred)[0, 1]) if len(y) > 2 and np.std(y) > 0 and np.std(pred) > 0 else np.nan
     return {
-        "rmse": float(np.sqrt(np.mean(err * err))),
-        "mae": float(np.mean(np.abs(err))),
+        "rmse": float(np.sqrt(np.sum(w * err * err) / np.sum(w))),
+        "mae": float(np.sum(w * np.abs(err)) / np.sum(w)),
         "pearson": corr,
         "pred_sd": float(np.std(pred, ddof=1)) if len(pred) > 1 else np.nan,
+        "unweighted_rmse": float(np.sqrt(np.mean(err * err))),
+        "unweighted_mae": float(np.mean(np.abs(err))),
+        "weight_sum": float(np.sum(w)),
     }
 
 
@@ -37,9 +45,10 @@ def score_grid(df: pd.DataFrame, split: str, grid: list[float]) -> pd.DataFrame:
     y = df["original_phenotype_value"].to_numpy(float)
     base = df["env_baseline_pred"].to_numpy(float)
     residual = df["y_pred"].to_numpy(float)
+    weight = df["weight_g_e"].to_numpy(float) if "weight_g_e" in df.columns else None
     rows = []
     for lam in grid:
-        m = metrics(y, base + lam * residual)
+        m = metrics(y, base + lam * residual, weight)
         rows.append({"split": split, "lambda": lam, **m})
     return pd.DataFrame(rows)
 
