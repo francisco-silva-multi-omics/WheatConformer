@@ -41,15 +41,15 @@ def metrics(y: np.ndarray, pred: np.ndarray, w: np.ndarray | None = None) -> dic
     }
 
 
-def score_grid(df: pd.DataFrame, split: str, grid: list[float]) -> pd.DataFrame:
+def score_grid(df: pd.DataFrame, split: str, grid: list[float], weight_col: str) -> pd.DataFrame:
     y = df["original_phenotype_value"].to_numpy(float)
     base = df["env_baseline_pred"].to_numpy(float)
     residual = df["y_pred"].to_numpy(float)
-    weight = df["weight_g_e"].to_numpy(float) if "weight_g_e" in df.columns else None
+    weight = df[weight_col].to_numpy(float) if weight_col in df.columns else None
     rows = []
     for lam in grid:
         m = metrics(y, base + lam * residual, weight)
-        rows.append({"split": split, "lambda": lam, **m})
+        rows.append({"split": split, "lambda": lam, "weight_col": weight_col if weight is not None else "", **m})
     return pd.DataFrame(rows)
 
 
@@ -62,13 +62,24 @@ def main() -> None:
     parser.add_argument("--min-rmse-relative-gain", type=float, default=0.02)
     parser.add_argument("--min-rmse-absolute-gain", type=float, default=0.5)
     parser.add_argument("--max-pearson-drop", type=float, default=0.02)
+    parser.add_argument(
+        "--weight-col",
+        default="original_weight_g_e",
+        help="Weight column for decision metrics. Falls back to weight_g_e, then unweighted, if absent.",
+    )
     args = parser.parse_args()
 
     grid = [float(x) for x in args.lambda_grid.split(",") if x.strip()]
     val = read_prediction(args.prediction_dir, args.prefix, "val")
     test = read_prediction(args.prediction_dir, args.prefix, "test")
-    val_scores = score_grid(val, "val", grid)
-    test_scores = score_grid(test, "test", grid)
+    if args.weight_col in val.columns and args.weight_col in test.columns:
+        weight_col = args.weight_col
+    elif "weight_g_e" in val.columns and "weight_g_e" in test.columns:
+        weight_col = "weight_g_e"
+    else:
+        weight_col = ""
+    val_scores = score_grid(val, "val", grid, weight_col)
+    test_scores = score_grid(test, "test", grid, weight_col)
     base_val = val_scores[val_scores["lambda"].eq(0)].iloc[0]
     candidate = val_scores.sort_values(["rmse", "lambda"]).iloc[0]
     rmse_gain = float(base_val["rmse"] - candidate["rmse"])
@@ -97,6 +108,7 @@ def main() -> None:
                 "selected_val_pearson": selected_val["pearson"],
                 "selected_test_rmse": selected_test["rmse"],
                 "selected_test_pearson": selected_test["pearson"],
+                "weight_col_used": weight_col,
             }
         ]
     )

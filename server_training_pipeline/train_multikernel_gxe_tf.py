@@ -253,6 +253,8 @@ def main() -> None:
     if obs.empty:
         raise SystemExit(f"Selected trait has zero finite phenotype rows: {selected_trait}")
     print(f"Selected trait: {selected_trait}; finite phenotype rows: {len(obs):,}", flush=True)
+    if "original_weight_g_e" not in obs.columns:
+        obs["original_weight_g_e"] = obs["weight_g_e"]
     obs["weight_g_e"] = obs["weight_g_e"].replace([np.inf, -np.inf], np.nan).fillna(1.0)
     obs["weight_g_e"] = np.where(obs["weight_g_e"] > 0, obs["weight_g_e"], 1.0)
     if args.weight_clip_quantile and 0 < args.weight_clip_quantile < 1:
