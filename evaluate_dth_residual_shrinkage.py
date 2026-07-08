@@ -17,6 +17,16 @@ def read_prediction(prefix_dir: Path, prefix: str, split: str) -> pd.DataFrame:
     raise FileNotFoundError(f"Missing {split} predictions for {prefix} in {prefix_dir}")
 
 
+def validate_prediction_split(df: pd.DataFrame, expected_split: str) -> None:
+    if "baseline_split" not in df.columns:
+        return
+    observed = set(df["baseline_split"].fillna("").astype(str).str.lower().unique())
+    if observed != {expected_split}:
+        raise SystemExit(
+            f"Prediction file for split {expected_split!r} contains baseline_split labels {sorted(observed)}"
+        )
+
+
 def metrics(y: np.ndarray, pred: np.ndarray, w: np.ndarray | None = None) -> dict[str, float]:
     y = np.asarray(y, dtype=float)
     pred = np.asarray(pred, dtype=float)
@@ -53,6 +63,33 @@ def score_grid(df: pd.DataFrame, split: str, grid: list[float], weight_col: str)
     return pd.DataFrame(rows)
 
 
+def validate_lambda0_against_baseline(
+    val_scores: pd.DataFrame,
+    test_scores: pd.DataFrame,
+    baseline_selected: Path,
+    seed: int,
+    tolerance: float,
+) -> None:
+    baseline = pd.read_csv(baseline_selected, sep="\t")
+    rows = baseline[baseline["seed"].astype(int).eq(int(seed))]
+    if rows.empty:
+        raise SystemExit(f"No baseline-selected row found for seed {seed} in {baseline_selected}")
+    row = rows.iloc[0]
+    checks = [
+        ("val", "rmse", float(row["val_rmse"]), float(val_scores[val_scores["lambda"].eq(0)]["rmse"].iloc[0])),
+        ("val", "mae", float(row["val_mae"]), float(val_scores[val_scores["lambda"].eq(0)]["mae"].iloc[0])),
+        ("test", "rmse", float(row["test_rmse"]), float(test_scores[test_scores["lambda"].eq(0)]["rmse"].iloc[0])),
+        ("test", "mae", float(row["test_mae"]), float(test_scores[test_scores["lambda"].eq(0)]["mae"].iloc[0])),
+    ]
+    mismatches = [
+        f"{split}_{metric}: baseline={expected:.12g}; lambda0={observed:.12g}; diff={abs(expected - observed):.6g}"
+        for split, metric, expected, observed in checks
+        if abs(expected - observed) > tolerance
+    ]
+    if mismatches:
+        raise SystemExit("Lambda-0 residual baseline mismatch:\n" + "\n".join(mismatches))
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Tune DTH residual shrinkage on validation and report test metrics.")
     parser.add_argument("--prediction-dir", type=Path, required=True)
@@ -67,11 +104,16 @@ def main() -> None:
         default="original_weight_g_e",
         help="Weight column for decision metrics. Falls back to weight_g_e, then unweighted, if absent.",
     )
+    parser.add_argument("--baseline-selected", type=Path, help="Selected baseline TSV used to assert lambda=0 alignment.")
+    parser.add_argument("--seed", type=int, help="Seed row to validate in --baseline-selected.")
+    parser.add_argument("--baseline-tolerance", type=float, default=1e-6)
     args = parser.parse_args()
 
     grid = [float(x) for x in args.lambda_grid.split(",") if x.strip()]
     val = read_prediction(args.prediction_dir, args.prefix, "val")
     test = read_prediction(args.prediction_dir, args.prefix, "test")
+    validate_prediction_split(val, "val")
+    validate_prediction_split(test, "test")
     if args.weight_col in val.columns and args.weight_col in test.columns:
         weight_col = args.weight_col
     elif "weight_g_e" in val.columns and "weight_g_e" in test.columns:
@@ -80,6 +122,10 @@ def main() -> None:
         weight_col = ""
     val_scores = score_grid(val, "val", grid, weight_col)
     test_scores = score_grid(test, "test", grid, weight_col)
+    if args.baseline_selected is not None:
+        if args.seed is None:
+            raise SystemExit("--seed is required with --baseline-selected")
+        validate_lambda0_against_baseline(val_scores, test_scores, args.baseline_selected, args.seed, args.baseline_tolerance)
     base_val = val_scores[val_scores["lambda"].eq(0)].iloc[0]
     candidate = val_scores.sort_values(["rmse", "lambda"]).iloc[0]
     rmse_gain = float(base_val["rmse"] - candidate["rmse"])

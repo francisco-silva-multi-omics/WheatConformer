@@ -39,6 +39,7 @@ echo "[$(date '+%F %T')] START train residual branch"
   --k-e-order "${RESIDUAL_MODEL_DIR}/${MODEL_PREFIX}_K_E_unique_order.tsv" \
   --trait DAYS_TO_HEADING \
   --split loeo \
+  --split-column baseline_split \
   --seed "$SEED" \
   --rank-g "${RANK_G:-256}" \
   --rank-e "${RANK_E:-64}" \
@@ -54,6 +55,8 @@ echo "[$(date '+%F %T')] START evaluate residual shrinkage"
 "$PYTHON" evaluate_dth_residual_shrinkage.py \
   --prediction-dir "$TRAINED_DIR" \
   --prefix "$PRED_PREFIX" \
+  --baseline-selected "${BASELINE_DIR}/dth_env_baseline_v2_selected_by_seed.tsv" \
+  --seed "$SEED" \
   --out "trained_models/model_comparisons/dth_v2_residual_shrinkage_seed${SEED}.tsv" \
   >"${LOG_DIR}/03_evaluate_shrinkage.stdout.log" 2>"${LOG_DIR}/03_evaluate_shrinkage.stderr.log"
 echo "[$(date '+%F %T')] DONE  evaluate residual shrinkage"

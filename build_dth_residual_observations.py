@@ -27,12 +27,19 @@ def main() -> None:
     missing = sorted(required.difference(pred.columns))
     if missing:
         raise SystemExit(f"Missing required baseline prediction columns: {missing}")
+    if pred["observation_index"].duplicated().any():
+        raise SystemExit("Baseline predictions contain duplicated observation_index values")
+    observed_splits = set(pred["baseline_split"].fillna("").astype(str).str.lower().unique())
+    if observed_splits != {"train", "val", "test"}:
+        raise SystemExit(f"Baseline predictions must contain train/val/test split labels; found {sorted(observed_splits)}")
 
     merged = obs.merge(
         pred[["observation_index", "env_baseline_pred", "baseline_split", "selected_candidate", "seed"]],
         on="observation_index",
         how="inner",
     )
+    if len(merged) != len(pred):
+        raise SystemExit(f"Residual merge lost rows: merged={len(merged)} baseline_predictions={len(pred)}")
     merged["original_phenotype_value"] = merged["phenotype_value"]
     merged["phenotype_value"] = merged["original_phenotype_value"] - merged["env_baseline_pred"]
 
@@ -48,6 +55,9 @@ def main() -> None:
             {"metric": "baseline_prediction_file", "value": str(args.baseline_predictions)},
             {"metric": "selected_candidate", "value": merged["selected_candidate"].dropna().astype(str).iloc[0] if len(merged) else ""},
             {"metric": "seed", "value": merged["seed"].dropna().astype(str).iloc[0] if len(merged) else ""},
+            {"metric": "train_rows", "value": int(merged["baseline_split"].astype(str).str.lower().eq("train").sum())},
+            {"metric": "val_rows", "value": int(merged["baseline_split"].astype(str).str.lower().eq("val").sum())},
+            {"metric": "test_rows", "value": int(merged["baseline_split"].astype(str).str.lower().eq("test").sum())},
             {"metric": "residual_mean", "value": float(merged["phenotype_value"].mean()) if len(merged) else ""},
             {"metric": "residual_sd", "value": float(merged["phenotype_value"].std()) if len(merged) else ""},
         ]

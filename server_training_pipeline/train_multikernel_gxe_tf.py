@@ -218,6 +218,10 @@ def main() -> None:
     parser.add_argument("--no-ge", action="store_true")
     parser.add_argument("--no-rbf-e", action="store_true")
     parser.add_argument("--split", default="cv2_random_observation")
+    parser.add_argument(
+        "--split-column",
+        help="Use an existing column with labels train/val/test instead of recomputing split indices.",
+    )
     parser.add_argument("--group-kfold-col", default="env_kernel_id")
     parser.add_argument("--group-kfold-splits", type=int, default=5)
     parser.add_argument("--group-kfold-fold", type=int, default=0)
@@ -279,7 +283,17 @@ def main() -> None:
         "cv1_genotype": "panel_sample_id", "cv1_environment": "env_kernel_id",
         "cv0_genotype_environment": None, "group_kfold": args.group_kfold_col,
     }[canonical_split]
-    if canonical_split == "group_kfold":
+    if args.split_column:
+        if args.split_column not in obs.columns:
+            raise SystemExit(f"--split-column is absent from observations: {args.split_column}")
+        split_labels = obs[args.split_column].fillna("").astype(str).str.lower()
+        unknown_labels = sorted(set(split_labels.unique()).difference({"train", "val", "test"}))
+        if unknown_labels:
+            raise SystemExit(f"--split-column {args.split_column} has unsupported labels: {unknown_labels}")
+        train_idx = np.where(split_labels.eq("train"))[0]
+        val_idx = np.where(split_labels.eq("val"))[0]
+        test_idx = np.where(split_labels.eq("test"))[0]
+    elif canonical_split == "group_kfold":
         folds = group_kfold_splits(obs, split_col, args.group_kfold_splits, args.seed, args.val_fraction)
         if not 0 <= args.group_kfold_fold < len(folds):
             raise SystemExit(f"--group-kfold-fold must be between 0 and {len(folds) - 1}")
@@ -414,6 +428,7 @@ def main() -> None:
             {"metric": "rows_test", "value": len(test_idx)},
             {"metric": "requested_split_mode", "value": requested_split},
             {"metric": "canonical_split_mode", "value": canonical_split},
+            {"metric": "split_column", "value": args.split_column or ""},
             {"metric": "split_group_column", "value": split_col or ""},
             {"metric": "split_leakage_status", "value": leakage["leakage_status"]},
             {"metric": "requested_factorization_mode", "value": args.factorization_mode},
