@@ -9,6 +9,7 @@
 !README_REPRODUCIBLE.md
 !DATA_POLICY.md
 !LICENSE
+!pytest.ini
 
 # Root-level pipeline scripts
 !*.py

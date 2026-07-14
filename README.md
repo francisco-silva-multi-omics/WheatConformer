@@ -70,8 +70,9 @@ python -m pip install -r requirements/training_tensorflow.txt
 bash scripts/03_run_training.sh
 ```
 
-Training is strictly one trait per model. For a model-ready observation table
-with multiple traits, specify the traits to run:
+The original `scripts/03_run_training.sh` route is strictly one trait per
+model. For a model-ready observation table with multiple traits, specify the
+traits to run:
 
 ```bash
 export TRAIN_TRAITS="Grain-Yield,Heading,Height"
@@ -81,6 +82,24 @@ bash scripts/03_run_training.sh
 Each HMP trait is written under `trained_models/stage1_mkl/<sanitized_trait>/`.
 When `TRAIN_TRAITS` is unset, training proceeds only if the observation table
 contains exactly one non-empty trait.
+
+The corrected joint quantitative baseline is separate and does not invoke
+the single-trait isolation code. It prepares a certified expert registry with
+pedigree `K_A`, separately masked HMP/GBS linear and RBF `K_G` kernels,
+geo/weather/stress/management environment components, and the DTH-v2 kernel
+restricted to `DAYS_TO_HEADING`:
+
+```bash
+export PYTHON="$HOME/tools/tf_wheat_cpu/bin/python"
+export MULTITRAIT_SEEDS=2026
+export MULTITRAIT_MODES=full
+bash scripts/run_multitrait_quantitative_baseline.sh .
+```
+
+After the smoke run, use `MULTITRAIT_SEEDS=2026,2027,2028,2029` and
+`MULTITRAIT_MODES=env,additive,full` for the paired baseline comparison.
+The legacy combined `K_E` is retained as a disabled reference rather than
+mixed with its component kernels by default.
 
 HMP QC thresholds can be overridden before core processing:
 
@@ -123,10 +142,10 @@ bash scripts/04_run_validation_ablation.sh
 
 `train_nystrom` eigendecomposes train-only kernel submatrices and projects
 validation/test IDs without allowing them to influence the train eigenspace.
-It is applied to `cv1_genotype`, `cv1_environment`, and
+It is applied to `gho_environment`, `cv1_genotype`, `cv1_environment`, and
 `cv0_genotype_environment`; other split modes record `full_transductive`.
 The TensorFlow trainer also supports `--factorization-mode train_nystrom` for
-strict CV1/CV0 benchmarking. `full_transductive` remains appropriate for
+strict held-out genotype/environment benchmarking. `full_transductive` remains appropriate for
 deployment-style prediction when all candidate genotype and environment
 kernels are known.
 

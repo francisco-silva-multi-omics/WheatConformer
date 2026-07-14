@@ -1,12 +1,13 @@
 # HPC Training Pipeline
 
-This folder contains two training routes aligned with the scalable methodology:
+This folder contains the training routes aligned with the scalable methodology:
 
-1. `train_multikernel_gxe_tf.py`: scalable TensorFlow multi-kernel GxE baseline.
-2. `build_*enformer*` + `train_enformer_like_tf.py`: TensorFlow Enformer-like CNN+Transformer regulatory module.
-3. `fit_multikernel_reml.py`: exact dense REML for filtered stage-2 subsets.
-4. `run_validation_ablation_suite.py`: canonical grouped holdout, group K-fold, CV1/CV0 validation, and ablations.
-5. `tune_multikernel_hyperparameters.py`: validation-only ridge/rank selection for the integrated model.
+1. `train_multitrait_multikernel_tf.py`: joint, trait-balanced TensorFlow model with masked pedigree, HMP/GBS genomic, and trait-gated environment experts.
+2. `train_multikernel_gxe_tf.py`: legacy one-trait-at-a-time multi-kernel GxE baseline.
+3. `build_*enformer*` + `train_enformer_like_tf.py`: TensorFlow Enformer-like CNN+Transformer regulatory module.
+4. `fit_multikernel_reml.py`: exact dense REML for filtered stage-2 subsets.
+5. `run_validation_ablation_suite.py`: canonical grouped holdout, group K-fold, CV1/CV0 validation, and ablations.
+6. `tune_multikernel_hyperparameters.py`: validation-only ridge/rank selection for the integrated model.
 
 `split_utils.py` is the single source of truth for all split semantics.
 TensorFlow training persists `<prefix>_split_leakage_qc.tsv/json` and aborts
@@ -42,7 +43,7 @@ python build_stage1_model_kernels.py \
   --write-tsv
 ```
 
-## 2. Train Multikernel GxE Baseline
+## 2. Train The Joint Multi-Trait Quantitative Baseline
 
 Install:
 
@@ -51,6 +52,85 @@ conda create -n wheattrain -y python=3.11
 conda activate wheattrain
 python -m pip install -r server_training_pipeline/requirements_training.txt
 ```
+
+The joint baseline starts from the broad-coverage pedigree observation table,
+but pedigree is not mislabeled as genomic signal. The preparation stage builds
+and certifies an explicit kernel registry containing:
+
+```text
+K_A
+K_G_HMP_LINEAR
+K_G_HMP_RBF
+K_G_GBS_LINEAR
+K_G_GBS_RBF
+K_E_GEO
+K_E_WEATHER
+K_E_STRESS
+K_E_MGMT
+K_E_DTH_V2 (DAYS_TO_HEADING only)
+```
+
+HMP and GBS remain separate marker spaces. Their experts are masked for rows
+without the corresponding marker genotype, while `K_A` preserves coverage for
+pedigree-only material. Environment components receive trait-specific gates.
+The DTH-v2 kernel is eligible only for `DAYS_TO_HEADING`; it cannot silently
+influence unrelated traits. The legacy equally weighted `K_E` is prepared as
+`K_E_GENERIC` for explicit comparison but is disabled in the default model.
+
+Every source matrix is compacted to ledger IDs, diagonal-normalized, checked
+for symmetry/PSD/order/coverage, and bound to the run by SHA-256 identities.
+Training is blocked if any required expert fails certification.
+
+Start with one seed and the full model as a server smoke test:
+
+```bash
+export PYTHON="$HOME/tools/tf_wheat_cpu/bin/python"
+export MULTITRAIT_SEEDS=2026
+export MULTITRAIT_MODES=full
+bash scripts/run_multitrait_quantitative_baseline.sh .
+```
+
+Then run paired environment-only, additive, and interaction models over four
+seeds. Kernel factors are cached per seed and reused across the three models.
+The comparison therefore tests environment components alone, environment plus
+`K_A`/available marker kernels, and the corresponding GxE interactions.
+
+```bash
+export PYTHON="$HOME/tools/tf_wheat_cpu/bin/python"
+export MULTITRAIT_SEEDS=2026,2027,2028,2029
+export MULTITRAIT_MODES=env,additive,full
+nohup bash scripts/run_multitrait_quantitative_baseline.sh . \
+  > logs/multitrait_quantitative_baseline.nohup.log 2>&1 &
+```
+
+Default traits form the first continuous agronomic family: days to heading,
+days to maturity, plant height, grain yield, 1000-grain weight, above-ground
+biomass, and test weight. Override them with `MULTITRAIT_TRAITS`, using a
+comma-separated list. Traits lacking the configured minimum train/validation/
+test support are recorded and excluded before fitting.
+
+Primary outputs:
+
+```text
+model_kernels/multitrait_pedigree_env/*_observations.parquet
+model_kernels/multitrait_pedigree_env/*_weight_qc.tsv
+model_kernels/multitrait_kernel_experts/multitrait_kernel_registry.tsv
+model_kernels/multitrait_kernel_experts/multitrait_kernel_preparation_qc.tsv
+model_kernels/multitrait_pedigree_env/certification/*
+trained_models/multitrait_quantitative_*_seed*/*_trait_metrics.tsv
+trained_models/multitrait_quantitative_*_seed*/*_kernel_coverage.tsv
+trained_models/multitrait_quantitative_*_seed*/*_kernel_gates.tsv
+trained_models/multitrait_quantitative_*_seed*/*_vs_train_mean.tsv
+trained_models/model_comparisons/multitrait_quantitative_*summary.tsv
+```
+
+All model selection must consider both weighted and unweighted RMSE. Metrics
+are emitted for all observations, marker-available observations, and
+pedigree-only observations. This prevents a gain confined to HMP/GBS material
+from being hidden by the larger pedigree subset, or being incorrectly claimed
+for ungenotyped material.
+
+## 2A. Legacy Single-Trait Multikernel GxE Baseline
 
 Run:
 

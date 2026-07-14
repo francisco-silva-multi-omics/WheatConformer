@@ -37,8 +37,9 @@ def test_tensorflow_nystrom_excludes_heldout_ids_and_projects_all_rows(tmp_path:
 def test_full_transductive_default_and_strict_mode_resolution() -> None:
     assert effective_factorization_mode("full_transductive", "cv1_genotype") == "full_transductive"
     assert effective_factorization_mode("train_nystrom", "cv1_genotype") == "train_nystrom"
-    with pytest.warns(UserWarning, match="restricted to CV1/CV0"):
-        assert effective_factorization_mode("train_nystrom", "gho_environment", warn=True) == "full_transductive"
+    assert effective_factorization_mode("train_nystrom", "gho_environment", warn=True) == "train_nystrom"
+    with pytest.warns(UserWarning, match="held-out genotype/environment"):
+        assert effective_factorization_mode("train_nystrom", "gho_cycle", warn=True) == "full_transductive"
 
 
 def test_cv1_genotype_train_ids_define_strict_kernel_dimension(tmp_path: Path) -> None:

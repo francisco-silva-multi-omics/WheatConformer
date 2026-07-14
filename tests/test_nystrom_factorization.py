@@ -61,3 +61,26 @@ def test_full_transductive_remains_backward_compatible(tmp_path: Path) -> None:
     np.testing.assert_allclose(factors, top_factors(path, 2), atol=1e-7)
     assert metadata["factorization_mode"] == "full_transductive"
     assert metadata["train_kernel_dimension"] == 3
+
+
+def test_centered_nystrom_training_factors_reconstruct_centered_kernel(tmp_path: Path) -> None:
+    features = np.array([[1.0, 0.0], [0.5, 1.0], [0.0, 1.0], [1.0, 1.0]])
+    kernel = features @ features.T + np.eye(4) * 0.1
+    train_ids = np.array([0, 2, 3])
+    factors, metadata = kernel_factors(
+        write_kernel(tmp_path / "centered.npy", kernel), 3, train_ids, center=True
+    )
+    train_kernel = kernel[np.ix_(train_ids, train_ids)]
+    centered = (
+        train_kernel
+        - train_kernel.mean(axis=0, keepdims=True)
+        - train_kernel.mean(axis=1, keepdims=True)
+        + train_kernel.mean()
+    )
+
+    np.testing.assert_allclose(
+        factors[train_ids] @ factors[train_ids].T,
+        centered,
+        atol=1e-5,
+    )
+    assert metadata["kernel_centered"] == "true"

@@ -15,6 +15,8 @@ if platform.system() == "Windows" and LOCAL_DEPS.exists():
 import numpy as np
 import pandas as pd
 
+from server_training_pipeline.observation_weights import stabilize_precision_weights
+
 
 RAW = BASE / "phenotypes" / "all_rawdata.tsv"
 MODEL_INPUT = BASE / "phenotypes" / "model_input_phenotypes.tsv"
@@ -393,6 +395,10 @@ def main() -> None:
     parser.add_argument("--max-rows", type=int, default=0, help="Smoke-test limit after filtering.")
     parser.add_argument("--max-groups", type=int, default=0, help="Smoke-test limit for environment-trait groups.")
     parser.add_argument("--include-plot-linear", action="store_true")
+    parser.add_argument("--legacy-raw-weights", action="store_true", help="Keep the original unbounded 1/variance weights.")
+    parser.add_argument("--weight-var-floor-quantile", type=float, default=0.01)
+    parser.add_argument("--weight-missing-var-quantile", type=float, default=0.75)
+    parser.add_argument("--weight-clip-quantile", type=float, default=0.99)
     parser.add_argument("--write-tsv", action="store_true")
     parser.add_argument("--no-parquet", action="store_true")
     parser.add_argument("--out-dir", type=Path, default=OUT)
@@ -475,6 +481,18 @@ def main() -> None:
             break
 
     out = pd.concat(outputs, ignore_index=True)
+    raw_weight = pd.to_numeric(out["weight_g_e"], errors="coerce")
+    out["raw_weight_g_e"] = raw_weight
+    out["source_weight_g_e"] = raw_weight
+    if args.legacy_raw_weights:
+        weight_qc = pd.DataFrame()
+    else:
+        out, weight_qc = stabilize_precision_weights(
+            out,
+            floor_quantile=args.weight_var_floor_quantile,
+            missing_variance_quantile=args.weight_missing_var_quantile,
+            clip_quantile=args.weight_clip_quantile,
+        )
     ordered_cols = [
         "canonical_observation_id",
         "canonical_germplasm_key",
@@ -498,7 +516,13 @@ def main() -> None:
         "y_tilde_g_e",
         "SE_g_e",
         "var_g_e",
+        "raw_var_g_e",
+        "stabilized_var_g_e",
+        "raw_weight_g_e",
+        "source_weight_g_e",
         "weight_g_e",
+        "weight_variance_imputed",
+        "weight_variance_floored",
         "raw_mean",
         "raw_sd",
         "n_plot_records",
@@ -529,6 +553,8 @@ def main() -> None:
         out.to_csv(args.out_dir / "stage1_adjusted_phenotypes.tsv.gz", sep="\t", index=False)
     qc = pd.DataFrame(qc_rows)
     qc.to_csv(qc_path, sep="\t", index=False)
+    if not weight_qc.empty:
+        weight_qc.to_csv(args.out_dir / "stage1_adjusted_phenotypes_weight_qc.tsv", sep="\t", index=False)
     summary = pd.DataFrame(
         [
             {"metric": "raw_numeric_records_used", "value": len(raw)},
@@ -539,6 +565,11 @@ def main() -> None:
             {"metric": "linear_model_adjusted_rows", "value": int(out["stage1_model_status"].eq("linear_model_adjusted").sum())},
             {"metric": "fallback_rows", "value": int((~out["stage1_model_status"].eq("linear_model_adjusted")).sum())},
             {"metric": "rows_with_finite_weight", "value": int(np.isfinite(out["weight_g_e"]).sum())},
+            {"metric": "weight_mode", "value": "legacy_raw_inverse_variance" if args.legacy_raw_weights else "trait_stabilized_mean1"},
+            {
+                "metric": "minimum_trait_effective_sample_fraction",
+                "value": float(weight_qc["effective_sample_fraction"].min()) if not weight_qc.empty else np.nan,
+            },
         ]
     )
     summary.to_csv(args.out_dir / "stage1_adjusted_phenotypes_summary.tsv", sep="\t", index=False)

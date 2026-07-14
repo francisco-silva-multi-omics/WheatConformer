@@ -7,6 +7,7 @@ import numpy as np
 
 
 STRICT_INDUCTIVE_SPLIT_MODES = {
+    "gho_environment",
     "cv1_genotype",
     "cv1_environment",
     "cv0_genotype_environment",
@@ -17,7 +18,8 @@ def effective_factorization_mode(requested_mode: str, split_mode: str, warn: boo
     if requested_mode == "train_nystrom" and split_mode not in STRICT_INDUCTIVE_SPLIT_MODES:
         if warn:
             warnings.warn(
-                f"train_nystrom is restricted to CV1/CV0 benchmarking; using full_transductive for {split_mode!r}.",
+                f"train_nystrom is restricted to held-out genotype/environment benchmarking; "
+                f"using full_transductive for {split_mode!r}.",
                 stacklevel=2,
             )
         return "full_transductive"
@@ -29,6 +31,7 @@ def kernel_factors(
     rank: int,
     train_ids: np.ndarray | None = None,
     jitter: float = 0.0,
+    center: bool = False,
 ) -> tuple[np.ndarray, dict[str, int | str]]:
     K = np.load(path).astype(np.float64)
     if K.ndim != 2 or K.shape[0] != K.shape[1]:
@@ -38,7 +41,7 @@ def kernel_factors(
         K.flat[:: K.shape[0] + 1] += jitter
     if train_ids is None:
         train_ids = np.arange(K.shape[0], dtype=np.int32)
-        K_train = K
+        K_train_raw = K
         factorization_mode = "full_transductive"
     else:
         train_ids = np.unique(np.asarray(train_ids, dtype=np.int32))
@@ -46,8 +49,22 @@ def kernel_factors(
             raise ValueError("train_nystrom requires at least one training kernel ID")
         if train_ids.min() < 0 or train_ids.max() >= K.shape[0]:
             raise ValueError(f"Training kernel IDs are outside kernel dimensions for {path}")
-        K_train = K[np.ix_(train_ids, train_ids)]
+        K_train_raw = K[np.ix_(train_ids, train_ids)]
         factorization_mode = "train_nystrom"
+
+    if center:
+        train_column_mean = K_train_raw.mean(axis=0)
+        train_grand_mean = float(K_train_raw.mean())
+        K_train = (
+            K_train_raw
+            - K_train_raw.mean(axis=1, keepdims=True)
+            - train_column_mean[None, :]
+            + train_grand_mean
+        )
+    else:
+        train_column_mean = np.zeros(K_train_raw.shape[1], dtype=np.float64)
+        train_grand_mean = 0.0
+        K_train = K_train_raw
 
     vals, vecs = np.linalg.eigh(K_train)
     order = np.argsort(vals)[::-1]
@@ -61,13 +78,22 @@ def kernel_factors(
     if factorization_mode == "full_transductive":
         factors = vecs * np.sqrt(vals)[None, :]
     else:
-        factors = K[:, train_ids] @ (vecs / np.sqrt(vals)[None, :])
+        cross_kernel = K[:, train_ids]
+        if center:
+            cross_kernel = (
+                cross_kernel
+                - cross_kernel.mean(axis=1, keepdims=True)
+                - train_column_mean[None, :]
+                + train_grand_mean
+            )
+        factors = cross_kernel @ (vecs / np.sqrt(vals)[None, :])
     metadata = {
         "factorization_mode": factorization_mode,
         "rank_requested": int(rank),
         "rank_retained": int(vals.size),
         "train_kernel_dimension": int(train_ids.size),
         "kernel_dimension": int(K.shape[0]),
+        "kernel_centered": str(bool(center)).lower(),
     }
     return factors.astype(np.float32), metadata
 
