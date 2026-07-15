@@ -8,6 +8,8 @@ import pytest
 pytest.importorskip("tensorflow")
 from server_training_pipeline.train_multitrait_multikernel_tf import (
     MultiTraitKernelExperts,
+    regression_metrics,
+    safe_weights,
 )
 
 
@@ -54,3 +56,14 @@ def test_kernel_experts_receive_distinct_reproducible_initial_values() -> None:
     np.testing.assert_array_equal(first_a, second.main_projection[0].numpy())
     assert not np.array_equal(first_a, different_seed.main_projection[0].numpy())
     assert not any("initializer RandomNormal is unseeded" in str(item.message) for item in caught)
+
+
+def test_training_metrics_reject_nonfinite_values_instead_of_dropping_rows() -> None:
+    with pytest.raises(ValueError, match="weights"):
+        safe_weights(np.array([1.0, np.inf]))
+    with pytest.raises(ValueError, match="predictions"):
+        regression_metrics(
+            np.array([1.0, 2.0]),
+            np.array([1.0, np.nan]),
+            np.ones(2),
+        )

@@ -179,40 +179,81 @@ def build_window_features(
 
 
 def zscore_with_missing(features: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
-    features = features.copy().dropna(axis=1, how="all")
+    features = features.copy()
     z_parts = []
     scaling = []
     for col in features.columns:
-        x = pd.to_numeric(features[col], errors="coerce")
+        raw = pd.to_numeric(features[col], errors="coerce")
+        positive_inf = int(np.isposinf(raw.to_numpy(dtype=np.float64)).sum())
+        negative_inf = int(np.isneginf(raw.to_numpy(dtype=np.float64)).sum())
+        x = raw.replace([np.inf, -np.inf], np.nan)
         n = int(x.notna().sum())
+        missing = int(x.isna().sum())
+        record = {
+            "feature": col,
+            "input_rows": len(x),
+            "n_finite": n,
+            "n_missing_or_invalid": missing,
+            "n_positive_inf": positive_inf,
+            "n_negative_inf": negative_inf,
+            "mean": np.nan,
+            "std": np.nan,
+            "missing_indicator_added": False,
+            "status": "",
+        }
         if n == 0:
+            record["status"] = "dropped_no_finite_values"
+            scaling.append(record)
             continue
         miss = x.isna().astype(np.float32)
         mean = float(x.mean())
         filled = x.fillna(mean)
         std = float(filled.std(ddof=0))
         if not np.isfinite(std) or std == 0:
+            record.update({"mean": mean, "std": std, "status": "dropped_zero_variance"})
+            scaling.append(record)
             continue
         z_parts.append(((filled - mean) / std).rename(str(col)))
         if miss.sum() > 0:
             z_parts.append(miss.rename(f"{col}__missing"))
-        scaling.append({"feature": col, "mean": mean, "std": std, "n_nonmissing": n})
+        record.update(
+            {
+                "mean": mean,
+                "std": std,
+                "missing_indicator_added": bool(miss.sum() > 0),
+                "status": "retained",
+            }
+        )
+        scaling.append(record)
     if not z_parts:
-        return pd.DataFrame(index=features.index), pd.DataFrame(columns=["feature", "mean", "std", "n_nonmissing"])
-    return pd.concat(z_parts, axis=1).astype(np.float32), pd.DataFrame(scaling)
+        return pd.DataFrame(index=features.index), pd.DataFrame(scaling)
+    z = pd.concat(z_parts, axis=1).astype(np.float32)
+    if not np.isfinite(z.to_numpy(dtype=np.float64)).all():
+        raise ValueError("Standardized environment features contain non-finite values")
+    return z, pd.DataFrame(scaling)
 
 
 def kernel_from_features(z: pd.DataFrame) -> np.ndarray:
     X = z.to_numpy(dtype=np.float64)
+    if X.ndim != 2 or X.shape[0] == 0 or X.shape[1] == 0:
+        raise ValueError(f"Environment feature matrix must be non-empty; shape={X.shape}")
+    if not np.isfinite(X).all():
+        raise ValueError("Environment feature matrix contains non-finite values")
     K = (X @ X.T) / max(X.shape[1], 1)
     K = (K + K.T) / 2
+    if not np.isfinite(K).all():
+        raise ValueError("Environment kernel multiplication produced non-finite values")
     diag = np.diag(K).copy()
     good = np.isfinite(diag) & (diag > 0)
-    if good.any():
-        diag[~good] = np.nanmedian(diag[good])
-        K = K / np.sqrt(np.outer(diag, diag))
+    if not good.any():
+        raise ValueError("Environment kernel has no positive finite diagonal entries")
+    diag[~good] = np.nanmedian(diag[good])
+    K = K / np.sqrt(np.outer(diag, diag))
     np.fill_diagonal(K, 1.0)
-    return ((K + K.T) / 2).astype(np.float32)
+    K = ((K + K.T) / 2).astype(np.float32)
+    if not np.isfinite(K).all():
+        raise ValueError("Normalized environment kernel contains non-finite values")
+    return K
 
 
 def feature_export_frame(z: pd.DataFrame) -> pd.DataFrame:
@@ -246,6 +287,8 @@ def main() -> None:
     features = pd.concat(feature_sets.values(), axis=1)
     features.index = env_ids
     z, scaling = zscore_with_missing(features)
+    if z.empty:
+        raise SystemExit("DTH environment inputs have no usable finite features")
     K = kernel_from_features(z)
 
     if args.out_model_dir.exists():
@@ -272,6 +315,26 @@ def main() -> None:
         [
             {"metric": "env_count", "value": len(env_ids)},
             {"metric": "feature_count_after_missing_indicators", "value": z.shape[1]},
+            {
+                "metric": "input_positive_inf_values",
+                "value": int(scaling["n_positive_inf"].sum()),
+            },
+            {
+                "metric": "input_negative_inf_values",
+                "value": int(scaling["n_negative_inf"].sum()),
+            },
+            {
+                "metric": "input_missing_or_invalid_values",
+                "value": int(scaling["n_missing_or_invalid"].sum()),
+            },
+            {
+                "metric": "dropped_no_finite_feature_count",
+                "value": int(scaling["status"].eq("dropped_no_finite_values").sum()),
+            },
+            {
+                "metric": "dropped_zero_variance_feature_count",
+                "value": int(scaling["status"].eq("dropped_zero_variance").sum()),
+            },
             {"metric": "K_E_shape", "value": f"{K.shape[0]}x{K.shape[1]}"},
             {"metric": "K_E_mean_diag", "value": float(np.diag(K).mean())},
             {"metric": "K_E_min_diag", "value": float(np.diag(K).min())},

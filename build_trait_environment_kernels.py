@@ -309,6 +309,17 @@ def main() -> None:
                 "trait": trait,
                 "environment_count": len(env_ids),
                 "feature_count": z.shape[1],
+                "input_positive_inf_values": int(scaling["n_positive_inf"].sum()),
+                "input_negative_inf_values": int(scaling["n_negative_inf"].sum()),
+                "input_missing_or_invalid_values": int(
+                    scaling["n_missing_or_invalid"].sum()
+                ),
+                "dropped_no_finite_feature_count": int(
+                    scaling["status"].eq("dropped_no_finite_values").sum()
+                ),
+                "dropped_zero_variance_feature_count": int(
+                    scaling["status"].eq("dropped_zero_variance").sum()
+                ),
                 "window_count": len(spec["windows"]),
                 "minimum_window_environment_coverage": minimum_window_coverage,
                 "api_environment_coverage": float(api_features.notna().any(axis=1).mean()),

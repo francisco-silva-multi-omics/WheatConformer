@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 from server_training_pipeline.kernel_factorization import kernel_factors, top_factors
 
@@ -84,3 +85,9 @@ def test_centered_nystrom_training_factors_reconstruct_centered_kernel(tmp_path:
         atol=1e-5,
     )
     assert metadata["kernel_centered"] == "true"
+
+
+def test_factorization_rejects_nonfinite_kernel_values(tmp_path: Path) -> None:
+    kernel = np.array([[1.0, np.inf], [np.inf, 1.0]])
+    with pytest.raises(ValueError, match="non-finite"):
+        kernel_factors(write_kernel(tmp_path / "nonfinite.npy", kernel), 2)

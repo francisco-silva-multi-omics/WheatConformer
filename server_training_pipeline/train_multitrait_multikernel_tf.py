@@ -87,11 +87,15 @@ def trait_set(value: object) -> set[str] | None:
 
 def safe_weights(values: np.ndarray) -> np.ndarray:
     values = np.asarray(values, dtype=np.float64)
-    return np.where(np.isfinite(values) & (values > 0), values, 1.0)
+    if not np.isfinite(values).all() or np.any(values <= 0):
+        raise ValueError("Model weights must be finite and strictly positive")
+    return values
 
 
 def weighted_mean_std(values: np.ndarray, weights: np.ndarray) -> tuple[float, float]:
     values = np.asarray(values, dtype=np.float64)
+    if not np.isfinite(values).all():
+        raise ValueError("Trait values must be finite before scaling")
     weights = safe_weights(weights)
     mean = float(np.sum(values * weights) / np.sum(weights))
     variance = float(np.sum(weights * np.square(values - mean)) / np.sum(weights))
@@ -102,8 +106,12 @@ def regression_metrics(y_true: np.ndarray, y_pred: np.ndarray, weights: np.ndarr
     y_true = np.asarray(y_true, dtype=np.float64)
     y_pred = np.asarray(y_pred, dtype=np.float64)
     weights = safe_weights(weights)
-    valid = np.isfinite(y_true) & np.isfinite(y_pred)
-    y_true, y_pred, weights = y_true[valid], y_pred[valid], weights[valid]
+    if not np.isfinite(y_true).all():
+        raise ValueError("Evaluation targets contain non-finite values")
+    if not np.isfinite(y_pred).all():
+        raise ValueError("Model predictions contain non-finite values")
+    if len(y_true) == 0:
+        raise ValueError("Cannot calculate metrics for an empty evaluation set")
     error = y_pred - y_true
     weighted_rmse = float(np.sqrt(np.sum(weights * np.square(error)) / np.sum(weights)))
     weighted_mae = float(np.sum(weights * np.abs(error)) / np.sum(weights))
@@ -575,6 +583,13 @@ def main() -> None:
     tf.config.threading.set_inter_op_parallelism_threads(args.inter_op_threads)
 
     ledger = read_table(args.ledger)
+    for column in ["phenotype_value", "weight_g_e"]:
+        ledger[column] = pd.to_numeric(ledger[column], errors="coerce")
+        values = ledger[column].to_numpy(dtype=np.float64)
+        if not np.isfinite(values).all():
+            raise SystemExit(f"Ledger column {column} contains non-finite values")
+    if np.any(ledger["weight_g_e"].to_numpy(dtype=np.float64) <= 0):
+        raise SystemExit("Ledger weight_g_e contains non-positive values")
     trait_order = pd.read_csv(args.trait_order, sep="\t")
     if args.trait:
         requested = {value.strip().upper() for value in args.trait}
@@ -727,6 +742,15 @@ def main() -> None:
                 encoding="utf-8",
             )
 
+    for factor, (_, spec) in zip(factors, registry.iterrows()):
+        if factor.ndim != 2 or factor.shape[0] != int(spec["dimension"]):
+            raise SystemExit(
+                f"Kernel factor shape mismatch for {spec['kernel']}: "
+                f"factor={factor.shape}; expected rows={spec['dimension']}"
+            )
+        if not np.isfinite(factor).all():
+            raise SystemExit(f"Kernel factors contain non-finite values: {spec['kernel']}")
+
     expert_specs = registry.to_dict("records")
     model = MultiTraitKernelExperts(
         expert_specs,
@@ -762,6 +786,8 @@ def main() -> None:
             float(train_step(inputs, target, weight).numpy())
             for inputs, target, weight in train_dataset
         ]
+        if not losses or not np.isfinite(losses).all():
+            raise RuntimeError(f"Training produced a non-finite loss at epoch {epoch}")
         val_prediction_scaled = predict_scaled(model, val, expert_columns, args.batch_size)
         val_score = macro_standardized_rmse(val.reset_index(drop=True), val_prediction_scaled)
         history_rows.append(

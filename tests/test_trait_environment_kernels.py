@@ -12,6 +12,7 @@ from build_dth_env_features_v2 import (
     build_window_features,
     feature_export_frame,
     kernel_from_features,
+    zscore_with_missing,
 )
 from fetch_dth_api_weather_windows import build_window_manifest, parse_window
 from server_training_pipeline.prepare_multitrait_kernel_registry import (
@@ -75,6 +76,38 @@ def test_feature_kernel_is_symmetric_unit_diagonal_and_psd() -> None:
     np.testing.assert_allclose(kernel, kernel.T, atol=1e-7)
     np.testing.assert_allclose(np.diag(kernel), np.ones(3), atol=1e-7)
     assert float(np.linalg.eigvalsh(kernel).min()) >= -1e-6
+
+
+def test_nonfinite_features_are_imputed_flagged_or_dropped_explicitly() -> None:
+    features = pd.DataFrame(
+        {
+            "partly_finite": [1.0, np.inf, 3.0],
+            "all_invalid": [np.inf, -np.inf, np.nan],
+            "constant": [2.0, 2.0, 2.0],
+        },
+        index=["e1", "e2", "e3"],
+    )
+    standardized, scaling = zscore_with_missing(features)
+    assert standardized.columns.tolist() == [
+        "partly_finite",
+        "partly_finite__missing",
+    ]
+    assert np.isfinite(standardized.to_numpy()).all()
+    status = scaling.set_index("feature")["status"].to_dict()
+    assert status == {
+        "partly_finite": "retained",
+        "all_invalid": "dropped_no_finite_values",
+        "constant": "dropped_zero_variance",
+    }
+    partly = scaling.set_index("feature").loc["partly_finite"]
+    assert partly["n_positive_inf"] == 1
+    assert partly["n_missing_or_invalid"] == 1
+    assert bool(partly["missing_indicator_added"])
+
+
+def test_kernel_builder_rejects_nonfinite_standardized_input() -> None:
+    with pytest.raises(ValueError, match="non-finite"):
+        kernel_from_features(pd.DataFrame({"x": [0.0, np.inf]}))
 
 
 def test_feature_export_consolidates_blocks_and_preserves_environment_order() -> None:

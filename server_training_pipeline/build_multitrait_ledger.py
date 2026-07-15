@@ -127,8 +127,13 @@ def main() -> None:
         observations = observations[
             observations["trait_name_canonical"].str.upper().isin(requested)
         ].copy()
-    observations["phenotype_value"] = pd.to_numeric(observations["phenotype_value"], errors="coerce")
-    observations = observations[observations["phenotype_value"].notna()].copy()
+    input_observation_rows = len(observations)
+    observations["phenotype_value"] = pd.to_numeric(
+        observations["phenotype_value"], errors="coerce"
+    ).replace([np.inf, -np.inf], np.nan)
+    finite_phenotype = np.isfinite(observations["phenotype_value"].to_numpy(dtype=float))
+    removed_nonfinite_phenotype_rows = int((~finite_phenotype).sum())
+    observations = observations[finite_phenotype].copy()
 
     trait_counts = observations["trait_name_canonical"].value_counts()
     retained_traits = sorted(trait_counts[trait_counts >= args.min_trait_rows].index.tolist())
@@ -145,6 +150,11 @@ def main() -> None:
         min_effective_sample_fraction=args.weight_min_effective_sample_fraction,
         max_top_1pct_share=args.weight_max_top_1pct_share,
     )
+    stabilized_weights = pd.to_numeric(observations["weight_g_e"], errors="coerce").to_numpy(
+        dtype=float
+    )
+    if not np.isfinite(stabilized_weights).all() or np.any(stabilized_weights <= 0):
+        raise SystemExit("Weight stabilization produced non-finite or non-positive weights")
     if (weight_qc["effective_sample_fraction"] + 1e-12 < args.weight_min_effective_sample_fraction).any():
         raise SystemExit("Stabilized weights failed the configured effective-sample-size floor")
     if (weight_qc["top_1pct_weight_share"] > args.weight_max_top_1pct_share + 1e-12).any():
@@ -193,6 +203,11 @@ def main() -> None:
     summary = pd.DataFrame(
         [
             {"metric": "rows", "value": len(observations)},
+            {"metric": "input_observation_rows", "value": input_observation_rows},
+            {
+                "metric": "removed_nonfinite_phenotype_rows",
+                "value": removed_nonfinite_phenotype_rows,
+            },
             {"metric": "traits", "value": len(trait_order)},
             {"metric": "genotypes", "value": observations["geno_compact_index"].nunique()},
             {"metric": "environments", "value": observations["env_compact_index"].nunique()},

@@ -50,13 +50,13 @@ def test_multitrait_ledger_maps_source_indices_and_writes_lineage(tmp_path: Path
     prefix = "toy"
     observations = pd.DataFrame(
         {
-            "canonical_observation_id": ["o1", "o2", "o3", "o4"],
-            "trait_name_canonical": ["A", "A", "B", "B"],
-            "phenotype_value": [1.0, 2.0, 3.0, 4.0],
-            "var_g_e": [0.1, 0.2, 0.3, 0.4],
-            "weight_g_e": [10.0, 5.0, 10 / 3, 2.5],
-            "geno_kernel_index": [10, 20, 10, 20],
-            "env_kernel_index": [5, 5, 8, 8],
+            "canonical_observation_id": ["o1", "o2", "o3", "o4", "o5"],
+            "trait_name_canonical": ["A", "A", "B", "B", "A"],
+            "phenotype_value": [1.0, 2.0, 3.0, 4.0, np.inf],
+            "var_g_e": [0.1, 0.2, 0.3, 0.4, 0.2],
+            "weight_g_e": [10.0, 5.0, 10 / 3, 2.5, 5.0],
+            "geno_kernel_index": [10, 20, 10, 20, 10],
+            "env_kernel_index": [5, 5, 8, 8, 5],
         }
     )
     observations.to_csv(
@@ -113,3 +113,6 @@ def test_multitrait_ledger_maps_source_indices_and_writes_lineage(tmp_path: Path
     )
     lineage = json.loads((out_dir / "toy_multitrait_lineage.json").read_text(encoding="utf-8"))
     assert lineage["output_rows"] == 4
+    summary = pd.read_csv(out_dir / "toy_multitrait_ledger_summary.tsv", sep="\t")
+    summary_values = dict(zip(summary["metric"], summary["value"]))
+    assert int(summary_values["removed_nonfinite_phenotype_rows"]) == 1

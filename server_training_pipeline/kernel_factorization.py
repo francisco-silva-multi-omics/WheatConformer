@@ -36,6 +36,8 @@ def kernel_factors(
     K = np.load(path).astype(np.float64)
     if K.ndim != 2 or K.shape[0] != K.shape[1]:
         raise ValueError(f"Kernel must be square: {path} has shape {K.shape}")
+    if not np.isfinite(K).all():
+        raise ValueError(f"Kernel contains non-finite values: {path}")
     K = (K + K.T) / 2.0
     if jitter > 0:
         K.flat[:: K.shape[0] + 1] += jitter
@@ -95,7 +97,10 @@ def kernel_factors(
         "kernel_dimension": int(K.shape[0]),
         "kernel_centered": str(bool(center)).lower(),
     }
-    return factors.astype(np.float32), metadata
+    factors = factors.astype(np.float32)
+    if not np.isfinite(factors).all():
+        raise ValueError(f"Kernel factorization produced non-finite values: {path}")
+    return factors, metadata
 
 
 def top_factors(path: Path, rank: int, jitter: float = 0.0) -> np.ndarray:
