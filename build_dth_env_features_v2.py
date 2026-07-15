@@ -215,6 +215,13 @@ def kernel_from_features(z: pd.DataFrame) -> np.ndarray:
     return ((K + K.T) / 2).astype(np.float32)
 
 
+def feature_export_frame(z: pd.DataFrame) -> pd.DataFrame:
+    """Consolidate feature blocks before adding the environment ID column."""
+    exported = z.copy()
+    exported.index.name = "env_id"
+    return exported.reset_index()
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Build DTH-specific environment features and K_E variant.")
     parser.add_argument("--base-model-dir", type=Path, default=Path("model_kernels/stage1_pedigree_env"))
@@ -245,8 +252,11 @@ def main() -> None:
         shutil.rmtree(args.out_model_dir)
     shutil.copytree(args.base_model_dir, args.out_model_dir)
     np.save(args.out_model_dir / f"{args.prefix}_K_E_unique.npy", K)
-    z.reset_index(names="env_id").to_parquet(args.out_model_dir / f"{args.prefix}_DTH_env_features_v2.parquet", index=False)
-    z.reset_index(names="env_id").to_csv(
+    exported_features = feature_export_frame(z)
+    exported_features.to_parquet(
+        args.out_model_dir / f"{args.prefix}_DTH_env_features_v2.parquet", index=False
+    )
+    exported_features.to_csv(
         args.out_model_dir / f"{args.prefix}_DTH_env_features_v2.tsv.gz", sep="\t", index=False
     )
     scaling.to_csv(args.out_model_dir / f"{args.prefix}_DTH_env_features_v2_scaling.tsv", sep="\t", index=False)

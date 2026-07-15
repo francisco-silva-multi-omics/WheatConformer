@@ -13,6 +13,7 @@ from build_dth_env_features_v2 import (
     build_geo,
     build_observed_envdata,
     build_window_features,
+    feature_export_frame,
     kernel_from_features,
     read_order,
     zscore_with_missing,
@@ -270,8 +271,9 @@ def main() -> None:
         feature_path = args.out_dir / f"{kernel_name}_features.parquet"
         np.save(kernel_path, kernel)
         order.to_csv(kernel_order_path, sep="\t", index=False)
-        z.reset_index(names="env_id").to_parquet(feature_path, index=False)
-        z.reset_index(names="env_id").to_csv(
+        exported_features = feature_export_frame(z)
+        exported_features.to_parquet(feature_path, index=False)
+        exported_features.to_csv(
             args.out_dir / f"{kernel_name}_features.tsv.gz", sep="\t", index=False
         )
         scaling.to_csv(args.out_dir / f"{kernel_name}_scaling.tsv", sep="\t", index=False)

@@ -8,7 +8,11 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from build_dth_env_features_v2 import build_window_features, kernel_from_features
+from build_dth_env_features_v2 import (
+    build_window_features,
+    feature_export_frame,
+    kernel_from_features,
+)
 from fetch_dth_api_weather_windows import build_window_manifest, parse_window
 from server_training_pipeline.prepare_multitrait_kernel_registry import (
     load_trait_environment_candidates,
@@ -71,6 +75,15 @@ def test_feature_kernel_is_symmetric_unit_diagonal_and_psd() -> None:
     np.testing.assert_allclose(kernel, kernel.T, atol=1e-7)
     np.testing.assert_allclose(np.diag(kernel), np.ones(3), atol=1e-7)
     assert float(np.linalg.eigvalsh(kernel).min()) >= -1e-6
+
+
+def test_feature_export_consolidates_blocks_and_preserves_environment_order() -> None:
+    features = pd.DataFrame({"a": [1.0, 2.0]}, index=["e2", "e1"])
+    features["b"] = [3.0, 4.0]
+    exported = feature_export_frame(features)
+    assert exported.columns.tolist() == ["env_id", "a", "b"]
+    assert exported["env_id"].tolist() == ["e2", "e1"]
+    np.testing.assert_allclose(exported[["a", "b"]], features[["a", "b"]])
 
 
 def test_trait_environment_manifest_is_loaded_as_opt_in(tmp_path: Path) -> None:
