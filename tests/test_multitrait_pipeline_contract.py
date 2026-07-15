@@ -28,6 +28,8 @@ def test_multitrait_trainer_is_joint_and_requires_certification() -> None:
     assert "trait_balanced_loss_weights" in source
     assert "train_nystrom" in source
     assert "MultiTraitKernelExperts" in source
+    assert "initialization_seed" in source
+    assert "seed=self.initialization_seed + self._initializer_index" in source
 
 
 def test_multitrait_ledger_uses_canonical_ids_and_explicit_compact_mapping() -> None:

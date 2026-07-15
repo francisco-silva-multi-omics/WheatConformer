@@ -162,6 +162,7 @@ class MultiTraitKernelExperts(tf.keras.Model):
         include_interaction: bool,
         learn_kernel_gates: bool,
         weight_decay: float,
+        initialization_seed: int,
     ) -> None:
         super().__init__()
         self.expert_specs = expert_specs
@@ -169,10 +170,11 @@ class MultiTraitKernelExperts(tf.keras.Model):
         self.trait_names = trait_names
         self.learn_kernel_gates = bool(learn_kernel_gates)
         self.weight_decay = float(weight_decay)
+        self.initialization_seed = int(initialization_seed)
+        self._initializer_index = 0
         self.intercept = self.add_weight(
             name="trait_intercept", shape=(len(trait_names),), initializer="zeros"
         )
-        initializer = tf.keras.initializers.RandomNormal(stddev=0.02)
 
         self.main_projection: list[tf.Variable | None] = []
         self.main_trait: list[tf.Variable | None] = []
@@ -190,14 +192,14 @@ class MultiTraitKernelExperts(tf.keras.Model):
                     self.add_weight(
                         name=f"{name}_main_projection",
                         shape=(factor.shape[1], latent_dim),
-                        initializer=initializer,
+                        initializer=self._random_normal_initializer(),
                     )
                 )
                 self.main_trait.append(
                     self.add_weight(
                         name=f"{name}_trait_main",
                         shape=(len(trait_names), latent_dim),
-                        initializer=initializer,
+                        initializer=self._random_normal_initializer(),
                     )
                 )
                 self.main_term_index[expert_index] = len(self.term_names)
@@ -227,7 +229,7 @@ class MultiTraitKernelExperts(tf.keras.Model):
                 self.interaction_projection[expert_index] = self.add_weight(
                     name=f"{name}_interaction_projection",
                     shape=(factors[expert_index].shape[1], latent_dim),
-                    initializer=initializer,
+                    initializer=self._random_normal_initializer(),
                 )
             for genotype_index in genotype_indices:
                 for environment_index in environment_indices:
@@ -239,7 +241,7 @@ class MultiTraitKernelExperts(tf.keras.Model):
                         self.add_weight(
                             name=f"{pair_name}_trait_interaction",
                             shape=(len(trait_names), latent_dim),
-                            initializer=initializer,
+                            initializer=self._random_normal_initializer(),
                         )
                     )
                     self.term_names.append(f"{g_name}x{e_name}")
@@ -265,6 +267,13 @@ class MultiTraitKernelExperts(tf.keras.Model):
             )
             if self.learn_kernel_gates
             else None
+        )
+
+    def _random_normal_initializer(self) -> tf.keras.initializers.RandomNormal:
+        self._initializer_index += 1
+        return tf.keras.initializers.RandomNormal(
+            stddev=0.02,
+            seed=self.initialization_seed + self._initializer_index,
         )
 
     def _eligibility_vector(self, spec: dict[str, object]) -> np.ndarray:
@@ -729,6 +738,7 @@ def main() -> None:
         include_interaction=not args.no_interaction,
         learn_kernel_gates=not args.fixed_kernel_gates,
         weight_decay=args.weight_decay,
+        initialization_seed=args.seed,
     )
     optimizer = tf.keras.optimizers.Adam(args.learning_rate)
     train_dataset = make_dataset(train, expert_columns, args.batch_size, True, args.seed)
@@ -866,6 +876,12 @@ def main() -> None:
         "include_environment_main": not args.no_environment_main,
         "model_label": args.model_label,
         "learn_kernel_gates": not args.fixed_kernel_gates,
+        "parameter_initialization": {
+            "distribution": "RandomNormal",
+            "stddev": 0.02,
+            "seed_policy": "run_seed_plus_variable_index",
+            "run_seed": args.seed,
+        },
         "traits": retained_trait_names,
         "rows": {"train": len(train), "val": len(val), "test": len(test)},
         "active_kernels": registry["kernel"].tolist(),
