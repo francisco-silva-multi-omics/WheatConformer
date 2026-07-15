@@ -138,8 +138,11 @@ trained_models/multitrait_quantitative_*_seed*/*_vs_train_mean.tsv
 trained_models/model_comparisons/multitrait_quantitative_*summary.tsv
 ```
 
-All model selection must consider both weighted and unweighted RMSE. Metrics
-are emitted for all observations, marker-available observations, and
+Primary cross-trait architecture selection uses validation normalized RMSE
+(`unweighted_rmse / true_sd`) because raw RMSE units differ across traits.
+Per-trait reports retain weighted and unweighted RMSE, Pearson correlation,
+and prediction/target standard-deviation ratio. Metrics are emitted for all
+observations, marker-available observations, and
 pedigree-only observations. This prevents a gain confined to HMP/GBS material
 from being hidden by the larger pedigree subset, or being incorrectly claimed
 for ungenotyped material.

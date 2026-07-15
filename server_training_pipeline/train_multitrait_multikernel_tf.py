@@ -114,15 +114,19 @@ def regression_metrics(y_true: np.ndarray, y_pred: np.ndarray, weights: np.ndarr
         if len(y_true) > 1 and np.std(y_true) > 0 and np.std(y_pred) > 0
         else float("nan")
     )
+    true_sd = float(np.std(y_true, ddof=1)) if len(y_true) > 1 else 0.0
+    pred_sd = float(np.std(y_pred, ddof=1)) if len(y_pred) > 1 else 0.0
     return {
         "n": int(len(y_true)),
         "weighted_rmse": weighted_rmse,
         "weighted_mae": weighted_mae,
         "unweighted_rmse": unweighted_rmse,
         "unweighted_mae": unweighted_mae,
+        "normalized_rmse": unweighted_rmse / true_sd if true_sd > 0 else float("nan"),
         "pearson": pearson,
-        "true_sd": float(np.std(y_true, ddof=1)) if len(y_true) > 1 else 0.0,
-        "pred_sd": float(np.std(y_pred, ddof=1)) if len(y_pred) > 1 else 0.0,
+        "true_sd": true_sd,
+        "pred_sd": pred_sd,
+        "prediction_sd_ratio": pred_sd / true_sd if true_sd > 0 else float("nan"),
     }
 
 
@@ -796,14 +800,20 @@ def main() -> None:
     all_metrics = metrics_frame[metrics_frame["coverage_group"].eq("all")]
     macro = (
         all_metrics.groupby(["split", "model"])[
-            ["weighted_rmse", "unweighted_rmse", "pearson"]
+            ["weighted_rmse", "unweighted_rmse", "normalized_rmse", "pearson", "prediction_sd_ratio"]
         ]
         .mean()
         .reset_index()
         .rename(
             columns={
                 column: f"macro_{column}"
-                for column in ["weighted_rmse", "unweighted_rmse", "pearson"]
+                for column in [
+                    "weighted_rmse",
+                    "unweighted_rmse",
+                    "normalized_rmse",
+                    "pearson",
+                    "prediction_sd_ratio",
+                ]
             }
         )
     )
@@ -820,6 +830,9 @@ def main() -> None:
     )
     improvement["unweighted_rmse_improvement"] = (
         improvement["unweighted_rmse_train_mean"] - improvement["unweighted_rmse_model"]
+    )
+    improvement["normalized_rmse_improvement"] = (
+        improvement["normalized_rmse_train_mean"] - improvement["normalized_rmse_model"]
     )
     predictions = pd.concat(prediction_outputs, ignore_index=True)
     history = pd.DataFrame(history_rows)

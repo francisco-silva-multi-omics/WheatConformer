@@ -4,6 +4,7 @@ import argparse
 import json
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 
@@ -25,12 +26,30 @@ def main() -> None:
             continue
         metadata = json.loads(metadata_paths[0].read_text(encoding="utf-8"))
         metrics = pd.read_csv(metric_paths[0], sep="\t")
+        if "normalized_rmse" not in metrics.columns:
+            denominator = pd.to_numeric(metrics["true_sd"], errors="coerce").replace(0, np.nan)
+            metrics["normalized_rmse"] = (
+                pd.to_numeric(metrics["unweighted_rmse"], errors="coerce") / denominator
+            )
+        if "prediction_sd_ratio" not in metrics.columns:
+            denominator = pd.to_numeric(metrics["true_sd"], errors="coerce").replace(0, np.nan)
+            metrics["prediction_sd_ratio"] = (
+                pd.to_numeric(metrics["pred_sd"], errors="coerce") / denominator
+            )
         metrics.insert(0, "model_label", metadata["model_label"])
         metrics.insert(0, "seed", metadata["seed"])
         metrics.insert(0, "run_dir", str(run_dir))
         metric_frames.append(metrics)
         if len(improvement_paths) == 1:
             improvement = pd.read_csv(improvement_paths[0], sep="\t")
+            if "normalized_rmse_improvement" not in improvement.columns:
+                model_sd = pd.to_numeric(
+                    improvement["true_sd_model"], errors="coerce"
+                ).replace(0, np.nan)
+                improvement["normalized_rmse_improvement"] = (
+                    pd.to_numeric(improvement["unweighted_rmse_train_mean"], errors="coerce")
+                    - pd.to_numeric(improvement["unweighted_rmse_model"], errors="coerce")
+                ) / model_sd
             improvement.insert(0, "model_label", metadata["model_label"])
             improvement.insert(0, "seed", metadata["seed"])
             improvement.insert(0, "run_dir", str(run_dir))
@@ -42,7 +61,13 @@ def main() -> None:
     all_metrics.to_csv(args.out_dir / "multitrait_quantitative_all_runs.tsv", sep="\t", index=False)
     summary = (
         all_metrics.groupby(["split", "coverage_group", "model_label", "model", "trait_name_canonical"])[
-            ["weighted_rmse", "unweighted_rmse", "pearson"]
+            [
+                "weighted_rmse",
+                "unweighted_rmse",
+                "normalized_rmse",
+                "pearson",
+                "prediction_sd_ratio",
+            ]
         ]
         .agg(["count", "mean", "std", "min", "max"])
         .reset_index()
@@ -62,7 +87,12 @@ def main() -> None:
             all_improvement.groupby(
                 ["split", "coverage_group", "model_label", "trait_name_canonical"]
             )[
-                ["weighted_rmse_improvement", "unweighted_rmse_improvement", "pearson_model"]
+                [
+                    "weighted_rmse_improvement",
+                    "unweighted_rmse_improvement",
+                    "normalized_rmse_improvement",
+                    "pearson_model",
+                ]
             ]
             .agg(["count", "mean", "std", "min", "max"])
             .reset_index()
