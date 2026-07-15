@@ -25,6 +25,7 @@ def main() -> None:
             continue
         metadata = json.loads(metadata_paths[0].read_text(encoding="utf-8"))
         metrics = pd.read_csv(metric_paths[0], sep="\t")
+        metrics.insert(0, "model_label", metadata["model_label"])
         metrics.insert(0, "seed", metadata["seed"])
         metrics.insert(0, "run_dir", str(run_dir))
         metric_frames.append(metrics)
@@ -40,7 +41,7 @@ def main() -> None:
     all_metrics = pd.concat(metric_frames, ignore_index=True)
     all_metrics.to_csv(args.out_dir / "multitrait_quantitative_all_runs.tsv", sep="\t", index=False)
     summary = (
-        all_metrics.groupby(["split", "coverage_group", "model", "trait_name_canonical"])[
+        all_metrics.groupby(["split", "coverage_group", "model_label", "model", "trait_name_canonical"])[
             ["weighted_rmse", "unweighted_rmse", "pearson"]
         ]
         .agg(["count", "mean", "std", "min", "max"])

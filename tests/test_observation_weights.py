@@ -49,3 +49,38 @@ def test_normalized_precision_weights_are_invariant_to_variance_units() -> None:
 
 def test_effective_sample_size_matches_equal_weight_count() -> None:
     assert effective_sample_size(np.ones(12)) == 12.0
+
+
+def test_extreme_precision_weights_are_tempered_to_concentration_limits() -> None:
+    frame = pd.DataFrame(
+        {
+            "trait_name_canonical": ["A"] * 1000,
+            "var_g_e": np.geomspace(1e-30, 1.0, 1000),
+        }
+    )
+
+    output, qc = stabilize_precision_weights(
+        frame,
+        min_effective_sample_fraction=0.25,
+        max_top_1pct_share=0.10,
+    )
+
+    assert np.isfinite(output["weight_g_e"]).all()
+    assert qc.loc[0, "effective_sample_fraction"] >= 0.25 - 1e-10
+    assert qc.loc[0, "top_1pct_weight_share"] <= 0.10 + 1e-10
+    assert bool(qc.loc[0, "weight_power_tempered"])
+    assert 0 < qc.loc[0, "effective_weight_power"] < 1
+
+
+def test_zero_power_produces_uniform_trait_weights() -> None:
+    frame = pd.DataFrame(
+        {
+            "trait_name_canonical": ["A"] * 100,
+            "var_g_e": np.geomspace(1e-20, 1.0, 100),
+        }
+    )
+
+    output, qc = stabilize_precision_weights(frame, weight_power=0.0)
+
+    np.testing.assert_allclose(output["weight_g_e"], np.ones(100))
+    assert qc.loc[0, "effective_sample_fraction"] == 1.0

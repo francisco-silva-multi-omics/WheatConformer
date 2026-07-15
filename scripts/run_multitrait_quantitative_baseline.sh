@@ -7,8 +7,9 @@ cd "$ROOT"
 PYTHON="${PYTHON:-python}"
 MODEL_DIR="${MULTITRAIT_MODEL_DIR:-model_kernels/stage1_pedigree_env}"
 MODEL_PREFIX="${MULTITRAIT_MODEL_PREFIX:-stage1_pedigree_env}"
-LEDGER_DIR="${MULTITRAIT_LEDGER_DIR:-model_kernels/multitrait_pedigree_env}"
-LEDGER_PREFIX="${MULTITRAIT_LEDGER_PREFIX:-multitrait_pedigree}"
+VARIANT="${MULTITRAIT_VARIANT:-ess25}"
+LEDGER_DIR="${MULTITRAIT_LEDGER_DIR:-model_kernels/multitrait_pedigree_env_${VARIANT}}"
+LEDGER_PREFIX="${MULTITRAIT_LEDGER_PREFIX:-multitrait_pedigree_${VARIANT}}"
 EXPERT_DIR="${MULTITRAIT_EXPERT_DIR:-model_kernels/multitrait_kernel_experts}"
 HMP_MODEL_DIR="${MULTITRAIT_HMP_MODEL_DIR:-model_kernels/stage1_hmp_env_ke_diag_norm}"
 GBS_MODEL_DIR="${MULTITRAIT_GBS_MODEL_DIR:-model_kernels/stage1_gbs_sawyt_env_ke_diag_norm}"
@@ -47,6 +48,9 @@ log "START build multi-trait ledger"
   --weight-var-floor-quantile "${MULTITRAIT_WEIGHT_VAR_FLOOR_QUANTILE:-0.01}" \
   --weight-missing-var-quantile "${MULTITRAIT_WEIGHT_MISSING_VAR_QUANTILE:-0.75}" \
   --weight-clip-quantile "${MULTITRAIT_WEIGHT_CLIP_QUANTILE:-0.99}" \
+  --weight-power "${MULTITRAIT_WEIGHT_POWER:-1.0}" \
+  --weight-min-effective-sample-fraction "${MULTITRAIT_WEIGHT_MIN_ESS_FRACTION:-0.25}" \
+  --weight-max-top-1pct-share "${MULTITRAIT_WEIGHT_MAX_TOP_1PCT_SHARE:-0.10}" \
   --write-tsv \
   "${trait_args[@]}"
 log "DONE build multi-trait ledger"
@@ -88,23 +92,23 @@ for seed in "${seed_values[@]}"; do
     extra_args=()
     case "$mode" in
       env)
-        model_label="multitrait_environment_components"
+        model_label="multitrait_${VARIANT}_environment_components"
         extra_args+=(--no-genotype-main --no-interaction)
         ;;
       additive)
-        model_label="multitrait_KA_KG_KE"
+        model_label="multitrait_${VARIANT}_KA_KG_KE"
         extra_args+=(--no-interaction)
         ;;
       full)
-        model_label="multitrait_KA_KG_KE_GxE"
+        model_label="multitrait_${VARIANT}_KA_KG_KE_GxE"
         ;;
       *)
         echo "Unsupported MULTITRAIT_MODES entry: $mode" >&2
         exit 2
         ;;
     esac
-    run_dir="trained_models/multitrait_quantitative_${mode}_seed${seed}"
-    prefix="multitrait_quantitative_${mode}_seed${seed}"
+    run_dir="trained_models/multitrait_quantitative_${VARIANT}_${mode}_seed${seed}"
+    prefix="multitrait_quantitative_${VARIANT}_${mode}_seed${seed}"
     if [[ "$FORCE" != "1" && -s "$run_dir/${prefix}_trait_metrics.tsv" ]]; then
       log "SKIP seed=$seed mode=$mode: metrics exist"
       continue

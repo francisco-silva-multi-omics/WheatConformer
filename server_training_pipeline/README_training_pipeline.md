@@ -90,6 +90,20 @@ export MULTITRAIT_MODES=full
 bash scripts/run_multitrait_quantitative_baseline.sh .
 ```
 
+The default `ess25` variant tempers inverse-variance weights separately for
+each trait. It uses the largest precision-weight exponent that keeps effective
+sample size at or above 25% and the top 1% of observations at or below 10% of
+total trait weight. The ledger build fails if either invariant is violated.
+Run an explicitly uniform-loss sensitivity analysis without overwriting it:
+
+```bash
+export MULTITRAIT_VARIANT=uniform
+export MULTITRAIT_WEIGHT_POWER=0
+export MULTITRAIT_WEIGHT_MIN_ESS_FRACTION=1
+export MULTITRAIT_WEIGHT_MAX_TOP_1PCT_SHARE=0.02
+bash scripts/run_multitrait_quantitative_baseline.sh .
+```
+
 Then run paired environment-only, additive, and interaction models over four
 seeds. Kernel factors are cached per seed and reused across the three models.
 The comparison therefore tests environment components alone, environment plus
@@ -112,12 +126,12 @@ test support are recorded and excluded before fitting.
 Primary outputs:
 
 ```text
-model_kernels/multitrait_pedigree_env/*_observations.parquet
-model_kernels/multitrait_pedigree_env/*_weight_qc.tsv
+model_kernels/multitrait_pedigree_env_<variant>/*_observations.parquet
+model_kernels/multitrait_pedigree_env_<variant>/*_weight_qc.tsv
 model_kernels/multitrait_kernel_experts/multitrait_kernel_registry.tsv
 model_kernels/multitrait_kernel_experts/multitrait_kernel_preparation_qc.tsv
-model_kernels/multitrait_pedigree_env/certification/*
-trained_models/multitrait_quantitative_*_seed*/*_trait_metrics.tsv
+model_kernels/multitrait_pedigree_env_<variant>/certification/*
+trained_models/multitrait_quantitative_<variant>_*_seed*/*_trait_metrics.tsv
 trained_models/multitrait_quantitative_*_seed*/*_kernel_coverage.tsv
 trained_models/multitrait_quantitative_*_seed*/*_kernel_gates.tsv
 trained_models/multitrait_quantitative_*_seed*/*_vs_train_mean.tsv

@@ -86,6 +86,9 @@ def main() -> None:
     parser.add_argument("--weight-var-floor-quantile", type=float, default=0.01)
     parser.add_argument("--weight-missing-var-quantile", type=float, default=0.75)
     parser.add_argument("--weight-clip-quantile", type=float, default=0.99)
+    parser.add_argument("--weight-power", type=float, default=1.0)
+    parser.add_argument("--weight-min-effective-sample-fraction", type=float, default=0.0)
+    parser.add_argument("--weight-max-top-1pct-share", type=float, default=1.0)
     parser.add_argument("--write-tsv", action="store_true")
     args = parser.parse_args()
 
@@ -138,7 +141,14 @@ def main() -> None:
         floor_quantile=args.weight_var_floor_quantile,
         missing_variance_quantile=args.weight_missing_var_quantile,
         clip_quantile=args.weight_clip_quantile,
+        weight_power=args.weight_power,
+        min_effective_sample_fraction=args.weight_min_effective_sample_fraction,
+        max_top_1pct_share=args.weight_max_top_1pct_share,
     )
+    if (weight_qc["effective_sample_fraction"] + 1e-12 < args.weight_min_effective_sample_fraction).any():
+        raise SystemExit("Stabilized weights failed the configured effective-sample-size floor")
+    if (weight_qc["top_1pct_weight_share"] > args.weight_max_top_1pct_share + 1e-12).any():
+        raise SystemExit("Stabilized weights failed the configured top-1% concentration ceiling")
 
     g_order, g_source_to_compact, g_compact_to_id = load_compact_order(g_order_path, "sample_id")
     e_order, e_source_to_compact, e_compact_to_id = load_compact_order(e_order_path, "env_id")
@@ -189,6 +199,7 @@ def main() -> None:
             {"metric": "canonical_observation_id_duplicates", "value": int(duplicate_ids.sum())},
             {"metric": "source_to_compact_mapping_fraction", "value": float(mapped.mean())},
             {"metric": "minimum_trait_effective_sample_fraction", "value": float(weight_qc["effective_sample_fraction"].min())},
+            {"metric": "maximum_trait_top_1pct_weight_share", "value": float(weight_qc["top_1pct_weight_share"].max())},
         ]
     )
     summary.to_csv(out_dir / f"{args.out_prefix}_ledger_summary.tsv", sep="\t", index=False)
@@ -207,6 +218,9 @@ def main() -> None:
             "variance_floor_quantile": args.weight_var_floor_quantile,
             "missing_variance_quantile": args.weight_missing_var_quantile,
             "weight_clip_quantile": args.weight_clip_quantile,
+            "weight_power": args.weight_power,
+            "minimum_effective_sample_fraction": args.weight_min_effective_sample_fraction,
+            "maximum_top_1pct_weight_share": args.weight_max_top_1pct_share,
         },
     }
     (out_dir / f"{args.out_prefix}_lineage.json").write_text(

@@ -20,6 +20,63 @@ def effective_sample_size(weights: np.ndarray) -> float:
     return float(np.square(np.sum(weights)) / denominator) if denominator > 0 else 0.0
 
 
+def top_weight_share(weights: np.ndarray, fraction: float = 0.01) -> float:
+    weights = np.asarray(weights, dtype=np.float64)
+    weights = weights[np.isfinite(weights) & (weights > 0)]
+    if weights.size == 0:
+        return 0.0
+    top_n = max(1, int(np.ceil(weights.size * fraction)))
+    return float(np.sort(weights)[-top_n:].sum() / weights.sum())
+
+
+def _normalized_power_weights(weights: np.ndarray, power: float) -> np.ndarray:
+    powered = np.power(np.asarray(weights, dtype=np.float64), power)
+    mean_weight = float(np.mean(powered))
+    if not np.isfinite(mean_weight) or mean_weight <= 0:
+        raise ValueError("Weight tempering produced an invalid mean")
+    return powered / mean_weight
+
+
+def _temper_power_to_constraints(
+    weights: np.ndarray,
+    *,
+    requested_power: float,
+    min_effective_sample_fraction: float,
+    max_top_1pct_share: float,
+) -> tuple[np.ndarray, float]:
+    """Use the largest requested power that satisfies concentration limits."""
+
+    def valid(candidate: np.ndarray) -> bool:
+        ess_fraction = effective_sample_size(candidate) / len(candidate)
+        return (
+            ess_fraction + 1e-12 >= min_effective_sample_fraction
+            and top_weight_share(candidate) <= max_top_1pct_share + 1e-12
+        )
+
+    requested = _normalized_power_weights(weights, requested_power)
+    if valid(requested):
+        return requested, requested_power
+
+    uniform = _normalized_power_weights(weights, 0.0)
+    if not valid(uniform):
+        raise ValueError(
+            "Weight concentration constraints are impossible for this trait size: "
+            f"minimum ESS fraction={min_effective_sample_fraction}, "
+            f"maximum top-1% share={max_top_1pct_share}"
+        )
+
+    low = 0.0
+    high = requested_power
+    for _ in range(60):
+        midpoint = (low + high) / 2.0
+        candidate = _normalized_power_weights(weights, midpoint)
+        if valid(candidate):
+            low = midpoint
+        else:
+            high = midpoint
+    return _normalized_power_weights(weights, low), low
+
+
 def stabilize_precision_weights(
     frame: pd.DataFrame,
     *,
@@ -30,12 +87,18 @@ def stabilize_precision_weights(
     floor_quantile: float = 0.01,
     missing_variance_quantile: float = 0.75,
     clip_quantile: float = 0.99,
+    weight_power: float = 1.0,
+    min_effective_sample_fraction: float = 0.0,
+    max_top_1pct_share: float = 1.0,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Create robust, trait-normalized precision weights and per-trait QC."""
     for name, value in {
         "floor_quantile": floor_quantile,
         "missing_variance_quantile": missing_variance_quantile,
         "clip_quantile": clip_quantile,
+        "weight_power": weight_power,
+        "min_effective_sample_fraction": min_effective_sample_fraction,
+        "max_top_1pct_share": max_top_1pct_share,
     }.items():
         if not 0 <= value <= 1:
             raise ValueError(f"{name} must be in [0, 1]; found {value}")
@@ -80,18 +143,21 @@ def stabilize_precision_weights(
 
         weight_cap = _quantile(weights, clip_quantile, float(np.max(weights)))
         weights = np.minimum(weights, weight_cap)
-        mean_weight = float(np.mean(weights))
-        if not np.isfinite(mean_weight) or mean_weight <= 0:
-            raise ValueError(f"Trait {trait!r} produced invalid stabilized weights")
-        weights = weights / mean_weight
+        pre_temper_weights = _normalized_power_weights(weights, weight_power)
+        pre_temper_ess_fraction = effective_sample_size(pre_temper_weights) / len(pre_temper_weights)
+        pre_temper_top_share = top_weight_share(pre_temper_weights)
+        weights, effective_power = _temper_power_to_constraints(
+            weights,
+            requested_power=weight_power,
+            min_effective_sample_fraction=min_effective_sample_fraction,
+            max_top_1pct_share=max_top_1pct_share,
+        )
 
         adjusted_variance.loc[index] = working_variance
         stabilized.loc[index] = weights
         out.loc[index, "weight_variance_imputed"] = missing_mask
         out.loc[index, "weight_variance_floored"] = floor_mask & ~missing_mask
 
-        sorted_weights = np.sort(weights)[::-1]
-        top_n = max(1, int(np.ceil(len(sorted_weights) * 0.01)))
         ess = effective_sample_size(weights)
         qc_rows.append(
             {
@@ -103,13 +169,18 @@ def stabilize_precision_weights(
                 "variance_floor": variance_floor,
                 "missing_variance_fill": missing_fill,
                 "weight_cap_before_normalization": weight_cap,
+                "requested_weight_power": weight_power,
+                "effective_weight_power": effective_power,
+                "weight_power_tempered": bool(effective_power < weight_power - 1e-10),
+                "pre_temper_effective_sample_fraction": pre_temper_ess_fraction,
+                "pre_temper_top_1pct_weight_share": pre_temper_top_share,
                 "normalized_weight_mean": float(np.mean(weights)),
                 "normalized_weight_median": float(np.median(weights)),
                 "normalized_weight_p99": float(np.quantile(weights, 0.99)),
                 "normalized_weight_max": float(np.max(weights)),
                 "effective_sample_size": ess,
                 "effective_sample_fraction": ess / len(weights),
-                "top_1pct_weight_share": float(np.sum(sorted_weights[:top_n]) / np.sum(sorted_weights)),
+                "top_1pct_weight_share": top_weight_share(weights),
             }
         )
 
