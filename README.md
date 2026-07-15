@@ -101,6 +101,20 @@ After the smoke run, use `MULTITRAIT_SEEDS=2026,2027,2028,2029` and
 The legacy combined `K_E` is retained as a disabled reference rather than
 mixed with its component kernels by default.
 
+To build and certify fixed sowing-window environment candidates for days to
+maturity, grain yield, 1000-grain weight, and plant height, while also running
+the required direct DTH ablation, use:
+
+```bash
+export RUN_FETCH_TRAIT_WEATHER=1  # first run only; the request cache is resumable
+nohup bash scripts/run_trait_environment_kernel_ablation.sh . \
+  > logs/trait_environment_kernel_ablation.nohup.log 2>&1 &
+```
+
+Candidates remain opt-in until their four-seed validation decision passes.
+See `server_training_pipeline/README_training_pipeline.md` for windows and
+acceptance criteria.
+
 HMP QC thresholds can be overridden before core processing:
 
 ```bash

@@ -44,7 +44,19 @@ def read_order(path: Path) -> pd.DataFrame:
     order = pd.read_csv(path, sep="\t", dtype=str)
     id_col = "env_id" if "env_id" in order.columns else order.columns[0]
     order = order.rename(columns={id_col: "env_id"})
-    return order
+    order["env_id"] = order["env_id"].fillna("").astype(str).str.strip()
+    if order.empty:
+        raise SystemExit(f"{path} has no environment IDs")
+    if order["env_id"].eq("").any() or order["env_id"].duplicated().any():
+        raise SystemExit(f"{path} has empty or duplicate environment IDs")
+    if "compact_kernel_index" in order.columns:
+        compact = pd.to_numeric(order["compact_kernel_index"], errors="raise").astype(int)
+        if not np.array_equal(np.sort(compact), np.arange(len(order), dtype=int)):
+            raise SystemExit(f"{path} compact_kernel_index is not a zero-based permutation")
+        order = order.assign(compact_kernel_index=compact).sort_values(
+            "compact_kernel_index", kind="stable"
+        )
+    return order.reset_index(drop=True)
 
 
 def env_id_from_parts(df: pd.DataFrame) -> pd.Series:
@@ -134,16 +146,26 @@ def build_observed_envdata(envdata: pd.DataFrame, env_ids: pd.Series) -> pd.Data
     return wide
 
 
-def build_window_features(path: Path, env_ids: pd.Series) -> pd.DataFrame:
+def build_window_features(
+    path: Path,
+    env_ids: pd.Series,
+    *,
+    allowed_labels: set[str] | None = None,
+    allowed_metrics: set[str] | None = None,
+) -> pd.DataFrame:
     if not path.exists() or path.stat().st_size == 0:
         return pd.DataFrame(index=env_ids)
     x = pd.read_csv(path, sep="\t", dtype=str, low_memory=False)
     if "fetch_status" in x.columns:
         x = x[x["fetch_status"].astype(str).str.lower().eq("ok")].copy()
+    if allowed_labels is not None:
+        x = x[x["window_label"].astype(str).isin(allowed_labels)].copy()
     if x.empty:
         return pd.DataFrame(index=env_ids)
     id_cols = {"env_id", "window_label", "weather_request_id", "fetch_status", "window_start_date", "window_end_date"}
     numeric_cols = [c for c in x.columns if c not in id_cols]
+    if allowed_metrics is not None:
+        numeric_cols = [c for c in numeric_cols if c in allowed_metrics]
     for col in numeric_cols:
         x[col] = pd.to_numeric(x[col], errors="coerce")
     pieces = []

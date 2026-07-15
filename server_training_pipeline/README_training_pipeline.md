@@ -68,6 +68,10 @@ K_E_WEATHER
 K_E_STRESS
 K_E_MGMT
 K_E_DTH_V2 (DAYS_TO_HEADING only)
+K_E_DTM_V2 (DAYS_TO_MATURITY candidate; opt-in)
+K_E_GY_V2 (GRAIN_YIELD candidate; opt-in)
+K_E_TGW_V2 (1000_GRAIN_WEIGHT candidate; opt-in)
+K_E_PH_V2 (PLANT_HEIGHT candidate; opt-in)
 ```
 
 HMP and GBS remain separate marker spaces. Their experts are masked for rows
@@ -76,6 +80,9 @@ pedigree-only material. Environment components receive trait-specific gates.
 The DTH-v2 kernel is eligible only for `DAYS_TO_HEADING`; it cannot silently
 influence unrelated traits. The legacy equally weighted `K_E` is prepared as
 `K_E_GENERIC` for explicit comparison but is disabled in the default model.
+New trait-specific candidates are also disabled until the repeated-seed
+ablation accepts them. This keeps an unvalidated kernel from silently changing
+the main seven-trait baseline.
 
 Every source matrix is compacted to ledger IDs, diagonal-normalized, checked
 for symmetry/PSD/order/coverage, and bound to the run by SHA-256 identities.
@@ -147,7 +154,55 @@ pedigree-only observations. This prevents a gain confined to HMP/GBS material
 from being hidden by the larger pedigree subset, or being incorrectly claimed
 for ungenotyped material.
 
-## 2A. Legacy Single-Trait Multikernel GxE Baseline
+## 2A. Certify Trait-Specific Environment Kernels
+
+The DTH-specific expert must first be compared directly with the same model
+without `K_E_DTH_V2`. Candidate fixed-window experts are also built for days
+to maturity, grain yield, 1000-grain weight, and plant height. All windows are
+defined relative to sowing; phenotype dates or values never define an API
+window.
+
+```text
+DAYS_TO_MATURITY: 0-30, 30-60, 60-90, 90-120, 120-150, 150-180,
+                  0-120, 0-150, 0-180 days
+GRAIN_YIELD:      0-30, 30-60, 60-90, 90-120, 120-150, 150-180,
+                  0-90, 0-120, 0-150, 0-180 days
+1000_GRAIN_WEIGHT: 60-90, 90-120, 120-150, 150-180,
+                   0-120, 0-150, 0-180 days
+PLANT_HEIGHT:     0-30, 30-60, 60-90, 90-120, 0-90, 0-120 days
+```
+
+On the first server run, fetch the union of these NASA POWER windows and run
+the complete environment-only ablation:
+
+```bash
+export PYTHON="$HOME/tools/tf_wheat_cpu/bin/python"
+export RUN_FETCH_TRAIT_WEATHER=1
+export MULTITRAIT_SEEDS=2026,2027,2028,2029
+nohup bash scripts/run_trait_environment_kernel_ablation.sh . \
+  > logs/trait_environment_kernel_ablation.nohup.log 2>&1 &
+```
+
+Subsequent resumptions can omit `RUN_FETCH_TRAIT_WEATHER=1`. The weather fetch
+uses a resumable request cache. The pipeline builds one shared uniform-weight
+ledger, certifies every matrix and order, runs a generic control with all five
+specific experts excluded, and enables exactly one candidate at a time.
+
+The decision file is:
+
+```text
+trained_models/model_comparisons/trait_environment_kernel_ablation_decision.tsv
+```
+
+A candidate is accepted only when validation normalized RMSE improves by at
+least 2% or 0.02 absolute, it wins at least three of four seeds, mean Pearson
+does not fall by more than 0.02, and prediction-SD calibration does not worsen
+on average. Accepted experts can be enabled in the final quantitative model;
+rejected experts remain diagnostic. Trait inclusion is a separate decision:
+an accepted kernel strengthens evidence for its eligible trait but does not by
+itself add a poorly supported trait to the seven-trait family.
+
+## 2B. Legacy Single-Trait Multikernel GxE Baseline
 
 Run:
 

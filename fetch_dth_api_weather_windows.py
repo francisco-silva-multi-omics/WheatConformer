@@ -13,11 +13,9 @@ import numpy as np
 import pandas as pd
 
 
-BASE = Path(__file__).resolve().parent
-ENV = BASE / "environment"
 NASA_START = pd.Timestamp("1981-01-01")
 PARAMETERS = ["T2M", "T2M_MAX", "T2M_MIN", "RH2M", "PRECTOTCORR", "ALLSKY_SFC_SW_DWN", "WS2M"]
-WINDOWS = [(0, 30), (30, 60), (60, 90), (0, 90), (0, 120)]
+DTH_WINDOWS = [(0, 30), (30, 60), (60, 90), (0, 90), (0, 120)]
 
 
 def request_url(row: pd.Series) -> str:
@@ -37,7 +35,7 @@ def fetch_json(url: str, timeout: int = 90, retries: int = 4, sleep_seconds: flo
     last_error: Exception | None = None
     for attempt in range(retries):
         try:
-            req = urllib.request.Request(url, headers={"User-Agent": "dth-weather-window-fetch/1.0"})
+            req = urllib.request.Request(url, headers={"User-Agent": "wheat-trait-weather-window-fetch/1.0"})
             with urllib.request.urlopen(req, timeout=timeout) as response:
                 return json.loads(response.read().decode("utf-8"))
         except urllib.error.HTTPError as exc:
@@ -126,7 +124,30 @@ def write_row(row: dict[str, object], path: Path) -> None:
     pd.DataFrame([row]).to_csv(path, sep="\t", index=False, mode="a", header=not path.exists(), lineterminator="\n")
 
 
-def build_window_manifest(fetch_manifest: pd.DataFrame, env_filter: set[str] | None = None) -> pd.DataFrame:
+def parse_window(value: str) -> tuple[int, int]:
+    normalized = value.strip().replace(",", ":").replace("-", ":")
+    pieces = normalized.split(":")
+    if len(pieces) != 2:
+        raise argparse.ArgumentTypeError(
+            f"Window {value!r} must use START:END, for example 90:120"
+        )
+    try:
+        start, end = (int(piece) for piece in pieces)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"Window {value!r} contains a non-integer") from exc
+    if start < 0 or end <= start:
+        raise argparse.ArgumentTypeError(
+            f"Window {value!r} must satisfy 0 <= START < END"
+        )
+    return start, end
+
+
+def build_window_manifest(
+    fetch_manifest: pd.DataFrame,
+    env_filter: set[str] | None = None,
+    windows: list[tuple[int, int]] | None = None,
+) -> pd.DataFrame:
+    windows = windows or DTH_WINDOWS
     ready = fetch_manifest[fetch_manifest["ready_to_fetch"].astype(str).str.upper().eq("TRUE")].copy()
     if env_filter is not None:
         ready = ready[ready["env_id"].astype(str).isin(env_filter)].copy()
@@ -138,7 +159,7 @@ def build_window_manifest(fetch_manifest: pd.DataFrame, env_filter: set[str] | N
 
     rows = []
     for _, row in ready.iterrows():
-        for start, end in WINDOWS:
+        for start, end in windows:
             ws = row["sowing_date"] + pd.Timedelta(days=start)
             we = row["sowing_date"] + pd.Timedelta(days=end - 1)
             if we < NASA_START:
@@ -175,14 +196,25 @@ def build_window_manifest(fetch_manifest: pd.DataFrame, env_filter: set[str] | N
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Fetch DTH-specific fixed-window NASA POWER weather features.")
+    parser = argparse.ArgumentParser(
+        description="Fetch fixed sowing-relative NASA POWER weather features."
+    )
+    parser.add_argument("--environment-dir", type=Path, default=Path("environment"))
     parser.add_argument("--model-env-order", type=Path, default=None, help="Optional K_E order file limiting env_id values.")
     parser.add_argument("--workers", type=int, default=1)
     parser.add_argument("--limit", type=int)
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--sleep", type=float, default=0.1)
     parser.add_argument("--out-prefix", default="dth_api_weather_windows")
+    parser.add_argument(
+        "--window",
+        action="append",
+        type=parse_window,
+        help="Sowing-relative START:END day window; repeat for multiple windows.",
+    )
     args = parser.parse_args()
+    environment_dir = args.environment_dir.resolve()
+    windows = list(dict.fromkeys(args.window or DTH_WINDOWS))
 
     env_filter = None
     if args.model_env_order is not None and args.model_env_order.exists():
@@ -190,15 +222,21 @@ def main() -> None:
         id_col = "env_id" if "env_id" in order.columns else order.columns[0]
         env_filter = set(order[id_col].dropna().astype(str))
 
-    fetch_manifest = pd.read_csv(ENV / "trial_weather_fetch_manifest.tsv", sep="\t", dtype=str)
-    manifest = build_window_manifest(fetch_manifest, env_filter)
-    manifest_path = ENV / f"{args.out_prefix}_manifest.tsv"
+    fetch_manifest = pd.read_csv(
+        environment_dir / "trial_weather_fetch_manifest.tsv", sep="\t", dtype=str
+    )
+    manifest = build_window_manifest(fetch_manifest, env_filter, windows)
+    manifest_path = environment_dir / f"{args.out_prefix}_manifest.tsv"
     manifest.to_csv(manifest_path, sep="\t", index=False, lineterminator="\n")
+    if manifest.empty:
+        raise SystemExit(
+            "No fetch-ready environments with valid sowing date and coordinates remain"
+        )
 
-    request_path = ENV / f"{args.out_prefix}_request_features.tsv"
-    feature_path = ENV / f"{args.out_prefix}.tsv"
-    fail_path = ENV / f"{args.out_prefix}_failures.tsv"
-    qc_path = ENV / f"{args.out_prefix}_qc.tsv"
+    request_path = environment_dir / f"{args.out_prefix}_request_features.tsv"
+    feature_path = environment_dir / f"{args.out_prefix}.tsv"
+    fail_path = environment_dir / f"{args.out_prefix}_failures.tsv"
+    qc_path = environment_dir / f"{args.out_prefix}_qc.tsv"
 
     requests = manifest.drop_duplicates("weather_request_id").sort_values("weather_request_id").reset_index(drop=True)
     if args.resume and request_path.exists():
@@ -244,14 +282,34 @@ def main() -> None:
     if request_path.exists():
         req_features = pd.read_csv(request_path, sep="\t", dtype=str, low_memory=False)
         req_features = req_features.drop_duplicates("weather_request_id", keep="last")
-        env_features = manifest[["env_id", "window_label", "weather_request_id"]].merge(
-            req_features.drop(columns=["env_id", "window_label"], errors="ignore"), on="weather_request_id", how="left"
+        env_features = manifest[
+            [
+                "env_id",
+                "window_label",
+                "weather_request_id",
+                "window_start_date",
+                "window_end_date",
+            ]
+        ].merge(
+            req_features.drop(
+                columns=[
+                    "env_id",
+                    "window_label",
+                    "window_start_date",
+                    "window_end_date",
+                ],
+                errors="ignore",
+            ),
+            on="weather_request_id",
+            how="left",
         )
         env_features.to_csv(feature_path, sep="\t", index=False, lineterminator="\n")
     qc = pd.DataFrame(
         [
             {"metric": "window_manifest_rows", "value": len(manifest)},
             {"metric": "window_manifest_env_id", "value": manifest["env_id"].nunique() if not manifest.empty else 0},
+            {"metric": "window_count", "value": len(windows)},
+            {"metric": "windows", "value": ";".join(f"d{start}_{end}" for start, end in windows)},
             {"metric": "requests_remaining_this_run", "value": len(requests)},
             {"metric": "cached_request_rows", "value": len(pd.read_csv(request_path, sep="\t")) if request_path.exists() else 0},
             {"metric": "failure_rows", "value": len(pd.read_csv(fail_path, sep="\t")) if fail_path.exists() else 0},
