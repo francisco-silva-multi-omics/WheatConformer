@@ -807,24 +807,148 @@ def validate_gxe(root: Path, out_dir: Path) -> dict[str, object]:
     return result
 
 
-def kernel_diagnostics(root: Path, out_dir: Path) -> pd.DataFrame:
-    candidates = [
-        (root / "genotype_panels" / "hmp" / "K_HMP.QCfiltered.npy", root / "genotype_panels" / "hmp" / "hmp_K_sample_order.QCfiltered.tsv"),
-        (root / "genotype_panels" / "hmp" / "K_HMP.QCfiltered.meanDiag1.npy", root / "genotype_panels" / "hmp" / "hmp_K_sample_order.QCfiltered.tsv"),
-        *[(root / "environment" / f"K_{name}.npy", root / "environment" / "env_kernel_sample_order.tsv") for name in ("geo", "weather", "stress", "mgmt", "E")],
+def kernel_diagnostic_candidates(root: Path) -> list[dict[str, object]]:
+    candidates: list[dict[str, object]] = []
+    seen: set[tuple[str, str]] = set()
+    decision_path = (
+        root
+        / "trained_models"
+        / "model_comparisons"
+        / "trait_environment_kernel_ablation_decision.tsv"
+    )
+    ablation_decisions: dict[str, dict[str, object]] = {}
+    if decision_path.is_file():
+        decisions = pd.read_csv(decision_path, sep="\t", dtype=str)
+        if "kernel" in decisions.columns:
+            ablation_decisions = {
+                str(row["kernel"]): row for row in decisions.to_dict("records")
+            }
+
+    def add(
+        name: str,
+        path: Path,
+        order_path: Path,
+        *,
+        audit_scope: str,
+        enabled_default: object,
+        eligible_traits: object = "*",
+        biological_role: object = "",
+        manifest_path: object = "",
+    ) -> None:
+        key = (name, str(path.resolve()))
+        if key in seen:
+            return
+        seen.add(key)
+        decision = ablation_decisions.get(name, {})
+        candidates.append(
+            {
+                "kernel_name": name,
+                "path": path,
+                "order_path": order_path,
+                "audit_scope": audit_scope,
+                "enabled_default": enabled_default,
+                "eligible_traits": eligible_traits,
+                "biological_role": biological_role,
+                "manifest_path": manifest_path,
+                "ablation_accepted": decision.get("accepted", "not_evaluated"),
+                "ablation_decision": decision.get("decision", "not_evaluated"),
+                "ablation_decision_path": str(decision_path) if decision else "",
+            }
+        )
+
+    hmp_order = root / "genotype_panels" / "hmp" / "hmp_K_sample_order.QCfiltered.tsv"
+    for suffix, label in (("", "unscaled"), (".meanDiag1", "mean_diagonal_scaled")):
+        add(
+            f"K_G_HMP_QC_SOURCE_{label.upper()}",
+            root / "genotype_panels" / "hmp" / f"K_HMP.QCfiltered{suffix}.npy",
+            hmp_order,
+            audit_scope="source_kernel",
+            enabled_default="source_only",
+            biological_role=f"HMP_QC_VanRaden_{label}",
+        )
+    for component in ("geo", "weather", "stress", "mgmt"):
+        add(
+            f"K_E_{component.upper()}_SOURCE",
+            root / "environment" / f"K_{component}.npy",
+            root / "environment" / "env_kernel_sample_order.tsv",
+            audit_scope="generic_component_source",
+            enabled_default=True,
+            biological_role=f"environment_{component}_component",
+        )
+    add(
+        "K_E_COMBINED_SOURCE",
+        root / "environment" / "K_E.npy",
+        root / "environment" / "env_kernel_sample_order.tsv",
+        audit_scope="legacy_combined_source",
+        enabled_default=False,
+        biological_role="legacy_equal_weight_combined_environment",
+    )
+
+    manifests: list[tuple[Path, str]] = [
+        (root / "genotype_panels/recovered/recovered_genotype_kernel_manifest.tsv", "recovered_candidate"),
+        (root / "model_kernels/trait_environment_v2/trait_environment_kernel_manifest.tsv", "trait_specific_candidate"),
     ]
+    manifests.extend(
+        (path, "multitrait_registry")
+        for path in sorted(
+            root.glob("model_kernels/multitrait_kernel_experts*/multitrait_kernel_registry.tsv")
+        )
+    )
+    for manifest_path, audit_scope in manifests:
+        if not manifest_path.is_file():
+            continue
+        manifest = pd.read_csv(manifest_path, sep="\t", dtype=str)
+        if not {"kernel", "kernel_path", "order_path"}.issubset(manifest.columns):
+            continue
+        for row in manifest.to_dict("records"):
+            kernel_path = Path(str(row["kernel_path"]))
+            order_path = Path(str(row["order_path"]))
+            if not kernel_path.is_absolute():
+                kernel_path = root / kernel_path
+            if not order_path.is_absolute():
+                order_path = root / order_path
+            add(
+                str(row["kernel"]),
+                kernel_path,
+                order_path,
+                audit_scope=audit_scope,
+                enabled_default=row.get("enabled_default", "not_recorded"),
+                eligible_traits=row.get("eligible_traits", "*"),
+                biological_role=row.get("biological_role", "manifest_kernel"),
+                manifest_path=str(manifest_path),
+            )
+    return candidates
+
+
+def kernel_diagnostics(root: Path, out_dir: Path) -> pd.DataFrame:
     rows = []
-    for path, order in candidates:
+    for candidate in kernel_diagnostic_candidates(root):
+        path = Path(str(candidate["path"]))
+        order = Path(str(candidate["order_path"]))
         if path.exists():
-            log(f"Kernel diagnostics: {path.relative_to(root)}")
-            rows.append(sampled_kernel_diagnostics(path, order_path=order, seed=SEED))
+            log(
+                "Kernel diagnostics "
+                f"[{candidate['audit_scope']}; enabled_default={candidate['enabled_default']}; "
+                f"traits={candidate['eligible_traits']}; "
+                f"ablation={candidate['ablation_decision']}]: "
+                f"{candidate['kernel_name']} -> {source_path_label(root, path)}"
+            )
+            diagnostic = sampled_kernel_diagnostics(path, order_path=order, seed=SEED)
+            diagnostic.update(
+                {
+                    key: value
+                    for key, value in candidate.items()
+                    if key not in {"path", "order_path"}
+                }
+            )
+            rows.append(diagnostic)
     frame = pd.DataFrame(rows)
     write_csv(out_dir / "kernel_diagnostics.csv", frame)
     return frame
 
 
-def split_audit(root: Path, canonical: pd.DataFrame, out_dir: Path) -> pd.DataFrame:
-    sys.path.insert(0, str(root / "server_training_pipeline"))
+def split_audit(code_root: Path, canonical: pd.DataFrame, out_dir: Path) -> pd.DataFrame:
+    sys.path.insert(0, str(code_root / "server_training_pipeline"))
     from split_utils import make_split, split_group_column, split_leakage_record
 
     data = canonical[["panel_sample_id", "env_kernel_id", "cycle", "trial_name", "country", "canonical_germplasm_key"]].dropna(subset=["env_kernel_id"]).head(200000).reset_index(drop=True)
@@ -1162,7 +1286,7 @@ def main() -> None:
     (out_dir / "audit_environment.txt").write_text("\n".join(f"{name}=={version}" for name, version in sorted(config["environment"]["packages"].items())) + "\n", encoding="utf-8")
     (out_dir / "dependency_install_commands.txt").write_text(
         "python -m venv .audit-venv\n"
-        "python -m pip install pandas pyarrow openpyxl xlrd scipy scikit-learn matplotlib seaborn networkx py7zr h5py zarr pytest pytest-cov requests charset-normalizer fastparquet\n",
+        f'python -m pip install -r "{code_root / "requirements" / "audit.txt"}"\n',
         encoding="utf-8",
     )
 
@@ -1187,7 +1311,7 @@ def main() -> None:
     ke_components, ke_issues = reconstruct_ke(root, out_dir)
     gxe = validate_gxe(root, out_dir)
     kernels = kernel_diagnostics(root, out_dir)
-    splits = split_audit(root, canonical, out_dir)
+    splits = split_audit(code_root, canonical, out_dir)
     make_figures(out_dir, kernels, canonical)
     write_csv(out_dir / "independent_reconstruction_summary.csv", [
         {"object": "K_G", "status": kg.get("status"), "details": json.dumps(kg, default=str)},

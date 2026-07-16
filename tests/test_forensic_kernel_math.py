@@ -17,7 +17,11 @@ from audit.audit_common import (
     join_cardinality,
     mean_impute_markers,
 )
-from audit.run_forensic_audit import git_provenance, source_path_label
+from audit.run_forensic_audit import (
+    git_provenance,
+    kernel_diagnostic_candidates,
+    source_path_label,
+)
 from server_training_pipeline.split_utils import make_split, split_group_column, split_leakage_record
 
 
@@ -52,6 +56,66 @@ def test_git_provenance_is_explicit_when_no_provenance_exists(tmp_path: Path) ->
     assert provenance["provenance_source"] == "unavailable"
     assert provenance["commit"] == ""
     assert provenance["status_porcelain"] == "not_available"
+
+
+def test_kernel_diagnostics_discover_trait_and_registry_experts(tmp_path: Path) -> None:
+    trait_dir = tmp_path / "model_kernels" / "trait_environment_v2"
+    registry_dir = tmp_path / "model_kernels" / "multitrait_kernel_experts"
+    trait_dir.mkdir(parents=True)
+    registry_dir.mkdir(parents=True)
+    comparison_dir = tmp_path / "trained_models" / "model_comparisons"
+    comparison_dir.mkdir(parents=True)
+    pd.DataFrame(
+        [
+            {
+                "kernel": "K_E_TGW_V2",
+                "kernel_path": "model_kernels/trait_environment_v2/K_E_TGW_V2.npy",
+                "order_path": "model_kernels/trait_environment_v2/K_E_TGW_V2_order.tsv",
+                "eligible_traits": "1000_GRAIN_WEIGHT",
+                "enabled_default": "False",
+                "biological_role": "TGW_weather_windows",
+            }
+        ]
+    ).to_csv(trait_dir / "trait_environment_kernel_manifest.tsv", sep="\t", index=False)
+    pd.DataFrame(
+        [
+            {
+                "kernel": "K_E_TGW_V2",
+                "kernel_path": "model_kernels/multitrait_kernel_experts/K_E_TGW_V2.npy",
+                "order_path": "model_kernels/multitrait_kernel_experts/K_E_TGW_V2_order.tsv",
+                "eligible_traits": "1000_GRAIN_WEIGHT",
+                "enabled_default": "True",
+                "biological_role": "TGW_weather_windows",
+            }
+        ]
+    ).to_csv(registry_dir / "multitrait_kernel_registry.tsv", sep="\t", index=False)
+    pd.DataFrame(
+        [
+            {
+                "kernel": "K_E_TGW_V2",
+                "accepted": "True",
+                "decision": "accept_for_multitrait_baseline",
+            }
+        ]
+    ).to_csv(
+        comparison_dir / "trait_environment_kernel_ablation_decision.tsv",
+        sep="\t",
+        index=False,
+    )
+
+    candidates = kernel_diagnostic_candidates(tmp_path)
+    tgw = [row for row in candidates if row["kernel_name"] == "K_E_TGW_V2"]
+
+    assert {row["audit_scope"] for row in tgw} == {
+        "trait_specific_candidate",
+        "multitrait_registry",
+    }
+    assert {str(row["enabled_default"]) for row in tgw} == {"False", "True"}
+    assert {row["eligible_traits"] for row in tgw} == {"1000_GRAIN_WEIGHT"}
+    assert {row["ablation_accepted"] for row in tgw} == {"True"}
+    assert {row["ablation_decision"] for row in tgw} == {
+        "accept_for_multitrait_baseline"
+    }
 
 
 def test_vanraden_matches_analytical_two_marker_example() -> None:
