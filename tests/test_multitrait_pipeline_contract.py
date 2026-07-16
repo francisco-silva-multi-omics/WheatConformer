@@ -43,6 +43,17 @@ def test_multitrait_ledger_uses_canonical_ids_and_explicit_compact_mapping() -> 
     assert "stabilize_precision_weights" in source
 
 
+def test_dth_environment_expert_remains_opt_in() -> None:
+    path = ROOT / "server_training_pipeline" / "prepare_multitrait_kernel_registry.py"
+    source = path.read_text(encoding="utf-8")
+    ast.parse(source)
+
+    start = source.index('"kernel": "K_E_DTH_V2"')
+    end = source.index("if trait_environment_manifest.exists()", start)
+    dth_candidate = source[start:end]
+    assert '"enabled_default": False' in dth_candidate
+
+
 def test_multitrait_ledger_maps_source_indices_and_writes_lineage(tmp_path: Path) -> None:
     model_dir = tmp_path / "model"
     out_dir = tmp_path / "ledger"

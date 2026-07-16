@@ -353,7 +353,7 @@ def main() -> None:
             "target_order": base_e_order,
             "target_id_col": "env_id",
             "eligible_traits": "DAYS_TO_HEADING",
-            "enabled_default": True,
+            "enabled_default": False,
             "interaction_enabled": True,
             "rank": 64,
             "minimum_ledger_coverage": 0.95,
