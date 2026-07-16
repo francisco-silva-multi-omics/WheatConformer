@@ -25,6 +25,16 @@ def parse_bool(value: object) -> bool:
     return str(value).strip().lower() in {"1", "true", "yes", "y"}
 
 
+def optional_path(value: object, root: Path) -> Path | None:
+    text = "" if pd.isna(value) else str(value).strip()
+    return None if not text else resolve(root, Path(text))
+
+
+def optional_text(value: object, default: str = "") -> str:
+    text = "" if pd.isna(value) else str(value).strip()
+    return text or default
+
+
 def load_trait_environment_candidates(
     manifest_path: Path,
     *,
@@ -68,6 +78,9 @@ def load_trait_environment_candidates(
                 "interaction_enabled": parse_bool(row["interaction_enabled"]),
                 "rank": int(row["rank"]),
                 "minimum_ledger_coverage": float(row["minimum_ledger_coverage"]),
+                "coverage_path": optional_path(row.get("coverage_path"), root),
+                "coverage_id_col": optional_text(row.get("coverage_id_col"), "env_id"),
+                "coverage_column": optional_text(row.get("coverage_column")),
             }
         )
     return candidates
@@ -115,6 +128,9 @@ def load_recovered_genotype_candidates(
                 "interaction_enabled": parse_bool(row["interaction_enabled"]),
                 "rank": int(row["rank"]),
                 "minimum_ledger_coverage": float(row["minimum_ledger_coverage"]),
+                "coverage_path": optional_path(row.get("coverage_path"), root),
+                "coverage_id_col": optional_text(row.get("coverage_id_col"), source_id_col),
+                "coverage_column": optional_text(row.get("coverage_column")),
             }
         )
     return candidates
@@ -148,6 +164,9 @@ def compact_kernel(
     target_id_col: str,
     out_dir: Path,
     diagonal_epsilon: float,
+    coverage_path: Path | None = None,
+    coverage_id_col: str = "",
+    coverage_column: str = "",
 ) -> tuple[Path, Path, dict[str, object]]:
     source_order = load_order(source_order_path, source_id_col)
     source_kernel = np.load(source_kernel_path, mmap_mode="r")
@@ -162,6 +181,27 @@ def compact_kernel(
     target_ids = target_order[target_id_col].fillna("").astype(str)
     mapped_source = target_ids.map(source_lookup)
     mapped_mask = mapped_source.notna().to_numpy()
+    mapped_before_coverage = int(mapped_mask.sum())
+    prepared_coverage_path: Path | None = None
+    if coverage_path is not None:
+        if not coverage_path.exists():
+            raise SystemExit(f"{name} coverage mask is missing: {coverage_path}")
+        coverage = pd.read_csv(coverage_path, sep="\t", dtype=str)
+        required_coverage = {coverage_id_col, coverage_column}
+        missing_coverage = sorted(required_coverage.difference(coverage.columns))
+        if missing_coverage:
+            raise SystemExit(f"{coverage_path} is missing columns: {missing_coverage}")
+        coverage_ids = coverage[coverage_id_col].fillna("").astype(str).str.strip()
+        if coverage_ids.eq("").any() or coverage_ids.duplicated().any():
+            raise SystemExit(f"{coverage_path} has empty or duplicate IDs in {coverage_id_col}")
+        available = coverage[coverage_column].map(parse_bool)
+        available_ids = set(coverage_ids[available])
+        target_available = target_ids.isin(available_ids)
+        mapped_mask &= target_available.to_numpy()
+        prepared_coverage_path = out_dir / f"{name}_coverage.tsv"
+        pd.DataFrame(
+            {target_id_col: target_ids.to_numpy(), "available": target_available.to_numpy()}
+        ).to_csv(prepared_coverage_path, sep="\t", index=False)
     mapped_positions = np.flatnonzero(mapped_mask)
     source_positions = mapped_source[mapped_mask].astype(int).to_numpy()
     if not len(source_positions):
@@ -207,12 +247,16 @@ def compact_kernel(
         "source_dimension": int(source_kernel.shape[0]),
         "base_dimension": int(len(target_order)),
         "mapped_before_diagonal_filter": int(mapped_mask.sum()),
+        "mapped_before_explicit_coverage": mapped_before_coverage,
+        "removed_by_explicit_coverage": int(mapped_before_coverage - mapped_mask.sum()),
         "compact_dimension": int(len(compact_order)),
         "base_id_coverage": float(len(compact_order) / len(target_order)),
         "removed_nonpositive_or_nonfinite_diagonal": int(mapped_mask.sum() - len(compact_order)),
         "mean_diagonal": float(np.mean(np.diag(compact))),
         "kernel_sha256": file_sha256(kernel_path),
         "order_sha256": file_sha256(order_path),
+        "coverage_path": str(prepared_coverage_path) if prepared_coverage_path else "",
+        "coverage_sha256": file_sha256(prepared_coverage_path) if prepared_coverage_path else "",
     }
     return kernel_path, order_path, qc
 
@@ -275,6 +319,10 @@ def main() -> None:
     environment_dir = resolve(root, args.environment_dir)
     out_dir = resolve(root, args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
+    environment_coverage_path = environment_dir / "environment_expert_coverage.tsv"
+    explicit_environment_coverage = (
+        environment_coverage_path if environment_coverage_path.exists() else None
+    )
 
     base_g_order_path = base_dir / f"{args.base_prefix}_K_G_unique_order.tsv"
     base_e_order_path = base_dir / f"{args.base_prefix}_K_E_unique_order.tsv"
@@ -394,6 +442,38 @@ def main() -> None:
                 "interaction_enabled": True,
                 "rank": 64,
                 "minimum_ledger_coverage": minimum_coverage,
+                "coverage_path": (
+                    explicit_environment_coverage
+                    if component in {"weather", "stress"}
+                    else None
+                ),
+                "coverage_id_col": "env_id",
+                "coverage_column": (
+                    "weather_api_available"
+                    if component in {"weather", "stress"}
+                    else ""
+                ),
+            }
+        )
+    if (environment_dir / "K_climatology.npy").exists():
+        candidates.append(
+            {
+                "kernel": "K_E_CLIMATOLOGY",
+                "axis": "environment",
+                "biological_role": "location_season_weather_climatology",
+                "source_kernel": environment_dir / "K_climatology.npy",
+                "source_order": environment_dir / "env_kernel_sample_order.tsv",
+                "source_id_col": "env_id",
+                "target_order": base_e_order,
+                "target_id_col": "env_id",
+                "eligible_traits": "*",
+                "enabled_default": True,
+                "interaction_enabled": True,
+                "rank": 64,
+                "minimum_ledger_coverage": 0.01,
+                "coverage_path": environment_coverage_path,
+                "coverage_id_col": "env_id",
+                "coverage_column": "weather_climatology",
             }
         )
     candidates.append(
@@ -482,6 +562,9 @@ def main() -> None:
             target_id_col=str(candidate["target_id_col"]),
             out_dir=out_dir,
             diagonal_epsilon=args.diagonal_epsilon,
+            coverage_path=candidate.get("coverage_path"),
+            coverage_id_col=str(candidate.get("coverage_id_col", "")),
+            coverage_column=str(candidate.get("coverage_column", "")),
         )
         qc_rows.append(qc)
         registry_rows.append(
@@ -501,6 +584,11 @@ def main() -> None:
                 "base_id_coverage": qc["base_id_coverage"],
                 "source_kernel_path": str(source_kernel),
                 "source_order_path": str(source_order),
+                "coverage_path": qc["coverage_path"],
+                "coverage_id_col": candidate["target_id_col"] if qc["coverage_path"] else "",
+                "coverage_column": "available" if qc["coverage_path"] else "",
+                "source_coverage_path": str(candidate.get("coverage_path") or ""),
+                "source_coverage_column": str(candidate.get("coverage_column", "")),
             }
         )
 

@@ -494,3 +494,15 @@ python scripts/05_check_model_methodology_readiness.py --strict
 Strict readiness fails on missing baseline artifacts and requested-trait
 validation/leakage files. Graph-pangenome paths, `K_z`, and operator-based REML
 are reported as future work rather than baseline failures.
+
+## 7. Weather Coverage Recovery
+
+The non-destructive weather recovery workflow classifies missingness causes,
+retries NASA POWER, uses Open-Meteo ERA5 as a historical fallback, and builds a
+separate location-season climatology expert with certified coverage masks. It
+never overwrites the current corrected environment kernels and uses validation
+only for adoption decisions across seeds 2026-2029.
+
+See [weather_recovery_pipeline.md](../docs/weather_recovery_pipeline.md) for the
+server command, optional reviewed date/location supplements, outputs, and
+acceptance thresholds.

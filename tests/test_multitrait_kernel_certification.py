@@ -120,6 +120,42 @@ def test_external_kernel_is_compacted_to_base_ids_and_diagonal_normalized(tmp_pa
     assert qc["base_id_coverage"] == 2 / 3
 
 
+def test_compact_kernel_applies_and_materializes_explicit_coverage_mask(
+    tmp_path: Path,
+) -> None:
+    source_kernel = tmp_path / "source.npy"
+    source_order = tmp_path / "source.tsv"
+    source_coverage = tmp_path / "coverage.tsv"
+    out_dir = tmp_path / "prepared"
+    out_dir.mkdir()
+    np.save(source_kernel, np.eye(3, dtype=np.float32))
+    pd.DataFrame({"env_id": ["e1", "e2", "e3"]}).to_csv(
+        source_order, sep="\t", index=False
+    )
+    pd.DataFrame(
+        {"env_id": ["e1", "e2", "e3"], "weather_api_available": [True, False, True]}
+    ).to_csv(source_coverage, sep="\t", index=False)
+
+    _, order_path, qc = compact_kernel(
+        name="K_E_WEATHER",
+        source_kernel_path=source_kernel,
+        source_order_path=source_order,
+        source_id_col="env_id",
+        target_order=pd.DataFrame({"env_id": ["e1", "e2", "e3"]}),
+        target_id_col="env_id",
+        out_dir=out_dir,
+        diagonal_epsilon=1e-8,
+        coverage_path=source_coverage,
+        coverage_id_col="env_id",
+        coverage_column="weather_api_available",
+    )
+
+    assert pd.read_csv(order_path, sep="\t")["env_id"].tolist() == ["e1", "e3"]
+    materialized = pd.read_csv(qc["coverage_path"], sep="\t")
+    assert materialized["available"].tolist() == [True, False, True]
+    assert qc["removed_by_explicit_coverage"] == 1
+
+
 def test_registry_certification_accepts_declared_partial_expert_coverage(tmp_path: Path) -> None:
     kernel_path = tmp_path / "K_G_PANEL.npy"
     order_path = tmp_path / "K_G_PANEL_order.tsv"

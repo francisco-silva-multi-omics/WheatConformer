@@ -546,9 +546,15 @@ def component_activity(feature_count: int, mean_diag_raw: float) -> tuple[bool, 
     return True, ""
 
 
-def main(environment_dir: Path | str | None = None, output_dir: Path | str | None = None) -> None:
+def main(
+    environment_dir: Path | str | None = None,
+    output_dir: Path | str | None = None,
+    weather_dir: Path | str | None = None,
+    require_fetched_weather: bool = False,
+) -> None:
     environment_dir = Path(environment_dir) if environment_dir is not None else OUT
     output_dir = Path(output_dir) if output_dir is not None else OUT
+    weather_dir = Path(weather_dir) if weather_dir is not None else environment_dir
     output_dir.mkdir(parents=True, exist_ok=True)
     env = pd.read_csv(environment_dir / "envdata.tsv", sep="\t", dtype=str, low_memory=False)
     loc = pd.read_csv(environment_dir / "locdata.tsv", sep="\t", dtype=str, low_memory=False)
@@ -570,7 +576,17 @@ def main(environment_dir: Path | str | None = None, output_dir: Path | str | Non
 
     trait_matrix = build_env_trait_matrix(env, output_dir / "env_feature_value_parsing_qc.tsv")
     trait_matrix = trait_matrix.reindex(env_ids)
-    fetched_weather, fetched_stress = build_fetched_weather_feature_sets(env_ids, environment_dir=environment_dir)
+    fetched_weather, fetched_stress = build_fetched_weather_feature_sets(
+        env_ids, environment_dir=weather_dir
+    )
+    if require_fetched_weather:
+        weather_feature_count = fetched_weather.dropna(axis=1, how="all").shape[1]
+        stress_feature_count = fetched_stress.dropna(axis=1, how="all").shape[1]
+        if weather_feature_count == 0 or stress_feature_count == 0:
+            raise SystemExit(
+                "Recovered build requires nonempty fetched weather and stress features; "
+                f"weather={weather_feature_count}; stress={stress_feature_count}"
+            )
 
     feature_sets = {
         "geo": build_geo_features(env, loc, env_ids),
@@ -638,6 +654,7 @@ def main(environment_dir: Path | str | None = None, output_dir: Path | str | Non
         "builder_sha256": builder_sha256,
         "environment_input_dir": str(environment_dir.resolve()),
         "environment_output_dir": str(output_dir.resolve()),
+        "weather_feature_input_dir": str(weather_dir.resolve()),
         "active_components": active_components,
         "environment_mean_diag_raw": environment_mean_diag_raw,
         "environment_mean_diag_scaled": environment_mean_diag_scaled,
@@ -681,8 +698,24 @@ def cli() -> None:
         default=OUT,
         help="Output directory. Use a new path for non-destructive regeneration.",
     )
+    parser.add_argument(
+        "--weather-dir",
+        type=Path,
+        default=None,
+        help="Optional directory containing recovered fetched-weather tables.",
+    )
+    parser.add_argument(
+        "--require-fetched-weather",
+        action="store_true",
+        help="Fail instead of falling back to trial traits when fetched weather is absent.",
+    )
     args = parser.parse_args()
-    main(environment_dir=args.environment_dir, output_dir=args.out_dir)
+    main(
+        environment_dir=args.environment_dir,
+        output_dir=args.out_dir,
+        weather_dir=args.weather_dir,
+        require_fetched_weather=args.require_fetched_weather,
+    )
 
 
 if __name__ == "__main__":

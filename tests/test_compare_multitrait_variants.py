@@ -17,6 +17,7 @@ def write_run(
     traits: list[str],
     rmse_shift: float,
     splits: tuple[str, ...] = ("test",),
+    added_kernels: tuple[str, ...] = (),
 ) -> None:
     run = root / "trained_models" / f"multitrait_quantitative_{variant}_{mode}_seed{seed}"
     ledger = root / "model_kernels" / f"ledger_{variant}"
@@ -29,7 +30,7 @@ def write_run(
         "model_label": f"multitrait_{variant}_{mode}",
         "traits": traits,
         "rows": {"train": 100, "val": 20, "test": 30},
-        "active_kernels": ["K_A", "K_E_MGMT", "K_E_TGW_V2"],
+        "active_kernels": ["K_A", "K_E_MGMT", "K_E_TGW_V2", *added_kernels],
         "factor_cache": str(factor_cache),
     }
     (run / "model_run_metadata.json").write_text(json.dumps(metadata), encoding="utf-8")
@@ -158,6 +159,34 @@ def test_comparison_reports_validation_and_test_separately(tmp_path: Path) -> No
     assert set(trait_summary["split"]) == {"val", "test"}
     assert set(macro["split"]) == {"val", "test"}
     assert macro.groupby("split")["comparison_grid_complete"].first().all()
+
+
+def test_comparison_allows_only_declared_additional_kernel(tmp_path: Path) -> None:
+    write_run(tmp_path, "baseline", "env", 1, ["A"], rmse_shift=0.0)
+    write_run(
+        tmp_path,
+        "corrected",
+        "env",
+        1,
+        ["A"],
+        rmse_shift=-0.1,
+        added_kernels=("K_E_CLIMATOLOGY",),
+    )
+
+    paired, contract, _ = compare_variants(
+        root=tmp_path,
+        models_root=tmp_path / "trained_models",
+        baseline_variant="baseline",
+        corrected_variant="corrected",
+        modes=["env"],
+        seeds=[1],
+        requested_traits=["A"],
+        allowed_added_kernels={"K_E_CLIMATOLOGY"},
+    )
+
+    assert len(paired) == 1
+    assert contract.loc[0, "active_kernels_match"]
+    assert contract.loc[0, "allowed_added_kernels"] == "K_E_CLIMATOLOGY"
 
 
 def test_comparison_cli_writes_all_reports(

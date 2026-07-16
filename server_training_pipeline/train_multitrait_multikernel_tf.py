@@ -341,11 +341,19 @@ class MultiTraitKernelExperts(tf.keras.Model):
         active_count = tf.reduce_sum(tf.cast(active, tf.float32), axis=1, keepdims=True)
         tf.debugging.assert_positive(active_count, message="An observation has no available kernel expert")
         if self.gate_logits is None:
-            gates = tf.cast(active, tf.float32) / active_count
+            eligible_count = tf.reduce_sum(
+                tf.cast(trait_eligible, tf.float32), axis=1, keepdims=True
+            )
+            gates = tf.cast(trait_eligible, tf.float32) / eligible_count
         else:
             logits = tf.gather(self.gate_logits, trait_index)
-            masked_logits = tf.where(active, logits, tf.constant(-1e9, dtype=tf.float32))
+            masked_logits = tf.where(
+                trait_eligible, logits, tf.constant(-1e9, dtype=tf.float32)
+            )
             gates = tf.nn.softmax(masked_logits, axis=1)
+        # Coverage gates remove unavailable experts without changing the weights of
+        # the remaining experts for that row. This avoids pairwise renormalization.
+        gates = gates * tf.cast(row_available, tf.float32)
         prediction = tf.reduce_sum(term_values * gates, axis=1)
         return tf.gather(self.intercept, trait_index) + prediction
 
@@ -406,6 +414,26 @@ def add_expert_indices(
         id_col = str(spec["id_col"])
         compact = pd.to_numeric(order["compact_kernel_index"], errors="raise").astype(int)
         lookup = dict(zip(order[id_col].fillna("").astype(str), compact))
+        coverage_path_value = spec.get("coverage_path", "")
+        coverage_path_text = (
+            "" if pd.isna(coverage_path_value) else str(coverage_path_value).strip()
+        )
+        coverage_mask_applied = bool(coverage_path_text)
+        if coverage_mask_applied:
+            coverage_id_col = str(spec.get("coverage_id_col", id_col)).strip() or id_col
+            coverage_column = str(spec.get("coverage_column", "available")).strip() or "available"
+            mask = pd.read_csv(Path(coverage_path_text), sep="\t", dtype=str)
+            required = {coverage_id_col, coverage_column}
+            missing = sorted(required.difference(mask.columns))
+            if missing:
+                raise SystemExit(f"{coverage_path_text} is missing columns: {missing}")
+            mask_ids = mask[coverage_id_col].fillna("").astype(str).str.strip()
+            if mask_ids.eq("").any() or mask_ids.duplicated().any():
+                raise SystemExit(
+                    f"{coverage_path_text} has empty or duplicate IDs in {coverage_id_col}"
+                )
+            available_ids = set(mask_ids[mask[coverage_column].map(parse_bool)])
+            lookup = {key: value for key, value in lookup.items() if key in available_ids}
         ledger_id_col = "genotype_id" if axis == "genotype" else "environment_id"
         column = f"expert_index__{safe_name(name)}"
         ledger[column] = ledger[ledger_id_col].fillna("").astype(str).map(lookup).fillna(-1).astype(np.int32)
@@ -426,6 +454,8 @@ def add_expert_indices(
                     "rows": len(group),
                     "available_rows": int(available.sum()),
                     "availability_fraction": float(available.mean()),
+                    "coverage_mask_applied": coverage_mask_applied,
+                    "coverage_path": coverage_path_text,
                 }
             )
     ledger["has_marker_kernel"] = (
@@ -566,12 +596,19 @@ def main() -> None:
         raise SystemExit("No kernel experts remain after registry filtering")
     certified_kernels = certification.get("kernel_identities", {})
     certified_orders = certification.get("order_identities", {})
+    certified_coverage = certification.get("coverage_identities", {})
     for _, spec in registry.iterrows():
         name = str(spec["kernel"])
         require_certified_file(Path(str(spec["kernel_path"])), certified_kernels.get(name, {}), name)
         require_certified_file(
             Path(str(spec["order_path"])), certified_orders.get(name, {}), f"{name} order"
         )
+        coverage_value = spec.get("coverage_path", "")
+        coverage_text = "" if pd.isna(coverage_value) else str(coverage_value).strip()
+        if coverage_text:
+            require_certified_file(
+                Path(coverage_text), certified_coverage.get(name, {}), f"{name} coverage mask"
+            )
 
     if args.no_genotype_main and args.no_environment_main and args.no_interaction:
         raise SystemExit("At least one main effect or interaction must remain active")

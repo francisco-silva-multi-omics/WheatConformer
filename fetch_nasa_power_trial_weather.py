@@ -14,13 +14,6 @@ import numpy as np
 import pandas as pd
 
 
-BASE = Path(__file__).resolve().parent
-OUT = BASE / "environment"
-MANIFEST = OUT / "trial_weather_fetch_manifest.tsv"
-REQUEST_OUT = OUT / "trial_weather_request_features_nasa_power.tsv"
-FEATURE_OUT = OUT / "trial_weather_features_nasa_power.tsv"
-QC_OUT = OUT / "trial_weather_fetch_nasa_power_qc.tsv"
-FAIL_OUT = OUT / "trial_weather_fetch_nasa_power_failures.tsv"
 NASA_START = pd.Timestamp("1981-01-01")
 
 
@@ -168,33 +161,86 @@ def append_tsv(row: dict[str, object], path: Path) -> None:
     pd.DataFrame([row]).to_csv(path, sep="\t", index=False, mode="a", header=not path.exists(), lineterminator="\n")
 
 
+def load_env_id_filter(path: Path) -> set[str]:
+    text = path.read_text(encoding="utf-8").strip()
+    if not text:
+        return set()
+    first_line = text.splitlines()[0]
+    if "\t" in first_line or "," in first_line:
+        sep = "\t" if "\t" in first_line else ","
+        frame = pd.read_csv(path, sep=sep, dtype=str)
+        if "env_id" not in frame.columns:
+            raise ValueError(f"{path} must contain an env_id column")
+        return set(frame["env_id"].dropna().astype(str))
+    return {line.strip() for line in text.splitlines() if line.strip()}
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
+    parser.add_argument("--root", type=Path, default=Path("."))
+    parser.add_argument("--environment-dir", type=Path, default=Path("environment"))
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--clear-failures", action="store_true")
     parser.add_argument("--workers", type=int, default=1)
     parser.add_argument("--sleep", type=float, default=0.1)
+    parser.add_argument("--env-id-file", type=Path, default=None)
     args = parser.parse_args()
 
-    if args.clear_failures and FAIL_OUT.exists():
-        FAIL_OUT.unlink()
+    root = args.root.resolve()
+    environment_dir = (
+        args.environment_dir.resolve()
+        if args.environment_dir.is_absolute()
+        else (root / args.environment_dir).resolve()
+    )
+    manifest_path = environment_dir / "trial_weather_fetch_manifest.tsv"
+    request_out = environment_dir / "trial_weather_request_features_nasa_power.tsv"
+    feature_out = environment_dir / "trial_weather_features_nasa_power.tsv"
+    qc_out = environment_dir / "trial_weather_fetch_nasa_power_qc.tsv"
+    fail_out = environment_dir / "trial_weather_fetch_nasa_power_failures.tsv"
+    coverage_out = environment_dir / "trial_weather_nasa_power_out_of_coverage.tsv"
+    environment_dir.mkdir(parents=True, exist_ok=True)
 
-    manifest = pd.read_csv(MANIFEST, sep="\t", dtype=str)
-    ready = manifest[manifest["ready_to_fetch"].astype(str).str.upper().eq("TRUE")].copy()
+    if args.clear_failures and fail_out.exists():
+        fail_out.unlink()
+
+    manifest = pd.read_csv(manifest_path, sep="\t", dtype=str)
+    all_ready = manifest[manifest["ready_to_fetch"].astype(str).str.upper().eq("TRUE")].copy()
+    for column, default in [
+        ("window_inferred", "False"),
+        ("coordinates_inferred", "False"),
+        ("weather_start_source", "unknown"),
+        ("weather_end_source", "unknown"),
+        ("coordinate_source", "unknown"),
+    ]:
+        if column not in all_ready.columns:
+            all_ready[column] = default
     for col in ["latitude", "longitude"]:
-        ready[col] = pd.to_numeric(ready[col], errors="coerce")
-    ready["weather_start"] = pd.to_datetime(ready["weather_start_date"], errors="coerce")
-    ready["weather_end"] = pd.to_datetime(ready["weather_end_date"], errors="coerce")
-    ready["nasa_start"] = ready["weather_start"].where(ready["weather_start"] >= NASA_START, NASA_START)
-    ready = ready[ready["weather_end"] >= NASA_START].copy()
-    ready["nasa_start_date"] = ready["nasa_start"].dt.strftime("%Y-%m-%d")
+        all_ready[col] = pd.to_numeric(all_ready[col], errors="coerce")
+    all_ready["weather_start"] = pd.to_datetime(all_ready["weather_start_date"], errors="coerce")
+    all_ready["weather_end"] = pd.to_datetime(all_ready["weather_end_date"], errors="coerce")
+    outside_coverage = all_ready["weather_start"].lt(NASA_START) | all_ready["weather_end"].lt(NASA_START)
+    excluded = all_ready.loc[
+        outside_coverage,
+        ["env_id", "weather_start_date", "weather_end_date", "latitude", "longitude"],
+    ].copy()
+    excluded["exclusion_reason"] = "dates_outside_nasa_power_daily_coverage"
+    excluded.to_csv(coverage_out, sep="\t", index=False, lineterminator="\n")
+    ready = all_ready.loc[~outside_coverage].copy()
+    ready["nasa_start_date"] = ready["weather_start"].dt.strftime("%Y-%m-%d")
     ready["nasa_end_date"] = ready["weather_end"].dt.strftime("%Y-%m-%d")
     ready = ready[ready["latitude"].notna() & ready["longitude"].notna() & ready["nasa_start_date"].notna()].copy()
     ready["weather_request_id"] = ready.apply(request_key, axis=1)
 
+    env_id_filter: set[str] | None = None
+    fetch_ready = ready
+    if args.env_id_file is not None:
+        env_id_path = args.env_id_file if args.env_id_file.is_absolute() else root / args.env_id_file
+        env_id_filter = load_env_id_filter(env_id_path)
+        fetch_ready = ready[ready["env_id"].isin(env_id_filter)].copy()
+
     requests = (
-        ready[
+        fetch_ready[
             [
                 "weather_request_id",
                 "latitude",
@@ -210,8 +256,8 @@ def main() -> None:
         .reset_index(drop=True)
     )
 
-    if args.resume and REQUEST_OUT.exists():
-        done = set(pd.read_csv(REQUEST_OUT, sep="\t", dtype=str, usecols=["weather_request_id"])["weather_request_id"])
+    if args.resume and request_out.exists():
+        done = set(pd.read_csv(request_out, sep="\t", dtype=str, usecols=["weather_request_id"])["weather_request_id"])
         requests = requests[~requests["weather_request_id"].isin(done)].copy()
     if args.limit is not None:
         requests = requests.head(args.limit).copy()
@@ -240,12 +286,12 @@ def main() -> None:
         for req in request_rows:
             features, fail = fetch_one(req)
             if features is not None:
-                append_tsv(features, REQUEST_OUT)
+                append_tsv(features, request_out)
                 fetched += 1
                 if fetched % 50 == 0:
                     print(f"Fetched {fetched} requests", flush=True)
             if fail is not None:
-                append_tsv(fail, FAIL_OUT)
+                append_tsv(fail, fail_out)
                 print(f"Failed {fail['weather_request_id']}: {fail['error']}", flush=True)
             if args.sleep:
                 time.sleep(args.sleep)
@@ -255,24 +301,40 @@ def main() -> None:
             for future in as_completed(futures):
                 features, fail = future.result()
                 if features is not None:
-                    append_tsv(features, REQUEST_OUT)
+                    append_tsv(features, request_out)
                     fetched += 1
                     if fetched % 50 == 0:
                         print(f"Fetched {fetched} requests", flush=True)
                 if fail is not None:
-                    append_tsv(fail, FAIL_OUT)
+                    append_tsv(fail, fail_out)
                     print(f"Failed {fail['weather_request_id']}: {fail['error']}", flush=True)
                 if args.sleep:
                     time.sleep(args.sleep)
 
-    if REQUEST_OUT.exists():
-        req_features = pd.read_csv(REQUEST_OUT, sep="\t", dtype=str, low_memory=False)
+    if request_out.exists():
+        req_features = pd.read_csv(request_out, sep="\t", dtype=str, low_memory=False)
         req_features = req_features.drop_duplicates("weather_request_id", keep="last")
         current_request_ids = set(ready["weather_request_id"])
         current_req_features = req_features[req_features["weather_request_id"].isin(current_request_ids)].copy()
-        env_features = ready[["env_id", "weather_request_id"]].merge(current_req_features, on="weather_request_id", how="left")
+        provenance_columns = [
+            "env_id",
+            "weather_request_id",
+            "window_inferred",
+            "coordinates_inferred",
+            "weather_start_source",
+            "weather_end_source",
+            "coordinate_source",
+        ]
+        env_features = ready[provenance_columns].merge(
+            current_req_features, on="weather_request_id", how="left"
+        )
         env_features = env_features.drop_duplicates("env_id", keep="first")
-        env_features.to_csv(FEATURE_OUT, sep="\t", index=False, lineterminator="\n")
+        env_features["weather_observed"] = env_features["fetch_status"].eq("ok")
+        env_features["weather_climatology"] = False
+        env_features["weather_feature_source"] = np.where(
+            env_features["weather_observed"], "nasa_power_daily", "missing"
+        )
+        env_features.to_csv(feature_out, sep="\t", index=False, lineterminator="\n")
         qc = pd.DataFrame(
             [
                 {"metric": "manifest_ready_rows_covered_by_nasa_date_range", "value": len(ready)},
@@ -281,10 +343,33 @@ def main() -> None:
                 {"metric": "unique_weather_requests_fetched_current_manifest", "value": current_req_features["weather_request_id"].nunique()},
                 {"metric": "unique_weather_requests_cached_total", "value": req_features["weather_request_id"].nunique()},
                 {"metric": "env_id_with_weather_features", "value": int(env_features["fetch_status"].eq("ok").sum())},
-                {"metric": "failed_requests_logged", "value": len(pd.read_csv(FAIL_OUT, sep="\t")) if FAIL_OUT.exists() else 0},
+                {
+                    "metric": "failed_requests_logged",
+                    "value": len(pd.read_csv(fail_out, sep="\t")) if fail_out.exists() else 0,
+                },
+                {"metric": "manifest_ready_outside_nasa_coverage", "value": len(excluded)},
             ]
         )
-        qc.to_csv(QC_OUT, sep="\t", index=False, lineterminator="\n")
+        if env_id_filter is not None:
+            qc = pd.concat(
+                [
+                    qc,
+                    pd.DataFrame(
+                        [
+                            {"metric": "target_env_id_requested", "value": len(env_id_filter)},
+                            {"metric": "target_env_id_in_manifest_ready", "value": fetch_ready["env_id"].nunique()},
+                            {
+                                "metric": "target_env_id_with_weather_features",
+                                "value": env_features.loc[
+                                    env_features["env_id"].isin(env_id_filter), "weather_observed"
+                                ].sum(),
+                            },
+                        ]
+                    ),
+                ],
+                ignore_index=True,
+            )
+        qc.to_csv(qc_out, sep="\t", index=False, lineterminator="\n")
         print(qc.to_string(index=False))
 
 

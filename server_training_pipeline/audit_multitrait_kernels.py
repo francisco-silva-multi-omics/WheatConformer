@@ -77,6 +77,9 @@ def certify_kernel(
     eligible_traits: str = "*",
     minimum_ledger_coverage: float = 1.0,
     allow_partial: bool = False,
+    coverage_path: Path | None = None,
+    coverage_id_col: str = "",
+    coverage_column: str = "",
 ) -> tuple[list[dict[str, object]], dict[str, object], dict[str, object]]:
     checks: list[dict[str, object]] = []
 
@@ -110,6 +113,30 @@ def certify_kernel(
         and np.array_equal(np.sort(compact.astype(int).to_numpy()), np.arange(n, dtype=int))
     )
     add("compact_index_sequence", compact_ok, f"compact_min={compact.min()}; compact_max={compact.max()}")
+    if coverage_path is not None:
+        coverage_present = coverage_path.exists()
+        add("coverage_mask_present", coverage_present, f"path={coverage_path}")
+        if not coverage_present:
+            return checks, {}, {}
+        coverage_frame = pd.read_csv(coverage_path, sep="\t", dtype=str)
+        missing_coverage = sorted(
+            {coverage_id_col, coverage_column}.difference(coverage_frame.columns)
+        )
+        add("coverage_mask_columns", not missing_coverage, f"missing={missing_coverage}")
+        if missing_coverage:
+            return checks, {}, {}
+        coverage_ids = coverage_frame[coverage_id_col].fillna("").astype(str)
+        unique_coverage = bool(coverage_ids.ne("").all() and not coverage_ids.duplicated().any())
+        add("coverage_mask_ids_unique_nonempty", unique_coverage, f"unique={coverage_ids.nunique()}")
+        available_ids = set(
+            coverage_ids[coverage_frame[coverage_column].map(parse_bool)]
+        )
+        order_covered = ids.isin(available_ids)
+        add(
+            "kernel_order_respects_coverage_mask",
+            bool(order_covered.all()),
+            f"covered={int(order_covered.sum())}/{len(order_covered)}",
+        )
 
     finite = True
     max_asymmetry = 0.0
@@ -202,6 +229,9 @@ def certify_kernel(
         "dimension": n,
         "dtype": str(kernel.dtype),
         "certification_status": "PASS" if all(row["status"] == "PASS" for row in checks) else "FAIL",
+        "coverage_path": str(coverage_path.resolve()) if coverage_path is not None else "",
+        "coverage_id_col": coverage_id_col if coverage_path is not None else "",
+        "coverage_column": coverage_column if coverage_path is not None else "",
     }
     spectrum = {
         "kernel": name,
@@ -277,6 +307,17 @@ def main() -> None:
             "eligible_traits": str(row["eligible_traits"]),
             "minimum_ledger_coverage": float(row["minimum_ledger_coverage"]),
             "allow_partial": float(row["minimum_ledger_coverage"]) < 1.0,
+            "coverage_path": (
+                None
+                if pd.isna(row.get("coverage_path")) or not str(row.get("coverage_path", "")).strip()
+                else Path(str(row["coverage_path"]))
+            ),
+            "coverage_id_col": ""
+            if pd.isna(row.get("coverage_id_col"))
+            else str(row.get("coverage_id_col", "")),
+            "coverage_column": ""
+            if pd.isna(row.get("coverage_column"))
+            else str(row.get("coverage_column", "")),
         }
         checks, registry, spectrum = certify_kernel(
             **specification,
@@ -309,6 +350,11 @@ def main() -> None:
         },
         "order_identities": {
             row["kernel"]: file_identity(Path(row["order_path"])) for row in registry_rows
+        },
+        "coverage_identities": {
+            row["kernel"]: file_identity(Path(row["coverage_path"]))
+            for row in registry_rows
+            if str(row.get("coverage_path", "")).strip()
         },
     }
     (out_dir / "multitrait_kernel_certification_summary.json").write_text(

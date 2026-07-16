@@ -86,14 +86,25 @@ def load_run(root: Path, models_root: Path, variant: str, mode: str, seed: int) 
 
 
 def require_matching_contract(
-    baseline: dict[str, object], corrected: dict[str, object], mode: str, seed: int
+    baseline: dict[str, object],
+    corrected: dict[str, object],
+    mode: str,
+    seed: int,
+    allowed_added_kernels: set[str] | None = None,
 ) -> dict[str, object]:
     b_meta = baseline["metadata"]
     c_meta = corrected["metadata"]
     b_lineage = baseline["lineage"]
     c_lineage = corrected["lineage"]
+    baseline_kernels = set(b_meta["active_kernels"])
+    corrected_kernels = set(c_meta["active_kernels"])
+    allowed_added_kernels = allowed_added_kernels or set()
+    active_kernels_match = (
+        not (baseline_kernels - corrected_kernels)
+        and (corrected_kernels - baseline_kernels).issubset(allowed_added_kernels)
+    )
     checks = {
-        "active_kernels_match": set(b_meta["active_kernels"]) == set(c_meta["active_kernels"]),
+        "active_kernels_match": active_kernels_match,
         "metadata_traits_match": set(b_meta["traits"]) == set(c_meta["traits"]),
         "metric_traits_match": set(
             baseline["metrics"][["split", "trait_name_canonical"]].itertuples(
@@ -129,6 +140,8 @@ def require_matching_contract(
         "supported_trait_count": len(b_meta["traits"]),
         "supported_traits": ";".join(sorted(b_meta["traits"])),
         "active_kernels": ";".join(sorted(b_meta["active_kernels"])),
+        "corrected_active_kernels": ";".join(sorted(c_meta["active_kernels"])),
+        "allowed_added_kernels": ";".join(sorted(allowed_added_kernels)),
         **checks,
         "status": "PASS",
     }
@@ -142,6 +155,7 @@ def compare_variants(
     modes: list[str],
     seeds: list[int],
     requested_traits: list[str],
+    allowed_added_kernels: set[str] | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     paired_frames: list[pd.DataFrame] = []
     contract_rows: list[dict[str, object]] = []
@@ -222,7 +236,13 @@ def compare_variants(
                 )
                 continue
 
-            contract = require_matching_contract(baseline, corrected, mode, seed)
+            contract = require_matching_contract(
+                baseline,
+                corrected,
+                mode,
+                seed,
+                allowed_added_kernels=allowed_added_kernels,
+            )
             contract_rows.append(contract)
             baseline_metrics = baseline["metrics"]
             corrected_metrics = corrected["metrics"]
@@ -338,6 +358,12 @@ def main() -> None:
     parser.add_argument("--seeds", default="2026,2027,2028,2029")
     parser.add_argument("--traits", default="")
     parser.add_argument("--out-prefix", type=Path, required=True)
+    parser.add_argument(
+        "--allow-added-kernel",
+        action="append",
+        default=[],
+        help="Permit only these additional corrected-model kernels; may be repeated.",
+    )
     args = parser.parse_args()
 
     root = args.root.resolve()
@@ -352,6 +378,7 @@ def main() -> None:
         modes=csv_values(args.modes),
         seeds=[int(value) for value in csv_values(args.seeds)],
         requested_traits=csv_values(args.traits),
+        allowed_added_kernels=set(args.allow_added_kernel),
     )
     trait_summary, macro = summarize(paired, contract=contract)
     outputs = {
