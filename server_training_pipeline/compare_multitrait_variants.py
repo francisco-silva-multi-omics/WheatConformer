@@ -211,7 +211,7 @@ def main() -> None:
     parser.add_argument("--modes", default="env,additive,full")
     parser.add_argument("--seeds", default="2026,2027,2028,2029")
     parser.add_argument("--traits", default="")
-    parser.add_argument("--out-prefix", required=True)
+    parser.add_argument("--out-prefix", type=Path, required=True)
     args = parser.parse_args()
 
     root = args.root.resolve()

@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 
 import pandas as pd
 
-from server_training_pipeline.compare_multitrait_variants import compare_variants, summarize
+from server_training_pipeline.compare_multitrait_variants import compare_variants, main, summarize
 
 
 def write_run(
@@ -77,3 +78,38 @@ def test_comparison_allows_seed_specific_but_pair_matched_traits(tmp_path: Path)
     assert bool(missing["paired_available"]) is False
     assert trait_summary.set_index("trait_name_canonical").loc["B", "seed_count"] == 1
     assert macro.loc[0, "delta_normalized_rmse_trait_mean"] < 0
+
+
+def test_comparison_cli_writes_all_reports(
+    tmp_path: Path, monkeypatch
+) -> None:
+    for seed, traits in [(1, ["A", "B"]), (2, ["A"])]:
+        write_run(tmp_path, "baseline", "env", seed, traits, rmse_shift=0.0)
+        write_run(tmp_path, "corrected", "env", seed, traits, rmse_shift=-0.1)
+    out_prefix = tmp_path / "comparisons" / "matched"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "compare_multitrait_variants",
+            "--root",
+            str(tmp_path),
+            "--baseline-variant",
+            "baseline",
+            "--corrected-variant",
+            "corrected",
+            "--modes",
+            "env",
+            "--seeds",
+            "1,2",
+            "--traits",
+            "A,B",
+            "--out-prefix",
+            str(out_prefix),
+        ],
+    )
+
+    main()
+
+    for suffix in ["paired", "contract", "trait_availability", "trait_summary", "macro_summary"]:
+        assert out_prefix.with_name(f"{out_prefix.name}_{suffix}.tsv").is_file()
