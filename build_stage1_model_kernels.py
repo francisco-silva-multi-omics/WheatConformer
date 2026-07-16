@@ -8,6 +8,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from server_training_pipeline.observation_index_bundle import write_observation_index_bundle
+
 
 BASE = Path(__file__).resolve().parent
 
@@ -251,14 +253,9 @@ def main() -> None:
 
     geno_obs_index = model_table["geno_kernel_index"].to_numpy(dtype=np.int32)
     env_obs_index = model_table["env_kernel_index"].to_numpy(dtype=np.int32)
-    np.savez_compressed(
+    write_observation_index_bundle(
+        model_table,
         args.out_dir / f"{args.prefix}_observation_kernel_indices.npz",
-        geno_kernel_index=geno_obs_index,
-        env_kernel_index=env_obs_index,
-        y=model_table["phenotype_value"].to_numpy(dtype=np.float32),
-        weight=model_table["weight_g_e"].to_numpy(dtype=np.float32),
-        var=model_table["var_g_e"].to_numpy(dtype=np.float32),
-        se=model_table["SE_g_e"].to_numpy(dtype=np.float32),
     )
 
     unique_geno_idx = np.array(sorted(np.unique(geno_obs_index)), dtype=np.int32)

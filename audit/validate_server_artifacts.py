@@ -2,15 +2,22 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
+REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+if str(REPOSITORY_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPOSITORY_ROOT))
+
 try:
     from .audit_common import sampled_kernel_diagnostics
 except ImportError:
     from audit_common import sampled_kernel_diagnostics
+
+from server_training_pipeline.observation_index_bundle import compare_observation_index_bundle
 
 
 def write_csv(path: Path, rows: list[dict[str, object]]) -> None:
@@ -253,29 +260,11 @@ def validate_model_dir(path: Path, out_rows: list[dict[str, object]]) -> None:
         record["observation_index_bundle_present"] = index_path.exists()
         if index_path.exists():
             try:
-                with np.load(index_path) as bundle:
-                    required = {"geno_kernel_index", "env_kernel_index"}
-                    bundle_schema = required.issubset(bundle.files)
-                    bundle_rows_match = bool(
-                        bundle_schema
-                        and len(bundle["geno_kernel_index"]) == len(obs)
-                        and len(bundle["env_kernel_index"]) == len(obs)
-                    )
-                    bundle_values_match = bool(
-                        bundle_rows_match
-                        and np.array_equal(
-                            bundle["geno_kernel_index"],
-                            pd.to_numeric(obs["geno_kernel_index"], errors="coerce").to_numpy(),
-                        )
-                        and np.array_equal(
-                            bundle["env_kernel_index"],
-                            pd.to_numeric(obs["env_kernel_index"], errors="coerce").to_numpy(),
-                        )
-                    )
-                record["observation_index_bundle_schema"] = bundle_schema
-                record["observation_index_bundle_rows_match"] = bundle_rows_match
-                record["observation_index_bundle_values_match"] = bundle_values_match
-                if not (bundle_schema and bundle_rows_match and bundle_values_match):
+                comparison = compare_observation_index_bundle(obs, index_path)
+                record["observation_index_bundle_schema"] = comparison["schema_match"]
+                record["observation_index_bundle_rows_match"] = comparison["rows_match"]
+                record["observation_index_bundle_values_match"] = comparison["values_match"]
+                if not all(comparison.values()):
                     warnings.append("auxiliary observation index NPZ does not match the Parquet ledger")
             except Exception as exc:
                 record["observation_index_bundle_schema"] = False

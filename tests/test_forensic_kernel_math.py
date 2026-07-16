@@ -28,6 +28,7 @@ from audit.run_forensic_audit import (
     source_path_label,
 )
 from server_training_pipeline.split_utils import make_split, split_group_column, split_leakage_record
+from server_training_pipeline.observation_index_bundle import write_observation_index_bundle
 
 
 def test_source_path_label_records_actual_relative_source(tmp_path: Path) -> None:
@@ -285,6 +286,10 @@ def test_server_validator_maps_source_indices_to_compact_kernels(
             "env_kernel_id": ["E1", "E2", "E2"],
             "geno_kernel_index": [10, 20, 10],
             "env_kernel_index": [5, 8, 8],
+            "phenotype_value": [1.0, 2.0, 3.0],
+            "weight_g_e": [1.0, 1.0, 1.0],
+            "var_g_e": [1.0, 1.0, 1.0],
+            "SE_g_e": [1.0, 1.0, 1.0],
         }
     )
     (tmp_path / f"{prefix}_model_ready_stage1_observations.parquet").write_bytes(b"parquet")
@@ -305,10 +310,9 @@ def test_server_validator_maps_source_indices_to_compact_kernels(
             "compact_kernel_index": [0, 1],
         }
     ).to_csv(tmp_path / f"{prefix}_K_E_unique_order.tsv", sep="\t", index=False)
-    np.savez_compressed(
+    write_observation_index_bundle(
+        obs,
         tmp_path / f"{prefix}_observation_kernel_indices.npz",
-        geno_kernel_index=obs["geno_kernel_index"].to_numpy(),
-        env_kernel_index=obs["env_kernel_index"].to_numpy(),
     )
 
     rows: list[dict[str, object]] = []
@@ -333,6 +337,10 @@ def test_server_validator_fails_unmapped_source_index_and_warns_on_stale_npz(
             "env_kernel_id": ["E1", "E2"],
             "geno_kernel_index": [10, 30],
             "env_kernel_index": [5, 8],
+            "phenotype_value": [1.0, 2.0],
+            "weight_g_e": [1.0, 1.0],
+            "var_g_e": [1.0, 1.0],
+            "SE_g_e": [1.0, 1.0],
         }
     )
     (tmp_path / f"{prefix}_model_ready_stage1_observations.parquet").write_bytes(b"parquet")

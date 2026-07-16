@@ -6,6 +6,8 @@ from pathlib import Path
 
 import pandas as pd
 
+from server_training_pipeline.observation_index_bundle import write_observation_index_bundle
+
 
 def read_table(path: Path) -> pd.DataFrame:
     if str(path).endswith(".parquet"):
@@ -48,6 +50,10 @@ def main() -> None:
     shutil.copytree(args.base_model_dir, args.out_model_dir)
     merged.to_parquet(args.out_model_dir / f"{args.prefix}_model_ready_stage1_observations.parquet", index=False)
     merged.to_csv(args.out_model_dir / f"{args.prefix}_model_ready_stage1_observations.tsv.gz", sep="\t", index=False)
+    bundle_qc = write_observation_index_bundle(
+        merged,
+        args.out_model_dir / f"{args.prefix}_observation_kernel_indices.npz",
+    )
 
     qc = pd.DataFrame(
         [
@@ -60,6 +66,8 @@ def main() -> None:
             {"metric": "test_rows", "value": int(merged["baseline_split"].astype(str).str.lower().eq("test").sum())},
             {"metric": "residual_mean", "value": float(merged["phenotype_value"].mean()) if len(merged) else ""},
             {"metric": "residual_sd", "value": float(merged["phenotype_value"].std()) if len(merged) else ""},
+            {"metric": "observation_index_bundle_rows", "value": bundle_qc["rows"]},
+            {"metric": "observation_index_bundle_bytes", "value": bundle_qc["bytes"]},
         ]
     )
     qc.to_csv(args.out_model_dir / f"{args.prefix}_DTH_residual_observations_qc.tsv", sep="\t", index=False)
