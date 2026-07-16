@@ -8,7 +8,11 @@ import pytest
 
 from build_environment_component_kernels import assert_kernel_valid, parse_value, standardized_kernel
 from build_pedigree_kernel import additive_relationship, assert_relationship_valid, build_parent_table
-from audit.validate_server_artifacts import find_artifacts, validate_explicit_kernel_order
+from audit.validate_server_artifacts import (
+    find_artifacts,
+    validate_explicit_kernel_order,
+    validate_model_dir,
+)
 from audit.audit_common import (
     independent_additive_relationship,
     independent_environment_kernel,
@@ -269,6 +273,99 @@ def test_server_validator_recursively_discovers_artifacts_without_duplicates(tmp
 
     assert set(discovered) == {path.resolve() for path in expected}
     assert len(discovered) == len(set(discovered))
+
+
+def test_server_validator_maps_source_indices_to_compact_kernels(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    prefix = "stage1_test"
+    obs = pd.DataFrame(
+        {
+            "panel_sample_id": ["G1", "G2", "G1"],
+            "env_kernel_id": ["E1", "E2", "E2"],
+            "geno_kernel_index": [10, 20, 10],
+            "env_kernel_index": [5, 8, 8],
+        }
+    )
+    (tmp_path / f"{prefix}_model_ready_stage1_observations.parquet").write_bytes(b"parquet")
+    monkeypatch.setattr(pd, "read_parquet", lambda _path: obs.copy())
+    np.save(tmp_path / f"{prefix}_K_G_unique.npy", np.eye(2, dtype=np.float32))
+    np.save(tmp_path / f"{prefix}_K_E_unique.npy", np.eye(2, dtype=np.float32))
+    pd.DataFrame(
+        {
+            "sample_id": ["G1", "G2"],
+            "source_kernel_index": [10, 20],
+            "compact_kernel_index": [0, 1],
+        }
+    ).to_csv(tmp_path / f"{prefix}_K_G_unique_order.tsv", sep="\t", index=False)
+    pd.DataFrame(
+        {
+            "env_id": ["E1", "E2"],
+            "source_kernel_index": [5, 8],
+            "compact_kernel_index": [0, 1],
+        }
+    ).to_csv(tmp_path / f"{prefix}_K_E_unique_order.tsv", sep="\t", index=False)
+    np.savez_compressed(
+        tmp_path / f"{prefix}_observation_kernel_indices.npz",
+        geno_kernel_index=obs["geno_kernel_index"].to_numpy(),
+        env_kernel_index=obs["env_kernel_index"].to_numpy(),
+    )
+
+    rows: list[dict[str, object]] = []
+    validate_model_dir(tmp_path, rows)
+
+    assert len(rows) == 1
+    assert rows[0]["status"] == "PASS"
+    assert rows[0]["geno_source_indices_mapped"] is True
+    assert rows[0]["env_source_indices_mapped"] is True
+    assert rows[0]["geno_compact_indices_in_range"] is True
+    assert rows[0]["env_compact_indices_in_range"] is True
+    assert rows[0]["observation_index_bundle_values_match"] is True
+
+
+def test_server_validator_fails_unmapped_source_index_and_warns_on_stale_npz(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    prefix = "stage1_test"
+    obs = pd.DataFrame(
+        {
+            "panel_sample_id": ["G1", "G3"],
+            "env_kernel_id": ["E1", "E2"],
+            "geno_kernel_index": [10, 30],
+            "env_kernel_index": [5, 8],
+        }
+    )
+    (tmp_path / f"{prefix}_model_ready_stage1_observations.parquet").write_bytes(b"parquet")
+    monkeypatch.setattr(pd, "read_parquet", lambda _path: obs.copy())
+    np.save(tmp_path / f"{prefix}_K_G_unique.npy", np.eye(2, dtype=np.float32))
+    np.save(tmp_path / f"{prefix}_K_E_unique.npy", np.eye(2, dtype=np.float32))
+    pd.DataFrame(
+        {
+            "sample_id": ["G1", "G2"],
+            "source_kernel_index": [10, 20],
+            "compact_kernel_index": [0, 1],
+        }
+    ).to_csv(tmp_path / f"{prefix}_K_G_unique_order.tsv", sep="\t", index=False)
+    pd.DataFrame(
+        {
+            "env_id": ["E1", "E2"],
+            "source_kernel_index": [5, 8],
+            "compact_kernel_index": [0, 1],
+        }
+    ).to_csv(tmp_path / f"{prefix}_K_E_unique_order.tsv", sep="\t", index=False)
+    np.savez_compressed(
+        tmp_path / f"{prefix}_observation_kernel_indices.npz",
+        geno_kernel_index=np.array([10]),
+        env_kernel_index=np.array([5]),
+    )
+
+    rows: list[dict[str, object]] = []
+    validate_model_dir(tmp_path, rows)
+
+    assert rows[0]["status"] == "FAIL"
+    assert rows[0]["geno_unmapped_count"] == 1
+    assert rows[0]["observation_index_bundle_rows_match"] is False
+    assert rows[0]["warning_count"] == 1
 
 
 @pytest.mark.parametrize(

@@ -100,27 +100,194 @@ def validate_explicit_kernel_order(
     return record
 
 
+def validate_compact_axis(
+    obs: pd.DataFrame,
+    kernel_path: Path,
+    order_path: Path,
+    order_id_col: str,
+    obs_index_col: str,
+    obs_id_col: str,
+    kernel_label: str,
+    obs_label: str,
+) -> tuple[dict[str, object], list[bool]]:
+    record: dict[str, object] = {
+        f"{kernel_label}_kernel_present": kernel_path.exists(),
+        f"{kernel_label}_order_present": order_path.exists(),
+    }
+    checks = [kernel_path.exists(), order_path.exists()]
+    if not all(checks):
+        return record, checks
+
+    kernel = np.load(kernel_path, mmap_mode="r")
+    order = pd.read_csv(order_path, sep="\t", dtype=str)
+    kernel_square = kernel.ndim == 2 and kernel.shape[0] == kernel.shape[1]
+    required_order_cols = {order_id_col, "source_kernel_index", "compact_kernel_index"}
+    order_schema = required_order_cols.issubset(order.columns)
+    record.update(
+        {
+            f"{kernel_label}_dim": int(kernel.shape[0]) if kernel.ndim == 2 else -1,
+            f"{kernel_label}_order_rows": len(order),
+            f"{kernel_label}_kernel_square": kernel_square,
+            f"{kernel_label}_order_schema": order_schema,
+        }
+    )
+    checks.extend([kernel_square, order_schema])
+    if not order_schema:
+        return record, checks
+
+    source = pd.to_numeric(order["source_kernel_index"], errors="coerce")
+    compact = pd.to_numeric(order["compact_kernel_index"], errors="coerce")
+    source_values = source.to_numpy(dtype=float)
+    compact_values = compact.to_numpy(dtype=float)
+    source_integral = bool(
+        np.isfinite(source_values).all() and np.equal(source_values, np.floor(source_values)).all()
+    )
+    compact_integral = bool(
+        np.isfinite(compact_values).all() and np.equal(compact_values, np.floor(compact_values)).all()
+    )
+    id_values = order[order_id_col].fillna("").astype(str)
+    id_unique = bool(id_values.ne("").all() and id_values.is_unique)
+    source_unique = bool(source_integral and source.is_unique)
+    compact_zero_based = False
+    if compact_integral:
+        compact_int = compact.astype(np.int64)
+        compact_zero_based = bool(
+            np.array_equal(
+                np.sort(compact_int.to_numpy()),
+                np.arange(len(order), dtype=np.int64),
+            )
+        )
+    order_match = bool(kernel_square and kernel.shape[0] == len(order))
+    record.update(
+        {
+            f"{kernel_label}_order_id_unique": id_unique,
+            f"{kernel_label}_source_index_unique": source_unique,
+            f"{kernel_label}_compact_index_zero_based": compact_zero_based,
+            f"{kernel_label}_order_match": order_match,
+        }
+    )
+    checks.extend([id_unique, source_unique, compact_zero_based, order_match])
+
+    obs_index_present = obs_index_col in obs.columns
+    obs_id_present = obs_id_col in obs.columns
+    record[f"{obs_label}_source_index_present"] = obs_index_present
+    record[f"{obs_label}_id_present"] = obs_id_present
+    checks.extend([obs_index_present, obs_id_present])
+    if not (obs_index_present and obs_id_present and source_unique and compact_zero_based):
+        return record, checks
+
+    obs_source = pd.to_numeric(obs[obs_index_col], errors="coerce")
+    obs_source_values = obs_source.to_numpy(dtype=float)
+    obs_source_integral = bool(
+        np.isfinite(obs_source_values).all()
+        and np.equal(obs_source_values, np.floor(obs_source_values)).all()
+    )
+    record[f"{obs_label}_source_indices_numeric_integer"] = obs_source_integral
+    checks.append(obs_source_integral)
+    if not obs_source_integral:
+        return record, checks
+
+    source_int = source.astype(np.int64)
+    compact_int = compact.astype(np.int64)
+    obs_source_int = obs_source.astype(np.int64)
+    source_to_compact = dict(zip(source_int, compact_int))
+    source_to_id = dict(zip(source_int, id_values))
+    mapped_compact = obs_source_int.map(source_to_compact)
+    mapped_ids = obs_source_int.map(source_to_id)
+    mapped_complete = bool(mapped_compact.notna().all())
+    mapped_in_range = bool(
+        mapped_complete
+        and mapped_compact.between(0, max(len(order) - 1, 0)).all()
+    )
+    observed_ids = obs[obs_id_col].fillna("").astype(str)
+    ids_match = bool(mapped_complete and mapped_ids.astype(str).eq(observed_ids).all())
+    record.update(
+        {
+            f"{obs_label}_source_indices_mapped": mapped_complete,
+            f"{obs_label}_unmapped_count": int(mapped_compact.isna().sum()),
+            f"{obs_label}_compact_indices_in_range": mapped_in_range,
+            f"{obs_label}_ids_match_order": ids_match,
+            f"{obs_label}_id_mismatch_count": int((mapped_ids.astype(str) != observed_ids).sum()),
+        }
+    )
+    checks.extend([mapped_complete, mapped_in_range, ids_match])
+    return record, checks
+
+
 def validate_model_dir(path: Path, out_rows: list[dict[str, object]]) -> None:
     for obs_path in path.glob("*_model_ready_stage1_observations.parquet"):
         prefix = obs_path.name.replace("_model_ready_stage1_observations.parquet", "")
         obs = pd.read_parquet(obs_path)
-        g_order_path = path / f"{prefix}_K_G_unique_order.tsv"
-        e_order_path = path / f"{prefix}_K_E_unique_order.tsv"
-        g_path = path / f"{prefix}_K_G_unique.npy"
-        e_path = path / f"{prefix}_K_E_unique.npy"
-        record = {"model_dir": str(path), "prefix": prefix, "observation_rows": len(obs)}
-        if g_path.exists() and g_order_path.exists():
-            g_order = pd.read_csv(g_order_path, sep="\t", dtype=str)
-            kg = np.load(g_path, mmap_mode="r")
-            record.update({"K_G_dim": kg.shape[0], "K_G_order_rows": len(g_order), "K_G_order_unique": g_order.iloc[:, 0].nunique(), "K_G_order_match": len(g_order) == kg.shape[0]})
-        if e_path.exists() and e_order_path.exists():
-            e_order = pd.read_csv(e_order_path, sep="\t", dtype=str)
-            ke = np.load(e_path, mmap_mode="r")
-            record.update({"K_E_dim": ke.shape[0], "K_E_order_rows": len(e_order), "K_E_order_unique": e_order.iloc[:, 0].nunique(), "K_E_order_match": len(e_order) == ke.shape[0]})
-        if "geno_kernel_index" in obs and "env_kernel_index" in obs:
-            record["geno_indices_in_range"] = bool(obs["geno_kernel_index"].between(0, record.get("K_G_dim", 0) - 1).all())
-            record["env_indices_in_range"] = bool(obs["env_kernel_index"].between(0, record.get("K_E_dim", 0) - 1).all())
-        record["status"] = "PASS" if all(value is not False for key, value in record.items() if key.endswith(("_match", "_in_range"))) else "FAIL"
+        record: dict[str, object] = {
+            "model_dir": str(path),
+            "prefix": prefix,
+            "observation_rows": len(obs),
+        }
+        checks: list[bool] = [len(obs) > 0]
+        g_record, g_checks = validate_compact_axis(
+            obs,
+            path / f"{prefix}_K_G_unique.npy",
+            path / f"{prefix}_K_G_unique_order.tsv",
+            "sample_id",
+            "geno_kernel_index",
+            "panel_sample_id",
+            "K_G",
+            "geno",
+        )
+        e_record, e_checks = validate_compact_axis(
+            obs,
+            path / f"{prefix}_K_E_unique.npy",
+            path / f"{prefix}_K_E_unique_order.tsv",
+            "env_id",
+            "env_kernel_index",
+            "env_kernel_id",
+            "K_E",
+            "env",
+        )
+        record.update(g_record)
+        record.update(e_record)
+        checks.extend(g_checks + e_checks)
+
+        warnings: list[str] = []
+        index_path = path / f"{prefix}_observation_kernel_indices.npz"
+        record["observation_index_bundle_present"] = index_path.exists()
+        if index_path.exists():
+            try:
+                with np.load(index_path) as bundle:
+                    required = {"geno_kernel_index", "env_kernel_index"}
+                    bundle_schema = required.issubset(bundle.files)
+                    bundle_rows_match = bool(
+                        bundle_schema
+                        and len(bundle["geno_kernel_index"]) == len(obs)
+                        and len(bundle["env_kernel_index"]) == len(obs)
+                    )
+                    bundle_values_match = bool(
+                        bundle_rows_match
+                        and np.array_equal(
+                            bundle["geno_kernel_index"],
+                            pd.to_numeric(obs["geno_kernel_index"], errors="coerce").to_numpy(),
+                        )
+                        and np.array_equal(
+                            bundle["env_kernel_index"],
+                            pd.to_numeric(obs["env_kernel_index"], errors="coerce").to_numpy(),
+                        )
+                    )
+                record["observation_index_bundle_schema"] = bundle_schema
+                record["observation_index_bundle_rows_match"] = bundle_rows_match
+                record["observation_index_bundle_values_match"] = bundle_values_match
+                if not (bundle_schema and bundle_rows_match and bundle_values_match):
+                    warnings.append("auxiliary observation index NPZ does not match the Parquet ledger")
+            except Exception as exc:
+                record["observation_index_bundle_schema"] = False
+                record["observation_index_bundle_rows_match"] = False
+                record["observation_index_bundle_values_match"] = False
+                warnings.append(f"could not validate auxiliary observation index NPZ: {type(exc).__name__}: {exc}")
+        else:
+            warnings.append("auxiliary observation index NPZ is absent")
+
+        record["warning_count"] = len(warnings)
+        record["warnings"] = "; ".join(warnings)
+        record["status"] = "PASS" if all(checks) else "FAIL"
         out_rows.append(record)
 
 
@@ -196,6 +363,7 @@ def main() -> None:
         "artifacts": len(inventory),
         "model_directories": len(model_rows),
         "model_failures": sum(row.get("status") == "FAIL" for row in model_rows),
+        "model_warnings": sum(int(row.get("warning_count", 0)) for row in model_rows),
         "kernel_failures": sum(row.get("status") in {"FAIL", "ERROR"} for row in kernel_rows),
         "explicit_validation_failures": sum(row.get("status") != "PASS" for row in explicit_rows),
     }
