@@ -73,8 +73,70 @@ def write_csv(path: Path, rows: Iterable[dict[str, object]] | pd.DataFrame, colu
     frame.to_csv(path, index=False, lineterminator="\n")
 
 
-def git(root: Path, *args: str) -> str:
-    return subprocess.check_output(["git", "-C", str(root), *args], text=True).strip()
+def git(root: Path, *args: str) -> str | None:
+    """Return Git output when *root* is a worktree, without emitting fatal noise."""
+    try:
+        process = subprocess.run(
+            ["git", "-C", str(root), *args],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+    except FileNotFoundError:
+        return None
+    if process.returncode != 0:
+        return None
+    return process.stdout.strip()
+
+
+def git_provenance(root: Path, out_dir: Path) -> dict[str, object]:
+    """Describe either a Git worktree or an archive deployment receipt."""
+    commit = git(root, "rev-parse", "HEAD")
+    if commit:
+        branch = git(root, "branch", "--show-current") or ""
+        return {
+            "repository_present": True,
+            "provenance_source": "git_worktree",
+            "commit": commit,
+            "branch": branch,
+            "detached_head": not bool(branch),
+            "status_porcelain": git(root, "status", "--porcelain") or "",
+            "receipt_path": "",
+        }
+
+    receipt_candidates = [
+        root / "audit" / "DEPLOYED_COMMIT.txt",
+        root / "DEPLOYED_COMMIT.txt",
+        out_dir / "DEPLOYED_COMMIT.txt",
+    ]
+    seen: set[Path] = set()
+    for receipt_path in receipt_candidates:
+        resolved = receipt_path.resolve()
+        if resolved in seen or not receipt_path.is_file():
+            continue
+        seen.add(resolved)
+        deployed_commit = receipt_path.read_text(encoding="utf-8", errors="replace").strip()
+        if re.fullmatch(r"[0-9a-fA-F]{7,64}", deployed_commit):
+            return {
+                "repository_present": False,
+                "provenance_source": "deployment_receipt",
+                "commit": deployed_commit.lower(),
+                "branch": "",
+                "detached_head": False,
+                "status_porcelain": "not_available_for_archive_deployment",
+                "receipt_path": str(resolved),
+            }
+
+    return {
+        "repository_present": False,
+        "provenance_source": "unavailable",
+        "commit": "",
+        "branch": "",
+        "detached_head": False,
+        "status_porcelain": "not_available",
+        "receipt_path": "",
+    }
 
 
 def package_versions() -> dict[str, str]:
@@ -1065,7 +1127,7 @@ def main() -> None:
         "seed": SEED,
         "command": " ".join(sys.argv),
         "repository_root": str(root),
-        "git": {"commit": git(root, "rev-parse", "HEAD"), "branch": git(root, "branch", "--show-current"), "status_porcelain": git(root, "status", "--porcelain")},
+        "git": git_provenance(root, out_dir),
         "trial_root": source_summary(trial_root),
         "genotypic_root": source_summary(geno_root),
         "environment": {"python": sys.version, "platform": platform.platform(), "executable": sys.executable, "packages": package_versions()},

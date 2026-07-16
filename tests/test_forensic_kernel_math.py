@@ -17,7 +17,7 @@ from audit.audit_common import (
     join_cardinality,
     mean_impute_markers,
 )
-from audit.run_forensic_audit import source_path_label
+from audit.run_forensic_audit import git_provenance, source_path_label
 from server_training_pipeline.split_utils import make_split, split_group_column, split_leakage_record
 
 
@@ -25,6 +25,33 @@ def test_source_path_label_records_actual_relative_source(tmp_path: Path) -> Non
     trial_root = tmp_path / "TRIALS_AND_NURSERIES"
     trial_root.mkdir()
     assert source_path_label(tmp_path, trial_root) == "TRIALS_AND_NURSERIES"
+
+
+def test_git_provenance_uses_archive_deployment_receipt(tmp_path: Path) -> None:
+    audit_dir = tmp_path / "audit"
+    audit_dir.mkdir()
+    commit = "94d3e73fbe8320d912dcf04b7f0f8eda7074cf7f"
+    (audit_dir / "DEPLOYED_COMMIT.txt").write_text(commit + "\n", encoding="utf-8")
+
+    provenance = git_provenance(tmp_path, audit_dir)
+
+    assert provenance["repository_present"] is False
+    assert provenance["provenance_source"] == "deployment_receipt"
+    assert provenance["commit"] == commit
+    assert provenance["status_porcelain"] == "not_available_for_archive_deployment"
+    assert provenance["receipt_path"] == str((audit_dir / "DEPLOYED_COMMIT.txt").resolve())
+
+
+def test_git_provenance_is_explicit_when_no_provenance_exists(tmp_path: Path) -> None:
+    audit_dir = tmp_path / "audit"
+    audit_dir.mkdir()
+
+    provenance = git_provenance(tmp_path, audit_dir)
+
+    assert provenance["repository_present"] is False
+    assert provenance["provenance_source"] == "unavailable"
+    assert provenance["commit"] == ""
+    assert provenance["status_porcelain"] == "not_available"
 
 
 def test_vanraden_matches_analytical_two_marker_example() -> None:
