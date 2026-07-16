@@ -180,7 +180,7 @@ def compact_kernel(
     source_lookup = dict(zip(source_order[source_id_col], source_order["_source_row"].astype(int)))
     target_ids = target_order[target_id_col].fillna("").astype(str)
     mapped_source = target_ids.map(source_lookup)
-    mapped_mask = mapped_source.notna().to_numpy()
+    mapped_mask = mapped_source.notna().to_numpy(copy=True)
     mapped_before_coverage = int(mapped_mask.sum())
     prepared_coverage_path: Path | None = None
     if coverage_path is not None:

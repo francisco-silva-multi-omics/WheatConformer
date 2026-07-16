@@ -17,6 +17,9 @@ DATE_SUPPLEMENT="${WEATHER_RECOVERY_DATE_SUPPLEMENT:-}"
 LOCATION_REGISTRY="${WEATHER_RECOVERY_LOCATION_REGISTRY:-}"
 TARGET_SCOPE="${WEATHER_RECOVERY_TARGET_SCOPE:-model}"
 WORKERS="${WEATHER_RECOVERY_WORKERS:-4}"
+DISCOVER_RAW_DATES="${WEATHER_RECOVERY_DISCOVER_RAW_DATES:-0}"
+TRIAL_ROOT="${WEATHER_RECOVERY_TRIAL_ROOT:-$ROOT/TRIALS_AND_NURSERIES}"
+DATE_RECOVERY_DIR="${WEATHER_RECOVERY_DATE_RECOVERY_DIR:-$ROOT/model_kernels/weather_date_recovery_${TAG}}"
 
 export PYTHONPATH="$CODE_ROOT:$ROOT${PYTHONPATH:+:$PYTHONPATH}"
 mkdir -p "$WORK_ENV" "$AUDIT_DIR" "$KERNEL_DIR" "$ROOT/logs"
@@ -65,6 +68,45 @@ audit_weather() {
 log "START classify pre-recovery causes and model overlap"
 audit_weather "$AUDIT_DIR/prefetch"
 log "DONE classify pre-recovery causes"
+
+if [[ "$DISCOVER_RAW_DATES" == "1" ]]; then
+  raw_date_args=(
+    --root "$ROOT"
+    --trial-root "$TRIAL_ROOT"
+    --targets "$AUDIT_DIR/prefetch/weather_recovery_targets_model.tsv"
+    --out-dir "$DATE_RECOVERY_DIR"
+  )
+  [[ -n "$DATE_SUPPLEMENT" ]] && raw_date_args+=(--base-supplement "$DATE_SUPPLEMENT")
+  log "START provenance-aware raw trial date recovery"
+  "$PYTHON" "$CODE_ROOT/recover_trial_weather_dates.py" "${raw_date_args[@]}"
+  log "DONE raw trial date recovery"
+
+  recovered_supplement="$DATE_RECOVERY_DIR/weather_date_supplement.tsv"
+  supplement_rows="$($PYTHON - "$recovered_supplement" <<'PY'
+import sys
+from pathlib import Path
+import pandas as pd
+
+path = Path(sys.argv[1])
+print(len(pd.read_csv(path, sep="\t")) if path.exists() and path.stat().st_size else 0)
+PY
+)"
+  if [[ "$supplement_rows" -gt 0 ]]; then
+    rebuild_args=(
+      --root "$ROOT"
+      --environment-dir "$SOURCE_ENV"
+      --out-dir "$WORK_ENV"
+      --date-supplement "$recovered_supplement"
+    )
+    [[ -n "$LOCATION_REGISTRY" ]] && rebuild_args+=(--location-registry "$LOCATION_REGISTRY")
+    log "START rebuild manifest with $supplement_rows reviewed raw-date supplement rows"
+    "$PYTHON" "$CODE_ROOT/build_trial_weather_fetch_manifest.py" "${rebuild_args[@]}"
+    audit_weather "$AUDIT_DIR/prefetch"
+    log "DONE rebuild manifest and refresh prefetch audit"
+  else
+    log "No unique cycle-plausible full raw dates recovered; manifest remains unchanged"
+  fi
+fi
 
 if [[ "$TARGET_SCOPE" != "all" && "$TARGET_SCOPE" != "model" ]]; then
   echo "WEATHER_RECOVERY_TARGET_SCOPE must be model or all; found $TARGET_SCOPE" >&2
@@ -128,6 +170,10 @@ log "DONE final weather recovery audit"
 printf 'artifact\tpath\nsource_environment_data\t%s\nisolated_weather_cache\t%s\nisolated_recovered_kernels\t%s\nfinal_audit\t%s\n' \
   "$SOURCE_ENV" "$WORK_ENV" "$KERNEL_DIR" "$AUDIT_DIR/final" \
   > "$AUDIT_DIR/weather_recovery_paths.tsv"
+if [[ "$DISCOVER_RAW_DATES" == "1" ]]; then
+  printf 'raw_date_recovery\t%s\n' "$DATE_RECOVERY_DIR" \
+    >> "$AUDIT_DIR/weather_recovery_paths.tsv"
+fi
 
 if [[ "${WEATHER_RECOVERY_RUN_TRAINING:-0}" == "1" ]]; then
   VARIANT="${WEATHER_RECOVERY_VARIANT:-weather_recovery_${TAG}}"

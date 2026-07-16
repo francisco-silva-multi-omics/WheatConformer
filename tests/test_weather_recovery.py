@@ -7,6 +7,12 @@ import numpy as np
 import pandas as pd
 
 from build_trial_weather_fetch_manifest import ID_COLS, env_id, main as build_manifest
+from recover_trial_weather_dates import (
+    discover_date_candidates,
+    merge_base_supplement,
+    parse_raw_date,
+    resolve_candidates,
+)
 from server_training_pipeline.audit_weather_recovery import (
     classify_environment_coverage,
     request_id,
@@ -270,3 +276,147 @@ def test_weather_adoption_uses_validation_only_and_requires_consistent_seeds() -
     decision = summarize(paired, contract).set_index("mode")
     assert bool(decision.loc["env", "accepted"])
     assert bool(decision.loc["overall", "accepted"])
+
+
+def test_raw_trial_date_parser_separates_full_partial_and_invalid_dates() -> None:
+    full = parse_raw_date("15/11/2020")
+    partial = parse_raw_date("00/05/1998")
+    invalid = parse_raw_date("29/02/1997")
+
+    assert full["parse_status"] == "full_date"
+    assert pd.Timestamp(full["parsed_date"]) == pd.Timestamp("2020-11-15")
+    assert partial["parse_status"] == "partial_month_year"
+    assert partial["partial_month"] == 5
+    assert partial["partial_year"] == 1998
+    assert pd.isna(partial["parsed_date"])
+    assert invalid["parse_status"] == "invalid_partial_date"
+    assert pd.isna(invalid["parsed_date"])
+
+
+def test_raw_trial_date_recovery_accepts_only_unique_cycle_plausible_dates(
+    tmp_path: Path,
+) -> None:
+    trial_root = tmp_path / "TRIALS_AND_NURSERIES"
+    trial_dir = trial_root / "trial_a"
+    trial_dir.mkdir(parents=True)
+    target_rows = pd.DataFrame(
+        [
+            {
+                "env_id": "T1|1|7|MEXICO|SITE|2020",
+                "trial_dir": "trial_a",
+                "Trial_name": "T1",
+                "Occ": "1",
+                "Loc_no": "7",
+                "Country": "MEXICO",
+                "Loc_desc": "SITE",
+                "Cycle": "2020",
+            },
+            {
+                "env_id": "T2|2|8|KENYA|SITE2|2019-20",
+                "trial_dir": "trial_a",
+                "Trial_name": "T2",
+                "Occ": "2",
+                "Loc_no": "8",
+                "Country": "KENYA",
+                "Loc_desc": "SITE2",
+                "Cycle": "2019-20",
+            },
+        ]
+    )
+    raw = pd.DataFrame(
+        [
+            {
+                "Trial name": "T1",
+                "Occ": "1",
+                "Loc_no": "7",
+                "Country": "MEXICO",
+                "Loc_desc": "SITE",
+                "Cycle": "2020",
+                "Trait name": "SOWING_DATE",
+                "Value": "15/11/2020",
+            },
+            {
+                "Trial name": "T1",
+                "Occ": "1",
+                "Loc_no": "7",
+                "Country": "MEXICO",
+                "Loc_desc": "SITE",
+                "Cycle": "2020",
+                "Trait name": "HARVEST_FINISHING_DATE",
+                "Value": "01/05/2023",
+            },
+            {
+                "Trial name": "T2",
+                "Occ": "2",
+                "Loc_no": "8",
+                "Country": "KENYA",
+                "Loc_desc": "SITE2",
+                "Cycle": "2019-20",
+                "Trait name": "SOWING_DATE_TEXT",
+                "Value": "00/05/2019",
+            },
+        ]
+    )
+    raw.to_csv(trial_dir / "trial_EnvData.xls", sep="\t", index=False)
+    non_date = raw.iloc[[0]].copy()
+    non_date["Trait name"] = "IRRIGATION_AFTER_SOWING"
+    non_date["Value"] = "100"
+    non_date.to_csv(trial_dir / "trial_no_dates_EnvData.xls", sep="\t", index=False)
+
+    candidates, files = discover_date_candidates(trial_root, target_rows)
+    supplement, resolution, conflicts = resolve_candidates(target_rows, candidates)
+
+    assert files["status"].tolist() == ["read", "read"]
+    assert supplement["env_id"].tolist() == ["T1|1|7|MEXICO|SITE|2020"]
+    assert supplement["sowing_date"].tolist() == ["2020-11-15"]
+    assert supplement["harvest_finish_date"].isna().all()
+    second = resolution.set_index("env_id").loc["T2|2|8|KENYA|SITE2|2019-20"]
+    assert second["sowing_date_resolution"] == "partial_month_year_review_only"
+    assert conflicts.empty
+
+
+def test_raw_trial_date_recovery_reports_conflicting_full_dates() -> None:
+    targets = pd.DataFrame(
+        {
+            "env_id": ["E1"],
+            "Cycle": ["2020"],
+        }
+    )
+    candidates = pd.DataFrame(
+        {
+            "target_env_id": ["E1", "E1"],
+            "date_field": ["sowing_date", "sowing_date"],
+            "parsed_date": [pd.Timestamp("2020-01-01"), pd.Timestamp("2020-01-02")],
+            "match_method": ["exact_env_id", "exact_env_id"],
+            "cycle_date_status": ["cycle_plausible", "cycle_plausible"],
+            "parse_status": ["full_date", "full_date"],
+            "source_file": ["a", "b"],
+        }
+    )
+
+    supplement, resolution, conflicts = resolve_candidates(targets, candidates)
+
+    assert supplement.empty
+    assert resolution.loc[0, "sowing_date_resolution"] == "conflicting_full_dates"
+    assert conflicts.loc[0, "candidate_dates"] == "2020-01-01;2020-01-02"
+
+
+def test_raw_trial_date_recovery_preserves_curated_base_supplement(
+    tmp_path: Path,
+) -> None:
+    base_path = tmp_path / "curated.tsv"
+    pd.DataFrame(
+        {
+            "env_id": ["E1"],
+            "sowing_date": ["15/11/2020"],
+            "provenance": ["manual_review"],
+        }
+    ).to_csv(base_path, sep="\t", index=False)
+    recovered = pd.DataFrame(
+        columns=["env_id", "sowing_date", "emergence_date", "harvest_start_date", "harvest_finish_date"]
+    )
+
+    combined = merge_base_supplement(recovered, base_path)
+
+    assert combined.loc[0, "sowing_date"] == "2020-11-15"
+    assert combined.loc[0, "provenance"] == "manual_review"

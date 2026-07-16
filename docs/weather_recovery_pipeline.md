@@ -14,8 +14,9 @@ not 845, and is not globally imputed by this workflow.
    dates outside NASA coverage, failed request, or ready but not fetched.
 2. Report overlap with all 11,616 environments, the compact pedigree-model order,
    traits, countries, cycles, and each environment-held-out split.
-3. Recover dates from the canonical fieldbook-derived environment table and optional
-   reviewed supplements. Every inferred window records its source.
+3. Recover dates from the canonical fieldbook-derived environment table, an optional
+   provenance-aware scan of raw `EnvData` files, and optional reviewed supplements.
+   Every inferred window records its source.
 4. Match coordinates by normalized `trial_dir + Loc_no`, then stable
    `Country + Loc_no`. Only approved rows from an optional location registry can
    fill remaining coordinates.
@@ -38,6 +39,13 @@ The location registry is TSV or CSV with `latitude`, `longitude`, and
 `review_status`. `review_status` must be `approved` or `reviewed`. Rows can be keyed
 by `env_id`, or by both `Country` and `Loc_no`.
 
+Set `WEATHER_RECOVERY_DISCOVER_RAW_DATES=1` to scan the reorganized raw trial tree.
+The scanner accepts a date automatically only when the environment match is exact
+or normalization-only, the complete date is unique, and its year is compatible with
+the trial cycle. Partial values such as `00/05/1998`, conflicting dates, fuzzy
+location matches, and cycle mismatches are retained for review but never converted
+into an exact weather window.
+
 ## Server execution
 
 Run from the repository clone, while keeping the data root separate:
@@ -59,11 +67,13 @@ mkdir -p logs
 nohup env \
   PYTHON="$PYTHON" \
   WHEATCONFORMER_CODE_ROOT="$CODE" \
-  WEATHER_RECOVERY_TAG="v1" \
+  WEATHER_RECOVERY_TAG="v2_raw_dates" \
   WEATHER_RECOVERY_TARGET_SCOPE="model" \
+  WEATHER_RECOVERY_DISCOVER_RAW_DATES="1" \
+  WEATHER_RECOVERY_TRIAL_ROOT="$DATA/TRIALS_AND_NURSERIES" \
   WEATHER_RECOVERY_WORKERS="4" \
   bash "$CODE/scripts/run_weather_recovery_pipeline.sh" "$DATA" \
-  > logs/weather_recovery_v1.nohup.log 2>&1 &
+  > logs/weather_recovery_v2_raw_dates.nohup.log 2>&1 &
 ```
 
 The audit reports both scopes separately. Even with
@@ -80,17 +90,17 @@ and compare the seven-trait model across seeds 2026-2029, rerun with:
 nohup env \
   PYTHON="$PYTHON" \
   WHEATCONFORMER_CODE_ROOT="$CODE" \
-  WEATHER_RECOVERY_TAG="v1" \
+  WEATHER_RECOVERY_TAG="v2_raw_dates" \
   WEATHER_RECOVERY_RUN_TRAINING="1" \
   WEATHER_RECOVERY_BASELINE_VARIANT="<current-corrected-variant>" \
   MULTITRAIT_WEIGHT_POWER="0" \
   MULTITRAIT_INCLUDE_DISABLED_KERNELS="K_E_TGW_V2" \
   bash "$CODE/scripts/run_weather_recovery_pipeline.sh" "$DATA" \
-  > logs/weather_recovery_v1_training.nohup.log 2>&1 &
+  > logs/weather_recovery_v2_raw_dates_training.nohup.log 2>&1 &
 ```
 
 The final decision is written to
-`trained_models/model_comparisons/weather_recovery_v1_adoption_decision.tsv`.
+`trained_models/model_comparisons/weather_recovery_v2_raw_dates_adoption_decision.tsv`.
 Acceptance requires a complete comparison grid, four seeds, improved mean
 validation normalized RMSE and Pearson, at least 75% seed-level wins for each, and
 at least 60% validation seed-trait RMSE wins. Otherwise the decision remains
@@ -98,17 +108,21 @@ at least 60% validation seed-trait RMSE wins. Otherwise the decision remains
 
 ## Primary outputs
 
-- `model_kernels/weather_recovery_audit_v1/final/weather_recovery_availability_summary.tsv`
-- `model_kernels/weather_recovery_audit_v1/final/weather_recovery_cause_summary.tsv`
-- `model_kernels/weather_recovery_audit_v1/final/weather_recovery_by_trait.tsv`
-- `model_kernels/weather_recovery_audit_v1/final/weather_recovery_by_country.tsv`
-- `model_kernels/weather_recovery_audit_v1/final/weather_recovery_by_cycle.tsv`
-- `model_kernels/weather_recovery_audit_v1/final/weather_recovery_by_split.tsv`
-- `model_kernels/weather_recovery_audit_v1/final/weather_recovery_split_leakage.tsv`
-- `environment_weather_recovery_kernels_v1/K_weather.npy`
-- `environment_weather_recovery_kernels_v1/K_stress.npy`
-- `environment_weather_recovery_kernels_v1/K_climatology.npy`
-- `environment_weather_recovery_kernels_v1/environment_expert_coverage.tsv`
+- `model_kernels/weather_recovery_audit_v2_raw_dates/final/weather_recovery_availability_summary.tsv`
+- `model_kernels/weather_recovery_audit_v2_raw_dates/final/weather_recovery_cause_summary.tsv`
+- `model_kernels/weather_recovery_audit_v2_raw_dates/final/weather_recovery_by_trait.tsv`
+- `model_kernels/weather_recovery_audit_v2_raw_dates/final/weather_recovery_by_country.tsv`
+- `model_kernels/weather_recovery_audit_v2_raw_dates/final/weather_recovery_by_cycle.tsv`
+- `model_kernels/weather_recovery_audit_v2_raw_dates/final/weather_recovery_by_split.tsv`
+- `model_kernels/weather_recovery_audit_v2_raw_dates/final/weather_recovery_split_leakage.tsv`
+- `environment_weather_recovery_kernels_v2_raw_dates/K_weather.npy`
+- `environment_weather_recovery_kernels_v2_raw_dates/K_stress.npy`
+- `environment_weather_recovery_kernels_v2_raw_dates/K_climatology.npy`
+- `environment_weather_recovery_kernels_v2_raw_dates/environment_expert_coverage.tsv`
+- `model_kernels/weather_date_recovery_v2_raw_dates/raw_trial_date_recovery_qc.tsv`
+- `model_kernels/weather_date_recovery_v2_raw_dates/raw_trial_date_resolution.tsv`
+- `model_kernels/weather_date_recovery_v2_raw_dates/raw_trial_date_conflicts.tsv`
+- `model_kernels/weather_date_recovery_v2_raw_dates/weather_date_supplement.tsv`
 
 The original `environment/` directory and every prior corrected-kernel directory
 remain unchanged.
