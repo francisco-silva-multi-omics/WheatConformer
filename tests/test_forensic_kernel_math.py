@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -15,7 +17,14 @@ from audit.audit_common import (
     join_cardinality,
     mean_impute_markers,
 )
+from audit.run_forensic_audit import source_path_label
 from server_training_pipeline.split_utils import make_split, split_group_column, split_leakage_record
+
+
+def test_source_path_label_records_actual_relative_source(tmp_path: Path) -> None:
+    trial_root = tmp_path / "TRIALS_AND_NURSERIES"
+    trial_root.mkdir()
+    assert source_path_label(tmp_path, trial_root) == "TRIALS_AND_NURSERIES"
 
 
 def test_vanraden_matches_analytical_two_marker_example() -> None:

@@ -22,17 +22,30 @@ import numpy as np
 import pandas as pd
 import pyarrow.parquet as pq
 
-from audit_common import (
-    canonical_gid,
-    deterministic_signature,
-    independent_observation_gxe,
-    independent_vanraden,
-    join_cardinality,
-    normalize_identifier,
-    sampled_kernel_diagnostics,
-    sha256_file,
-    write_json,
-)
+try:
+    from .audit_common import (
+        canonical_gid,
+        deterministic_signature,
+        independent_observation_gxe,
+        independent_vanraden,
+        join_cardinality,
+        normalize_identifier,
+        sampled_kernel_diagnostics,
+        sha256_file,
+        write_json,
+    )
+except ImportError:
+    from audit_common import (
+        canonical_gid,
+        deterministic_signature,
+        independent_observation_gxe,
+        independent_vanraden,
+        join_cardinality,
+        normalize_identifier,
+        sampled_kernel_diagnostics,
+        sha256_file,
+        write_json,
+    )
 
 
 SEED = 20260715
@@ -266,10 +279,25 @@ def inventory_tree(root: Path, repository_corpus: str, source_kind: str, out_dir
     return frame
 
 
-def static_lineage(root: Path, out_dir: Path) -> pd.DataFrame:
+def source_path_label(root: Path, source: Path) -> str:
+    try:
+        return source.resolve().relative_to(root.resolve()).as_posix()
+    except ValueError:
+        return source.resolve().as_posix()
+
+
+def static_lineage(
+    root: Path,
+    out_dir: Path,
+    trial_root: Path,
+    genotypic_root: Path,
+) -> pd.DataFrame:
+    trial_label = source_path_label(root, trial_root)
+    genotypic_label = source_path_label(root, genotypic_root)
     rows = [
-        ("raw_trials", "TRIALS_AND_NURSERIES_DATA/**", "build_requested_outputs.py", "build_phenotypes_and_environment", "phenotypes/model_input_phenotypes.tsv", "trial/cycle/occ/GID/trait", "source-specific parsing; numeric means", "mean duplicate numeric summaries"),
-        ("trial_manifest", "TRIALS_AND_NURSERIES_DATA/**/FieldBook*; DOI tables", "resolve_all_trial_gids.py", "main", "metadata_outputs/all_trials_genotype_manifest_resolved.tsv", "trial/cycle/occ/CID/SID/GID", "identifier resolution", "first/explicit source rules"),
+        ("raw_trials", f"{trial_label}/**", "build_requested_outputs.py", "build_phenotypes_and_environment", "phenotypes/model_input_phenotypes.tsv", "trial/cycle/occ/GID/trait", "source-specific parsing; numeric means", "mean duplicate numeric summaries"),
+        ("trial_manifest", f"{trial_label}/**/FieldBook*; DOI tables", "resolve_all_trial_gids.py", "main", "metadata_outputs/all_trials_genotype_manifest_resolved.tsv", "trial/cycle/occ/CID/SID/GID", "identifier resolution", "first/explicit source rules"),
+        ("raw_genotypic", f"{genotypic_label}/**", "audit/recover_genotypic_gid_matches.py", "main", "audit/genotypic_recovery/**", "platform/sample/GID", "format-aware matrix-axis parsing", "exact and explicit sample-to-GID evidence"),
         ("canonical", "phenotypes/model_input_phenotypes.tsv; manifests; panel orders", "build_canonical_integrated_database.py", "main", "integrated_database/canonical_trial_genotype_environment_plot_table.parquet", "trial_key/cycle/occ/resolved_gid; env_id", "HMP/environment membership", "duplicate phenotype means retained from upstream"),
         ("stage1", "canonical parquet; phenotypes/all_rawdata.tsv", "build_stage1_adjusted_phenotypes.py", "main", "phenotypes/stage1_adjusted_phenotypes.parquet", "trait/trial/environment/genotype", "finite phenotype and model terms", "linear-model adjusted y_tilde; fallback mean"),
         ("K_G", "HMP HapMap marker file", "build_requested_outputs.py", "compute_hmp_qc; vanraden_kernel", "genotype_panels/hmp/K_HMP.QCfiltered.meanDiag1.npy", "sample_id order", "MAF/missing/heterozygosity QC", "marker-mean imputation; VanRaden; mean-diagonal scale"),
@@ -842,6 +870,8 @@ def report(
     ka_conflicts = next((row["value"] for row in ka if row["check"] == "sample_ids_with_conflicting_cross_names"), "unknown")
     split_failures = int((splits.get("leakage_status", pd.Series(dtype=str)) == "fail").sum())
     kernel_failures = int((kernels.get("status", pd.Series(dtype=str)) == "FAIL").sum())
+    trial_argument = source_path_label(root, Path(str(config["trial_root"]["path"])))
+    genotypic_argument = source_path_label(root, Path(str(config["genotypic_root"]["path"])))
     lines = [
         "# Kernel Validation Report",
         "",
@@ -988,7 +1018,7 @@ def report(
         "## 18. Reproducible commands",
         "",
         "```powershell",
-        ".\\.audit-venv\\Scripts\\python.exe audit\\run_forensic_audit.py --root . --trial-root TRIALS_AND_NURSERIES_DATA --genotypic-root GENOTYPIC_DATA --out-dir audit",
+        f".\\.audit-venv\\Scripts\\python.exe audit\\run_forensic_audit.py --root . --trial-root {trial_argument} --genotypic-root {genotypic_argument} --out-dir audit",
         ".\\.audit-venv\\Scripts\\python.exe audit\\compare_corrected_environment_kernel.py --root .",
         ".\\.audit-venv\\Scripts\\python.exe -m pytest tests\\test_forensic_kernel_math.py tests\\test_environment_kernel_scaling.py tests\\test_end_to_end_toy_pipeline.py -q",
         "```",
@@ -996,7 +1026,7 @@ def report(
         "Server continuation:",
         "",
         "```bash",
-        "python audit/run_forensic_audit.py --root . --trial-root TRIALS_AND_NURSERIES_DATA --genotypic-root GENOTYPIC_DATA --out-dir audit --skip-source-inventory",
+        f"python audit/run_forensic_audit.py --root . --trial-root {trial_argument} --genotypic-root {genotypic_argument} --out-dir audit --skip-source-inventory",
         "python audit/validate_server_artifacts.py --root . --out-dir audit/server_artifacts",
         "bash scripts/run_forensic_kernel_corrections_server.sh .",
         "```",
@@ -1049,7 +1079,7 @@ def main() -> None:
         encoding="utf-8",
     )
 
-    static_lineage(root, out_dir)
+    static_lineage(root, out_dir, trial_root, geno_root)
     corpus = source_code_corpus(root)
     if args.skip_source_inventory and (out_dir / "genotypic_data_inventory.csv").exists():
         geno_inventory = pd.read_csv(out_dir / "genotypic_data_inventory.csv", low_memory=False)

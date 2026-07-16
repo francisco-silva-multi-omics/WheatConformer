@@ -24,6 +24,8 @@
 !server_training_pipeline/**
 !server_gbs_pipeline/
 !server_gbs_pipeline/**
+!server_genotype_recovery/
+!server_genotype_recovery/**
 !docs/
 !docs/**
 !scripts/

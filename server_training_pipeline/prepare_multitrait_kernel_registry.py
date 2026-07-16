@@ -73,6 +73,53 @@ def load_trait_environment_candidates(
     return candidates
 
 
+def load_recovered_genotype_candidates(
+    manifest_path: Path,
+    *,
+    root: Path,
+    base_g_order: pd.DataFrame,
+) -> list[dict[str, object]]:
+    manifest = pd.read_csv(manifest_path, sep="\t", dtype=str)
+    required = {
+        "kernel",
+        "biological_role",
+        "kernel_path",
+        "order_path",
+        "eligible_traits",
+        "enabled_default",
+        "interaction_enabled",
+        "rank",
+        "minimum_ledger_coverage",
+    }
+    missing = sorted(required.difference(manifest.columns))
+    if missing:
+        raise SystemExit(f"{manifest_path} is missing columns: {missing}")
+    names = manifest["kernel"].fillna("").astype(str).str.strip()
+    if names.eq("").any() or names.duplicated().any():
+        raise SystemExit(f"{manifest_path} contains empty or duplicate kernel names")
+    candidates = []
+    for _, row in manifest.iterrows():
+        source_id_col = str(row.get("source_id_col", "sample_id")).strip() or "sample_id"
+        candidates.append(
+            {
+                "kernel": str(row["kernel"]).strip(),
+                "axis": "genotype",
+                "biological_role": str(row["biological_role"]).strip(),
+                "source_kernel": resolve(root, Path(str(row["kernel_path"]))),
+                "source_order": resolve(root, Path(str(row["order_path"]))),
+                "source_id_col": source_id_col,
+                "target_order": base_g_order,
+                "target_id_col": "sample_id",
+                "eligible_traits": str(row["eligible_traits"]).strip(),
+                "enabled_default": parse_bool(row["enabled_default"]),
+                "interaction_enabled": parse_bool(row["interaction_enabled"]),
+                "rank": int(row["rank"]),
+                "minimum_ledger_coverage": float(row["minimum_ledger_coverage"]),
+            }
+        )
+    return candidates
+
+
 def load_order(path: Path, id_col: str) -> pd.DataFrame:
     order = pd.read_csv(path, sep="\t", dtype=str)
     if id_col not in order.columns:
@@ -204,6 +251,12 @@ def main() -> None:
         ),
     )
     parser.add_argument("--require-trait-environment-manifest", action="store_true")
+    parser.add_argument(
+        "--recovered-genotype-manifest",
+        type=Path,
+        default=Path("genotype_panels/recovered/recovered_genotype_kernel_manifest.tsv"),
+    )
+    parser.add_argument("--require-recovered-genotype-manifest", action="store_true")
     parser.add_argument("--environment-dir", type=Path, default=Path("environment"))
     parser.add_argument(
         "--out-dir", type=Path, default=Path("model_kernels/multitrait_kernel_experts")
@@ -218,6 +271,7 @@ def main() -> None:
     gbs_dir = resolve(root, args.gbs_model_dir)
     dth_dir = resolve(root, args.dth_model_dir)
     trait_environment_manifest = resolve(root, args.trait_environment_manifest)
+    recovered_genotype_manifest = resolve(root, args.recovered_genotype_manifest)
     environment_dir = resolve(root, args.environment_dir)
     out_dir = resolve(root, args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -359,6 +413,27 @@ def main() -> None:
             "minimum_ledger_coverage": 0.95,
         }
     )
+    if recovered_genotype_manifest.exists():
+        recovered_candidates = load_recovered_genotype_candidates(
+            recovered_genotype_manifest,
+            root=root,
+            base_g_order=base_g_order,
+        )
+        existing = {str(candidate["kernel"]) for candidate in candidates}
+        duplicates = sorted(
+            str(candidate["kernel"])
+            for candidate in recovered_candidates
+            if str(candidate["kernel"]) in existing
+        )
+        if duplicates:
+            raise SystemExit(
+                f"Recovered genotype manifest duplicates built-in kernels: {duplicates}"
+            )
+        candidates.extend(recovered_candidates)
+    elif args.require_recovered_genotype_manifest:
+        raise SystemExit(
+            f"Required recovered genotype manifest is missing: {recovered_genotype_manifest}"
+        )
     if trait_environment_manifest.exists():
         extra_candidates = load_trait_environment_candidates(
             trait_environment_manifest,
@@ -456,6 +531,12 @@ def main() -> None:
         else "",
         "trait_environment_manifest_sha256": file_sha256(trait_environment_manifest)
         if trait_environment_manifest.exists()
+        else "",
+        "recovered_genotype_manifest": str(recovered_genotype_manifest)
+        if recovered_genotype_manifest.exists()
+        else "",
+        "recovered_genotype_manifest_sha256": file_sha256(recovered_genotype_manifest)
+        if recovered_genotype_manifest.exists()
         else "",
         "missing_kernels": missing,
     }
