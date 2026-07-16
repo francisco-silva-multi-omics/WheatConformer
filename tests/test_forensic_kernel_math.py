@@ -20,6 +20,7 @@ from audit.audit_common import (
 from audit.run_forensic_audit import (
     git_provenance,
     kernel_diagnostic_candidates,
+    production_artifact_presence,
     source_path_label,
 )
 from server_training_pipeline.split_utils import make_split, split_group_column, split_leakage_record
@@ -116,6 +117,26 @@ def test_kernel_diagnostics_discover_trait_and_registry_experts(tmp_path: Path) 
     assert {row["ablation_decision"] for row in tgw} == {
         "accept_for_multitrait_baseline"
     }
+
+
+def test_production_artifact_presence_reports_server_outputs(tmp_path: Path) -> None:
+    pedigree = tmp_path / "genotype_panels" / "pedigree"
+    registry = tmp_path / "model_kernels" / "multitrait_kernel_experts"
+    trained = tmp_path / "trained_models" / "run"
+    pedigree.mkdir(parents=True)
+    registry.mkdir(parents=True)
+    trained.mkdir(parents=True)
+    (pedigree / "K_A.npy").write_bytes(b"kernel")
+    (registry / "multitrait_kernel_registry.tsv").write_text(
+        "kernel\tkernel_path\n", encoding="utf-8"
+    )
+    (trained / "model_test_predictions.tsv.gz").write_bytes(b"predictions")
+
+    presence = production_artifact_presence(tmp_path)
+
+    assert presence["pedigree_kernels"]["count"] == 1
+    assert presence["multitrait_registries"]["count"] == 1
+    assert presence["prediction_files"]["count"] == 1
 
 
 def test_vanraden_matches_analytical_two_marker_example() -> None:

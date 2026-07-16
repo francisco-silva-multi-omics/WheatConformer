@@ -167,6 +167,28 @@ def source_summary(path: Path) -> dict[str, object]:
     }
 
 
+def production_artifact_presence(root: Path) -> dict[str, object]:
+    def files(pattern: str) -> list[str]:
+        return sorted(str(path.resolve()) for path in root.glob(pattern) if path.is_file())
+
+    groups = {
+        "pedigree_kernels": files("genotype_panels/pedigree*/K_A.npy"),
+        "stage1_observation_ledgers": files(
+            "model_kernels/**/*_model_ready_stage1_observations.parquet"
+        ),
+        "compact_genotype_kernels": files("model_kernels/**/*_K_G_unique.npy"),
+        "compact_environment_kernels": files("model_kernels/**/*_K_E_unique.npy"),
+        "multitrait_registries": files("model_kernels/**/*multitrait_kernel_registry.tsv"),
+        "multitrait_ledgers": files("model_kernels/**/*ledger*.parquet"),
+        "factor_caches": files("model_kernels/**/*_factors_seed*.npz"),
+        "prediction_files": files("trained_models/**/*_predictions.tsv.gz"),
+    }
+    return {
+        name: {"count": len(paths), "paths": paths}
+        for name, paths in groups.items()
+    }
+
+
 def source_code_corpus(root: Path) -> str:
     parts = []
     for suffix in ("*.py", "*.sh", "*.slurm", "*.md"):
@@ -856,6 +878,14 @@ def kernel_diagnostic_candidates(root: Path) -> list[dict[str, object]]:
             }
         )
 
+    add(
+        "K_A_PEDIGREE_SOURCE",
+        root / "genotype_panels" / "pedigree" / "K_A.npy",
+        root / "genotype_panels" / "pedigree" / "K_A_sample_order.tsv",
+        audit_scope="source_kernel",
+        enabled_default="artifact_only",
+        biological_role="trial_derived_pedigree_relationship_unreviewed_lineage",
+    )
     hmp_order = root / "genotype_panels" / "hmp" / "hmp_K_sample_order.QCfiltered.tsv"
     for suffix, label in (("", "unscaled"), (".meanDiag1", "mean_diagonal_scaled")):
         add(
@@ -976,12 +1006,16 @@ def pedigree_static_audit(root: Path, out_dir: Path) -> list[dict[str, object]]:
     work["cross_norm"] = work["cross_name"].map(normalize_identifier)
     conflicts = work[work["cross_norm"].ne("")].groupby("sample_id")["cross_norm"].nunique()
     conflict_ids = conflicts[conflicts > 1]
+    ka_path = root / "genotype_panels" / "pedigree" / "K_A.npy"
+    ka_order_path = root / "genotype_panels" / "pedigree" / "K_A_sample_order.tsv"
     rows = [
-        {"check": "K_A_file_available_local", "value": (root / "genotype_panels" / "pedigree" / "K_A.npy").exists(), "status": "NOT_AVAILABLE_LOCAL" if not (root / "genotype_panels" / "pedigree" / "K_A.npy").exists() else "AVAILABLE"},
+        {"check": "K_A_file_available", "value": ka_path.exists(), "status": "AVAILABLE" if ka_path.exists() else "NOT_AVAILABLE"},
+        {"check": "K_A_order_file_available", "value": ka_order_path.exists(), "status": "AVAILABLE" if ka_order_path.exists() else "NOT_AVAILABLE"},
         {"check": "sample_ids_with_conflicting_cross_names", "value": len(conflict_ids), "status": "FAIL" if len(conflict_ids) else "PASS"},
-        {"check": "production_duplicate_policy", "value": "drop_duplicates(sample_id, keep=first)", "status": "FAIL" if len(conflict_ids) else "PASS"},
-        {"check": "production_cycle_policy", "value": "break cycle by treating lexicographically first unresolved node as founder", "status": "HIGH_RISK"},
-        {"check": "parent_identifier_semantics", "value": "parents parsed from cross-name tokens, not resolved canonical parent GIDs", "status": "HIGH_RISK"},
+        {"check": "current_builder_conflict_policy", "value": "reject conflicting sample/parent assignments", "status": "PASS"},
+        {"check": "current_builder_cycle_policy", "value": "raise on cycles or unresolved parent dependencies", "status": "PASS"},
+        {"check": "existing_artifact_reviewed_parent_lineage", "value": "not demonstrated by current artifact metadata", "status": "UNVERIFIED"},
+        {"check": "required_parent_identifier_semantics", "value": "explicit reviewed canonical parent GIDs", "status": "REQUIRES_REVIEW"},
     ]
     write_csv(out_dir / "KA_validation.csv", rows)
     examples = work[work["sample_id"].isin(set(conflict_ids.index))].drop_duplicates(["sample_id", "cross_norm"]).sort_values("sample_id")
@@ -1059,6 +1093,18 @@ def report(
     trial_argument = source_path_label(root, Path(str(config["trial_root"]["path"])))
     genotypic_argument = source_path_label(root, Path(str(config["genotypic_root"]["path"])))
     code_root = Path(str(config["code_root"]))
+    artifacts = config.get("production_artifacts", {})
+    artifact_count = lambda name: int(artifacts.get(name, {}).get("count", 0))
+    ka_present = artifact_count("pedigree_kernels") > 0
+    registry_count = artifact_count("multitrait_registries")
+    ledger_count = artifact_count("multitrait_ledgers")
+    factor_count = artifact_count("factor_caches")
+    prediction_count = artifact_count("prediction_files")
+    gxe_pass = gxe.get("status") == "PASS"
+    artifact_schema = next(
+        (str(row.get("artifact_schema", "unknown")) for row in ke_components),
+        "unknown",
+    )
     audit_script = code_root / "audit" / "run_forensic_audit.py"
     compare_script = code_root / "audit" / "compare_corrected_environment_kernel.py"
     validate_script = code_root / "audit" / "validate_server_artifacts.py"
@@ -1073,21 +1119,22 @@ def report(
         "",
         "## 1. Executive summary",
         "",
-        f"Audit commit: `{config['git']['commit']}`. Raw source roots were read only. The local canonical table contains **{canonical_stats['rows']:,}** rows.",
+        f"Audit commit: `{config['git']['commit']}`. Raw source roots were read only. The audited canonical table contains **{canonical_stats['rows']:,}** rows.",
         "",
-        f"The local HMP K_G representative reconstruction {'agrees' if kg.get('status') == 'PASS' else 'does not agree'} with production (`max |delta|={kg.get('sampled_max_abs_difference', 'NA')}`). The smoke K_GxE Hadamard construction is `{gxe.get('status')}`. Declared split implementations produced {split_failures} leakage failures in deterministic synthetic/local checks.",
+        f"The audited HMP K_G representative reconstruction {'agrees' if kg.get('status') == 'PASS' else 'does not agree'} with production (`max |delta|={kg.get('sampled_max_abs_difference', 'NA')}`). The optional dense smoke K_GxE Hadamard construction is `{gxe.get('status')}`. Declared split implementations produced {split_failures} leakage failures in deterministic checks.",
         "",
         "Two confirmed defects and one provenance risk require correction before treating the current quantitative results as final:",
         "",
-        f"1. **High: generic K_E management parsing.** {len(ke_issues)} nonfinite or implausibly encoded scaling records were detected. Arbitrary categorical/product strings are stripped to concatenated digits by `parse_value`, and nonfinite columns can be silently zeroed by `standardized_kernel`.",
-        f"2. **High: K_A pedigree ambiguity.** {ka_conflicts} sample IDs have multiple nonempty cross names, while production keeps the first row. Parent tokens are cross-name strings rather than validated canonical parent GIDs, and cycles are silently converted to founders.",
-        "3. **High-risk provenance drift:** local generic K_E artifacts use the legacy unscaled schema, while the current builder and reported server artifacts use component and final mean-diagonal scaling.",
+        f"1. **High: stale generic K_E artifact semantics.** {len(ke_issues)} nonfinite or implausibly encoded scaling records were detected in the existing artifact metadata. The current builder has strict typed parsing and finite/variable-column checks, so the on-disk kernels must be regenerated from the audited commit.",
+        f"2. **High: uncertified K_A pedigree lineage.** {ka_conflicts} sample IDs have multiple nonempty cross names in the source manifest. The current builder rejects conflicts and cycles, but the existing artifact does not demonstrate that it was built from reviewed canonical parent GIDs.",
+        f"3. **High-risk provenance drift:** the audited generic K_E artifact schema is `{artifact_schema}`, while the current builder writes scaled components and a final mean diagonal of 1.",
         "",
-        "Therefore, locally verified HMP K_G and GxE arithmetic remain valid, but any model using the generic management/environment component or current K_A should be regenerated after corrected kernels are built. Server-only full stage-1 and multitrait artifacts remain explicitly unverified until the server continuation command is run.",
+        f"Therefore, verified HMP K_G arithmetic remains valid. Models using the stale generic environment components or uncertified K_A require an isolated corrected rebuild. The data root contains {registry_count} multitrait registries, {ledger_count} multitrait ledgers, {factor_count} factor caches, and {prediction_count} prediction files; these require the dedicated alignment validator before acceptance.",
         "",
         "## 2. Repository and data inventory",
         "",
-        f"- Repository: `{root}`",
+        f"- Code repository: `{code_root}`",
+        f"- Data/artifact root: `{root}`",
         f"- Trial files: {config['trial_root']['file_count']:,}, {config['trial_root']['total_bytes']:,} bytes.",
         f"- Genotypic files: {config['genotypic_root']['file_count']:,}, {config['genotypic_root']['total_bytes']:,} bytes; {len(geno_inventory):,} inventoried with SHA-256.",
         f"- Canonical trial/cycle groups: {len(trial_inventory_frame):,}.",
@@ -1104,11 +1151,11 @@ def report(
         "",
         "## 5. Phenotype construction audit",
         "",
-        f"All {canonical_stats['finite_phenotype_rows']:,}/{canonical_stats['rows']:,} phenotype values are finite; {canonical_stats['phenotype_outside_recorded_range']} lie outside recorded min/max. The canonical table contains {canonical_stats['raw_plot_linked_rows']:,} raw-plot-linked summaries and {canonical_stats['summary_level_rows']:,} summary-only rows. The latter cannot satisfy raw-row traceability without deploying this audit against the server raw/stage-1 lineage artifacts.",
+        f"All {canonical_stats['finite_phenotype_rows']:,}/{canonical_stats['rows']:,} phenotype values are finite; {canonical_stats['phenotype_outside_recorded_range']} lie outside recorded min/max. The canonical table contains {canonical_stats['raw_plot_linked_rows']:,} raw-plot-linked summaries and {canonical_stats['summary_level_rows']:,} summary-only rows. Summary-level records cannot provide one-to-one raw-plot traceability by construction; their lineage must instead be certified through source aggregation ledgers.",
         "",
         "## 6. K_A validation",
         "",
-        f"The full K_A was not present locally. Static and manifest evidence identifies {ka_conflicts} conflicting sample-to-cross assignments. Production `build_parent_table` silently keeps the first; `additive_relationship` silently breaks pedigree cycles. This is not sufficient evidence that the current matrix is a biologically valid numerator relationship matrix.",
+        f"A K_A artifact is {'present' if ka_present else 'not present'} in the audited data root. Static manifest evidence identifies {ka_conflicts} conflicting sample-to-cross assignments. The current builder rejects conflicts and cycles, but the existing artifact lacks evidence that all parents were reviewed canonical GIDs. It is therefore not yet certified as a biological numerator relationship matrix.",
         "",
         "## 7. K_G validation",
         "",
@@ -1123,17 +1170,17 @@ def report(
         lines.append(f"- `{row['component']}`: {row['environments']} environments, {row['features']} features, order={row['feature_order_exact_match']}, finite={row['features_all_finite']}, reconstruction `{row['status']}`, max |delta|={row['sampled_max_abs_difference']:.3g}.")
     lines.extend([
         "",
-        "Kernel arithmetic is reproducible under the artifact's recorded legacy/current schema, but numerical agreement does not validate feature semantics. The generic management kernel currently has malformed numeric encodings and silent feature loss; this offers a concrete explanation for weak or misleading environment/full-model comparisons.",
+        "Kernel arithmetic is reproducible under the artifact's recorded schema, but numerical agreement does not validate feature semantics. Existing management scaling metadata contains malformed or nonfinite legacy records. The current builder has already replaced the permissive parser and silent feature handling; a new isolated artifact build is required to apply those corrections.",
         "",
         "Environment scaling is fitted globally before train/validation/test splitting. This exposes held-out covariate distributions without labels. It is acceptable only if the declared design is transductive; strict GHO evaluation should fit imputation/scaling on training environments and transform validation/test.",
         "",
         "## 9. K_GxE validation",
         "",
-        f"Smoke observation-level GxE status: `{gxe.get('status')}`. Maximum Hadamard reconstruction difference: {gxe.get('max_abs_difference', 'NA')}. The implemented reaction-norm kernel is `K_G[g_i,g_j] * K_E[e_i,e_j]` in observation order.",
+        f"Optional dense smoke observation-level GxE status: `{gxe.get('status')}`. Maximum Hadamard reconstruction difference: {gxe.get('max_abs_difference', 'NA')}. The implemented reaction-norm kernel is `K_G[g_i,g_j] * K_E[e_i,e_j]` in observation order. Absence of the smoke artifact does not certify or invalidate the production low-rank interaction factors.",
         "",
         "## 10. Observation-order validation",
         "",
-        "The local smoke matrices share shape/order and pass element checks. Full server observation ledgers and multitrait factor registries were absent locally; their order is not inferred from dimensions and must be checked on the server.",
+        f"Artifact discovery found {registry_count} multitrait registries, {ledger_count} multitrait ledgers, and {factor_count} factor caches. Their order is not inferred from dimensions; run `validate_server_artifacts.py` and the registry certification audit against these discovered files.",
         "",
         "## 11. Cross-validation leakage audit",
         "",
@@ -1145,19 +1192,19 @@ def report(
         "",
         "## 13. Synthetic-test results",
         "",
-        "Run `.audit-venv/Scripts/python -m pytest tests/test_forensic_kernel_math.py -q`. Tests cover analytical VanRaden, additive pedigree, environment standardization/nonfinite behavior, GxE Hadamard indexing, join cardinality, and split leakage semantics.",
+        f"Run `python -m pytest \"{code_root / 'tests'}\" -q`. Tests cover analytical VanRaden, additive pedigree, environment standardization/nonfinite behavior, GxE Hadamard indexing, join cardinality, and split leakage semantics.",
         "",
         "## 14. Confirmed defects",
         "",
         "### Defect A: malformed generic K_E management features",
         "",
         "- **Severity:** high",
-        "- **Affected files/functions:** `build_environment_component_kernels.py::parse_value`, `standardized_kernel`; `environment/K_mgmt.npy`, `K_E.npy`.",
+        "- **Affected files/functions:** legacy artifact lineage for `environment/K_mgmt.npy` and `K_E.npy`; current corrected implementations are `build_environment_component_kernels.py::parse_value` and `standardized_kernel`.",
         "- **Earliest stage:** raw environment trait parsing.",
         f"- **Affected evidence:** {len(ke_issues)} scaling anomalies; exact features are in `KE_feature_parsing_issues.csv`.",
         "- **Expected:** categorical management values are explicitly encoded or rejected; all retained feature statistics finite.",
-        "- **Actual:** arbitrary text is stripped to digits; Inf/constant columns can become all-zero standardized columns.",
-        "- **Correction:** strict typed feature parser, categorical encoding manifest, finite assertions, variable-column filtering with QC.",
+        "- **Actual:** existing scaling metadata records values produced under permissive legacy parsing and feature handling.",
+        "- **Correction:** regenerate in an isolated output directory with the current strict typed parser, finite assertions, and explicit retained/dropped-feature QC.",
         "- **Regeneration:** K_mgmt, combined K_E, compact K_E factors, GxE factors, and affected model results.",
         "",
         "### Defect B: ambiguous/synthetic pedigree handling in K_A",
@@ -1167,48 +1214,48 @@ def report(
         "- **Earliest stage:** trial-derived pedigree resolution.",
         f"- **Affected evidence:** {ka_conflicts} sample IDs with conflicting cross names.",
         "- **Expected:** canonical parent IDs, conflict rejection/review, and explicit cycle failure.",
-        "- **Actual:** first pedigree kept, cross tokens used as parent IDs, cycles silently made founders.",
-        "- **Correction:** fail on conflicts/cycles and only claim numerator relationships for resolved parent IDs; otherwise label as pedigree-string kernel.",
+        "- **Actual:** the existing artifact does not prove that its source conflicts were reviewed or that parent tokens were resolved canonical GIDs.",
+        "- **Correction:** the current builder already fails on conflicts/cycles; supply a reviewed explicit-parent table and only claim numerator relationships for resolved parent IDs.",
         "- **Regeneration:** K_A, compact factors, and all pedigree/multitrait model results.",
         "",
         "## 15. High-risk ambiguities",
         "",
-        "- Full stage-1 rows, full K_A, multitrait ledgers, factor registries, and predictions exist on the server but not locally.",
-        "- Summary-only canonical phenotypes do not provide complete raw-row lineage locally.",
+        f"- The data root contains {registry_count} registries, {ledger_count} ledgers, {factor_count} factor caches, and {prediction_count} prediction files, but this general audit does not replace their dedicated alignment/certification checks.",
+        "- Summary-only canonical phenotypes require aggregation-level lineage rather than one-to-one raw-plot linkage.",
         "- Several genomic panels are large and heterogeneous; preview-level identifier extraction is not genotype concordance validation.",
         "- Global covariate QC/scaling makes strict inductive claims ambiguous.",
-        "- Local K_E metadata uses legacy `weight` and unscaled components; current code and reported server artifacts use scaled components and final mean diagonal 1.",
+        f"- Audited K_E metadata uses `{artifact_schema}`; current code writes scaled components and final mean diagonal 1.",
         "",
         "## 16. Interpretation of weak genomic/GxE performance",
         "",
         "| Explanation | Classification | Evidence |",
         "|---|---|---|",
-        "| Incorrect K_G arithmetic | Refuted locally | Independent HMP VanRaden block agrees. |",
+        "| Incorrect K_G arithmetic | Refuted for HMP | Independent HMP VanRaden block agrees. |",
         "| K_G coverage too narrow | Strongly supported | Most canonical rows lack HMP QC markers; see marker coverage tables. |",
         "| Incorrect generic K_E feature parsing | Confirmed | Nonfinite and implausible management scaling values. |",
-        "| Incorrect GxE Hadamard arithmetic | Refuted locally | Smoke matrix is exact product. |",
-        "| Misaligned full server factors | Plausible/unverified | Full registry absent locally. |",
+        f"| Incorrect GxE Hadamard arithmetic | {'Refuted for smoke artifact' if gxe_pass else 'Unverified'} | Smoke status: {gxe.get('status')}. |",
+        f"| Misaligned production factors | Plausible/unverified | {registry_count} registries and {factor_count} factor caches discovered; dedicated alignment validation pending. |",
         "| Pedigree-only individuals receive genomic similarity | Plausible/high risk | Requires server registry mask audit. |",
         "| Weak genomic signal after correct alignment | Plausible | Cannot be isolated until K_A/K_E corrections and coverage audit complete. |",
         "| Excessive shrinkage/uniform expert weighting | Strongly supported by prior results | Prediction variance compression and minimal ablation gains were observed. |",
         "",
         "## 17. Recommended corrections",
         "",
-        "1. Correct typed environment parsing and regenerate generic K_E; keep trait-specific kernels opt-in by validation.",
-        "2. Stop K_A construction on conflicting pedigree rows/cycles; distinguish resolved numerator relationship from pedigree-string similarity.",
-        "3. Regenerate K_E from the exact audited commit and reject code/artifact metadata mismatches.",
-        "4. Run the server continuation audit before accepting full matrix alignment or quantitative validity.",
+        "1. Regenerate generic K_E in a new isolated directory using the current strict builder; preserve trait-specific kernels as validation-gated experts.",
+        "2. Resolve the 228 pedigree conflicts into explicit canonical parent columns, then rebuild K_A with the current fail-fast builder.",
+        "3. Record the exact code commit and source hashes for corrected K_E/K_A and reject code/artifact metadata mismatches.",
+        "4. Run the dedicated server artifact validator and multitrait registry certification before quantitative acceptance.",
         "5. Fit preprocessing within training folds for strict inductive GHO/CV1 reporting, or explicitly label the current design transductive.",
         "6. Do not integrate raw genotypic candidates until profile concordance and marker harmonization pass.",
         "",
         "### Acceptance status",
         "",
-        "The local forensic audit is complete, but the end-to-end production acceptance gate is **not yet complete** because the full server stage-1 ledger, reviewed conflict-free pedigree, compact multitrait factors, and predictions are not present locally.",
+        "The general forensic audit is complete, but the end-to-end production acceptance gate is **not yet complete** because K_A lacks reviewed conflict-free parent lineage, generic K_E is a stale legacy artifact, and discovered compact multitrait artifacts still require dedicated alignment certification.",
         "",
-        f"- Raw-row traceability is verified for {canonical_stats['raw_plot_linked_rows']:,} plot-linked canonical summaries; {canonical_stats['summary_level_rows']:,} summary-only canonical rows require server lineage artifacts.",
-        "- Local HMP K_G, generic K_E arithmetic, and smoke K_GxE have independent reconstruction evidence.",
+        f"- Raw-row traceability is verified for {canonical_stats['raw_plot_linked_rows']:,} plot-linked canonical summaries; {canonical_stats['summary_level_rows']:,} summary-only canonical rows require aggregation lineage.",
+        f"- HMP K_G and generic K_E arithmetic have independent reconstruction evidence; smoke K_GxE status is `{gxe.get('status')}`.",
         f"- K_A is deliberately not certified: the source manifest has {ka_conflicts} conflicting assignments and corrected construction stops for review.",
-        "- Local deterministic leakage tests pass, but exact server split ledgers still require `validate_server_artifacts.py`.",
+        "- Deterministic leakage tests pass, but exact production ledgers and registries still require dedicated validation.",
         "- Existing quantitative results using the affected K_A or generic K_E must not be treated as final.",
         "",
         "## 18. Reproducible commands",
@@ -1231,7 +1278,7 @@ def report(
         "",
         "All generated diagnostics are under `audit/`; source roots and production matrices were not modified. Audit code and regression tests are the only intended Git-tracked additions after the initial report.",
         "",
-        "Correction-phase evidence is in `CORRECTION_VALIDATION.md` and `KE_original_vs_corrected_comparison.csv`. The corrected 512-environment K_mgmt and combined K_E blocks changed materially, so the full server baseline must be regenerated after corrected K_E and reviewed K_A are built.",
+        "Representative correction evidence, when present, is in `CORRECTION_VALIDATION.md` and `KE_original_vs_corrected_comparison.csv`. Production results must be regenerated only from newly validated, isolated K_E and reviewed K_A artifacts.",
         "",
         f"Kernel diagnostic failures: {kernel_failures}. See `kernel_diagnostics.csv` for sampled PSD/symmetry/order evidence.",
     ])
@@ -1277,6 +1324,7 @@ def main() -> None:
         "code_root": str(code_root),
         "repository_root": str(code_root),
         "git": git_provenance(code_root, out_dir),
+        "production_artifacts": production_artifact_presence(root),
         "trial_root": source_summary(trial_root),
         "genotypic_root": source_summary(geno_root),
         "environment": {"python": sys.version, "platform": platform.platform(), "executable": sys.executable, "packages": package_versions()},

@@ -1,8 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CODE_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 ROOT="${1:-.}"
 cd "$ROOT"
+ROOT="$(pwd)"
+export PYTHONPATH="$CODE_ROOT${PYTHONPATH:+:$PYTHONPATH}"
 
 PYTHON="${PYTHON:-python}"
 ENVIRONMENT_SOURCE_DIR="${ENVIRONMENT_SOURCE_DIR:-environment}"
@@ -40,7 +44,7 @@ if [[ "$REUSE_ARTIFACTS" == "1" ]]; then
 else
   require_new_dir "$ENVIRONMENT_CORRECTED_DIR" "corrected environment directory"
   echo "[1/6] Build corrected environment kernels without overwriting production"
-  "$PYTHON" build_environment_component_kernels.py \
+  "$PYTHON" "$CODE_ROOT/build_environment_component_kernels.py" \
     --environment-dir "$ENVIRONMENT_SOURCE_DIR" \
     --out-dir "$ENVIRONMENT_CORRECTED_DIR"
 fi
@@ -82,7 +86,7 @@ if [[ "$REUSE_ARTIFACTS" == "1" ]]; then
 else
   require_new_dir "$PEDIGREE_CORRECTED_DIR" "corrected pedigree directory"
   echo "[3/6] Build reviewed K_A; conflicts and cycles are fatal"
-  "$PYTHON" build_pedigree_kernel.py \
+  "$PYTHON" "$CODE_ROOT/build_pedigree_kernel.py" \
     --pedigree-table "$PEDIGREE_TABLE_RESOLVED" \
     --require-explicit-parent-columns \
     --require-parents-in-pedigree \
@@ -108,7 +112,7 @@ if [[ "$REUSE_ARTIFACTS" == "1" ]]; then
 else
   require_new_dir "$MODEL_DIR" "corrected compact model directory"
   echo "[4/6] Rebuild aligned compact K_A/K_E model inputs"
-  "$PYTHON" build_stage1_model_kernels.py \
+  "$PYTHON" "$CODE_ROOT/build_stage1_model_kernels.py" \
     --stage1-phenotypes "$STAGE1_PHENOTYPES" \
     --geno-kernel "$PEDIGREE_CORRECTED_DIR/K_A.npy" \
     --geno-order "$PEDIGREE_CORRECTED_DIR/K_A_sample_order.tsv" \
@@ -120,7 +124,7 @@ else
 fi
 
 echo "[5/6] Run server-only alignment and provenance validation"
-"$PYTHON" audit/validate_server_artifacts.py \
+"$PYTHON" "$CODE_ROOT/audit/validate_server_artifacts.py" \
   --root . \
   --out-dir "audit/server_artifacts_${VARIANT}" \
   --model-dir "$MODEL_DIR" \
@@ -142,4 +146,4 @@ MULTITRAIT_EXPERT_DIR="model_kernels/multitrait_kernel_experts_${VARIANT}" \
 MULTITRAIT_ENVIRONMENT_DIR="$ENVIRONMENT_CORRECTED_DIR" \
 MULTITRAIT_FORCE=1 \
 PYTHON="$PYTHON" \
-bash scripts/run_multitrait_quantitative_baseline.sh .
+bash "$CODE_ROOT/scripts/run_multitrait_quantitative_baseline.sh" "$ROOT"
