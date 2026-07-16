@@ -27,11 +27,11 @@ def find_artifacts(root: Path, extra_directories: list[Path] | None = None) -> l
     rows = []
     patterns = [
         "genotype_panels/pedigree/K_A.npy",
-        "model_kernels/**/**_model_ready_stage1_observations.parquet",
-        "model_kernels/**/**_observation_kernel_indices.npz",
-        "model_kernels/**/**_K_G_unique.npy",
-        "model_kernels/**/**_K_E_unique.npy",
-        "model_kernels/**/**_K_GE_hadamard.npy",
+        "model_kernels/**/*_model_ready_stage1_observations.parquet",
+        "model_kernels/**/*_observation_kernel_indices.npz",
+        "model_kernels/**/*_K_G_unique.npy",
+        "model_kernels/**/*_K_E_unique.npy",
+        "model_kernels/**/*_K_GE_hadamard.npy",
         "model_kernels/multitrait_*/**/*registry*.tsv",
         "model_kernels/multitrait_*/**/*ledger*.parquet",
     ]

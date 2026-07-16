@@ -8,7 +8,7 @@ import pytest
 
 from build_environment_component_kernels import assert_kernel_valid, parse_value, standardized_kernel
 from build_pedigree_kernel import additive_relationship, assert_relationship_valid, build_parent_table
-from audit.validate_server_artifacts import validate_explicit_kernel_order
+from audit.validate_server_artifacts import find_artifacts, validate_explicit_kernel_order
 from audit.audit_common import (
     independent_additive_relationship,
     independent_environment_kernel,
@@ -244,6 +244,31 @@ def test_server_validator_requires_explicit_kernel_order_alignment(tmp_path) -> 
 
     pd.DataFrame({"env_id": ["E1", "E1", "E3"]}).to_csv(order_path, sep="\t", index=False)
     assert validate_explicit_kernel_order(kernel_path, order_path, "env_id", "K_E")["status"] == "FAIL"
+
+
+def test_server_validator_recursively_discovers_artifacts_without_duplicates(tmp_path: Path) -> None:
+    model_dir = tmp_path / "model_kernels" / "stage1" / "nested_model"
+    registry_dir = tmp_path / "model_kernels" / "multitrait_kernel_experts"
+    model_dir.mkdir(parents=True)
+    registry_dir.mkdir(parents=True)
+
+    expected = [
+        model_dir / "stage1_model_ready_stage1_observations.parquet",
+        model_dir / "stage1_observation_kernel_indices.npz",
+        model_dir / "stage1_K_G_unique.npy",
+        model_dir / "stage1_K_E_unique.npy",
+        model_dir / "stage1_K_GE_hadamard.npy",
+        registry_dir / "multitrait_kernel_registry.tsv",
+        registry_dir / "multitrait_ledger.parquet",
+    ]
+    for path in expected:
+        path.write_bytes(b"artifact")
+
+    inventory = find_artifacts(tmp_path, extra_directories=[model_dir])
+    discovered = [Path(row["path"]) for row in inventory]
+
+    assert set(discovered) == {path.resolve() for path in expected}
+    assert len(discovered) == len(set(discovered))
 
 
 @pytest.mark.parametrize(
