@@ -133,6 +133,43 @@ def test_weather_audit_classifies_missing_causes_before_imputation() -> None:
     assert bool(audit.loc["e5", "used_by_pedigree_model"])
 
 
+def test_weather_audit_rejects_stale_cached_request_windows() -> None:
+    order = pd.DataFrame({"env_id": ["e1"]})
+    manifest = pd.DataFrame(
+        {
+            "env_id": ["e1"],
+            "latitude": [20.0],
+            "longitude": [-100.0],
+            "weather_start_date": ["2000-01-01"],
+            "weather_end_date": ["2000-04-01"],
+            "has_fetch_window": [True],
+            "has_fetch_coordinates": [True],
+            "ready_to_fetch": [True],
+        }
+    )
+    audit = classify_environment_coverage(
+        order,
+        manifest,
+        pd.DataFrame(
+            {
+                "env_id": ["e1"],
+                "observed_nasa_raw": [True],
+                "request_id_nasa": ["20.00000|-100.00000|1999-01-01|1999-04-01"],
+            }
+        ),
+        pd.DataFrame(
+            columns=["env_id", "observed_openmeteo_raw", "request_id_openmeteo"]
+        ),
+        set(),
+        set(),
+        pd.Timestamp("1981-01-01"),
+    ).iloc[0]
+
+    assert not bool(audit["weather_observed"])
+    assert bool(audit["stale_cached_weather_request"])
+    assert audit["coverage_cause"] == "stale_cached_request"
+
+
 def test_climatology_is_separate_and_location_season_specific(
     tmp_path: Path, monkeypatch
 ) -> None:

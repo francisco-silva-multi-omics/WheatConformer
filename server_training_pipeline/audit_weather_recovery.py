@@ -35,7 +35,9 @@ def bool_series(frame: pd.DataFrame, column: str, default: bool = False) -> pd.S
 
 def feature_status(path: Path, source: str) -> pd.DataFrame:
     if not path.exists():
-        return pd.DataFrame(columns=["env_id", f"observed_{source}"])
+        return pd.DataFrame(
+            columns=["env_id", f"observed_{source}_raw", f"request_id_{source}"]
+        )
     frame = pd.read_csv(path, sep="\t", dtype=str, low_memory=False)
     if "env_id" not in frame.columns:
         raise ValueError(f"{path} is missing env_id")
@@ -47,10 +49,18 @@ def feature_status(path: Path, source: str) -> pd.DataFrame:
     output = pd.DataFrame(
         {
             "env_id": frame["env_id"].fillna("").astype(str),
-            f"observed_{source}": ok,
+            f"observed_{source}_raw": ok,
+            f"request_id_{source}": frame.get(
+                "weather_request_id", pd.Series("", index=frame.index)
+            ).fillna("").astype(str),
         }
     )
-    return output.groupby("env_id", as_index=False)[f"observed_{source}"].max()
+    observed_column = f"observed_{source}_raw"
+    request_column = f"request_id_{source}"
+    output = output.sort_values(observed_column, ascending=False, kind="stable")
+    return output.drop_duplicates("env_id", keep="first")[[
+        "env_id", observed_column, request_column
+    ]]
 
 
 def failure_request_ids(environment_dir: Path) -> set[str]:
@@ -98,9 +108,29 @@ def classify_environment_coverage(
     audit = audit.merge(manifest, on="env_id", how="left", indicator="manifest_merge")
     audit = audit.merge(nasa, on="env_id", how="left")
     audit = audit.merge(openmeteo, on="env_id", how="left")
-    audit["observed_nasa"] = bool_series(audit, "observed_nasa")
-    audit["observed_openmeteo"] = bool_series(audit, "observed_openmeteo")
+    audit["request_id"] = request_id(audit)
+    for source in ["nasa", "openmeteo"]:
+        raw_column = f"observed_{source}_raw"
+        legacy_column = f"observed_{source}"
+        raw = (
+            bool_series(audit, raw_column)
+            if raw_column in audit.columns
+            else bool_series(audit, legacy_column)
+        )
+        source_request = audit.get(
+            f"request_id_{source}", pd.Series("", index=audit.index)
+        ).fillna("").astype(str)
+        request_matches = (
+            source_request.eq(audit["request_id"])
+            if f"request_id_{source}" in audit.columns
+            else pd.Series(True, index=audit.index, dtype=bool)
+        )
+        audit[legacy_column] = raw & request_matches
+        audit[f"stale_{source}_request"] = raw & ~request_matches
     audit["weather_observed"] = audit["observed_nasa"] | audit["observed_openmeteo"]
+    audit["stale_cached_weather_request"] = (
+        audit["stale_nasa_request"] | audit["stale_openmeteo_request"]
+    )
     audit["weather_source"] = np.select(
         [audit["observed_nasa"], audit["observed_openmeteo"]],
         ["nasa_power_daily", "openmeteo_era5"],
@@ -112,7 +142,6 @@ def classify_environment_coverage(
     audit["ready_to_fetch"] = bool_series(audit, "ready_to_fetch")
     audit["window_inferred"] = bool_series(audit, "window_inferred")
     audit["coordinates_inferred"] = bool_series(audit, "coordinates_inferred")
-    audit["request_id"] = request_id(audit)
     audit["fetch_failed"] = audit["request_id"].isin(failures)
     start = pd.to_datetime(audit.get("weather_start_date"), errors="coerce")
     audit["outside_nasa_coverage"] = start.notna() & start.lt(nasa_start)
@@ -128,6 +157,7 @@ def classify_environment_coverage(
             missing_coordinates,
             audit["outside_nasa_coverage"],
             audit["fetch_failed"],
+            audit["stale_cached_weather_request"],
             audit["ready_to_fetch"],
         ],
         [
@@ -138,6 +168,7 @@ def classify_environment_coverage(
             "missing_coordinates",
             "dates_outside_nasa_coverage",
             "fetch_failed",
+            "stale_cached_request",
             "ready_not_fetched",
         ],
         default="not_ready_unclassified",
@@ -429,6 +460,9 @@ def main() -> None:
     )
     audit.loc[audit["used_by_pedigree_model"] & ~audit["weather_observed"]].to_csv(
         out_dir / "weather_recovery_targets_model.tsv", sep="\t", index=False
+    )
+    audit.loc[~audit["weather_observed"] & audit["ready_to_fetch"]].to_csv(
+        out_dir / "weather_recovery_retryable_targets_all.tsv", sep="\t", index=False
     )
 
     print(scope_summary(audit).to_string(index=False))

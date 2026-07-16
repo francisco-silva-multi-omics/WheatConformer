@@ -66,14 +66,11 @@ log "START classify pre-recovery causes and model overlap"
 audit_weather "$AUDIT_DIR/prefetch"
 log "DONE classify pre-recovery causes"
 
-if [[ "$TARGET_SCOPE" == "all" ]]; then
-  target_file="$AUDIT_DIR/prefetch/weather_recovery_targets_all.tsv"
-elif [[ "$TARGET_SCOPE" == "model" ]]; then
-  target_file="$AUDIT_DIR/prefetch/weather_recovery_targets_model.tsv"
-else
+if [[ "$TARGET_SCOPE" != "all" && "$TARGET_SCOPE" != "model" ]]; then
   echo "WEATHER_RECOVERY_TARGET_SCOPE must be model or all; found $TARGET_SCOPE" >&2
   exit 2
 fi
+target_file="$AUDIT_DIR/prefetch/weather_recovery_retryable_targets_all.tsv"
 
 log "START targeted NASA POWER recovery without historical date clamping"
 "$PYTHON" "$CODE_ROOT/fetch_nasa_power_trial_weather.py" \
@@ -86,11 +83,7 @@ log "DONE NASA POWER recovery"
 
 log "START identify remaining API targets"
 audit_weather "$AUDIT_DIR/post_nasa"
-if [[ "$TARGET_SCOPE" == "all" ]]; then
-  fallback_target="$AUDIT_DIR/post_nasa/weather_recovery_targets_all.tsv"
-else
-  fallback_target="$AUDIT_DIR/post_nasa/weather_recovery_targets_model.tsv"
-fi
+fallback_target="$AUDIT_DIR/post_nasa/weather_recovery_retryable_targets_all.tsv"
 log "DONE identify remaining API targets"
 
 log "START Open-Meteo ERA5 fallback recovery"

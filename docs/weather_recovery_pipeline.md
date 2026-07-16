@@ -66,8 +66,11 @@ nohup env \
   > logs/weather_recovery_v1.nohup.log 2>&1 &
 ```
 
-Set `WEATHER_RECOVERY_TARGET_SCOPE=all` only after model-environment recovery has
-been inspected. Optional reviewed files are supplied with
+The audit reports both scopes separately. Even with
+`WEATHER_RECOVERY_TARGET_SCOPE=model`, API calls include every retryable
+current-manifest request so non-model coverage cannot regress because of stale cached
+windows; non-retryable date/coordinate recovery remains focused in the model report.
+Optional reviewed files are supplied with
 `WEATHER_RECOVERY_DATE_SUPPLEMENT` and `WEATHER_RECOVERY_LOCATION_REGISTRY`.
 
 The default run stops after rebuilding and auditing the isolated kernels. To train
