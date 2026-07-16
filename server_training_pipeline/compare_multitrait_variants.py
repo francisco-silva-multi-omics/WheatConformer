@@ -14,6 +14,16 @@ METRICS = [
     "pearson",
     "prediction_sd_ratio",
 ]
+CONTRACT_CHECKS = [
+    "active_kernels_match",
+    "metadata_traits_match",
+    "metric_traits_match",
+    "split_mode_match",
+    "split_rows_match",
+    "source_observations_match",
+    "weight_parameters_match",
+    "uniform_weighting",
+]
 
 
 def csv_values(value: str) -> list[str]:
@@ -32,8 +42,12 @@ def resolve_from_root(root: Path, value: str) -> Path:
     return path.resolve() if path.is_absolute() else (root / path).resolve()
 
 
+def run_directory(models_root: Path, variant: str, mode: str, seed: int) -> Path:
+    return models_root / f"multitrait_quantitative_{variant}_{mode}_seed{seed}"
+
+
 def load_run(root: Path, models_root: Path, variant: str, mode: str, seed: int) -> dict[str, object]:
-    run_dir = models_root / f"multitrait_quantitative_{variant}_{mode}_seed{seed}"
+    run_dir = run_directory(models_root, variant, mode, seed)
     if not run_dir.is_dir():
         raise ValueError(f"Required matched run is absent: {run_dir}")
     metadata_path = single_path(run_dir, "*_run_metadata.json", "run metadata file")
@@ -98,6 +112,10 @@ def require_matching_contract(
         "seed": seed,
         "baseline_run": str(baseline["run_dir"]),
         "corrected_run": str(corrected["run_dir"]),
+        "baseline_run_available": True,
+        "corrected_run_available": True,
+        "comparison_eligible": True,
+        "skip_reason": "",
         "supported_trait_count": len(b_meta["traits"]),
         "supported_traits": ";".join(sorted(b_meta["traits"])),
         "active_kernels": ";".join(sorted(b_meta["active_kernels"])),
@@ -119,17 +137,74 @@ def compare_variants(
     contract_rows: list[dict[str, object]] = []
     availability_rows: list[dict[str, object]] = []
     observed_traits: set[str] = set()
+    availability_records: list[dict[str, object]] = []
 
     for mode in modes:
         for seed in seeds:
-            baseline = load_run(root, models_root, baseline_variant, mode, seed)
-            corrected = load_run(root, models_root, corrected_variant, mode, seed)
+            baseline_dir = run_directory(models_root, baseline_variant, mode, seed)
+            corrected_dir = run_directory(models_root, corrected_variant, mode, seed)
+            baseline = (
+                load_run(root, models_root, baseline_variant, mode, seed)
+                if baseline_dir.is_dir()
+                else None
+            )
+            corrected = (
+                load_run(root, models_root, corrected_variant, mode, seed)
+                if corrected_dir.is_dir()
+                else None
+            )
+            baseline_supported = (
+                set(baseline["metrics"]["trait_name_canonical"])
+                if baseline is not None
+                else set()
+            )
+            corrected_supported = (
+                set(corrected["metrics"]["trait_name_canonical"])
+                if corrected is not None
+                else set()
+            )
+            observed_traits.update(baseline_supported | corrected_supported)
+            availability_records.append(
+                {
+                    "mode": mode,
+                    "seed": seed,
+                    "baseline_supported": baseline_supported,
+                    "corrected_supported": corrected_supported,
+                }
+            )
+
+            if baseline is None or corrected is None:
+                if baseline is None and corrected is None:
+                    skip_reason = "baseline_and_corrected_runs_absent"
+                elif baseline is None:
+                    skip_reason = "baseline_run_absent"
+                else:
+                    skip_reason = "corrected_run_absent"
+                paired_supported = baseline_supported & corrected_supported
+                contract_rows.append(
+                    {
+                        "mode": mode,
+                        "seed": seed,
+                        "baseline_run": str(baseline_dir),
+                        "corrected_run": str(corrected_dir),
+                        "baseline_run_available": baseline is not None,
+                        "corrected_run_available": corrected is not None,
+                        "comparison_eligible": False,
+                        "skip_reason": skip_reason,
+                        "supported_trait_count": len(paired_supported),
+                        "supported_traits": ";".join(sorted(paired_supported)),
+                        "active_kernels": "",
+                        **{check: "NOT_EVALUATED" for check in CONTRACT_CHECKS},
+                        "status": "SKIP",
+                    }
+                )
+                continue
+
             contract = require_matching_contract(baseline, corrected, mode, seed)
             contract_rows.append(contract)
             baseline_metrics = baseline["metrics"]
             corrected_metrics = corrected["metrics"]
             supported = set(baseline_metrics["trait_name_canonical"])
-            observed_traits.update(supported)
             merged = baseline_metrics.merge(
                 corrected_metrics,
                 on="trait_name_canonical",
@@ -154,18 +229,30 @@ def compare_variants(
             merged["corrected_rmse_win"] = merged["delta_normalized_rmse"].lt(0)
             paired_frames.append(merged)
 
-            traits_for_audit = requested_traits or sorted(observed_traits | supported)
-            for trait in traits_for_audit:
-                availability_rows.append(
-                    {
-                        "mode": mode,
-                        "seed": seed,
-                        "trait_name_canonical": trait,
-                        "baseline_available": trait in supported,
-                        "corrected_available": trait in supported,
-                        "paired_available": trait in supported,
-                    }
-                )
+    traits_for_audit = requested_traits or sorted(observed_traits)
+    for record in availability_records:
+        for trait in traits_for_audit:
+            baseline_available = trait in record["baseline_supported"]
+            corrected_available = trait in record["corrected_supported"]
+            availability_rows.append(
+                {
+                    "mode": record["mode"],
+                    "seed": record["seed"],
+                    "trait_name_canonical": trait,
+                    "baseline_available": baseline_available,
+                    "corrected_available": corrected_available,
+                    "paired_available": baseline_available and corrected_available,
+                }
+            )
+
+    if not paired_frames:
+        missing = pd.DataFrame(contract_rows)[
+            ["mode", "seed", "baseline_run_available", "corrected_run_available", "skip_reason"]
+        ]
+        raise ValueError(
+            "No matched baseline/corrected run pairs were available. Requested run inventory:\n"
+            + missing.to_string(index=False)
+        )
 
     paired = pd.concat(paired_frames, ignore_index=True)
     contract = pd.DataFrame(contract_rows)
@@ -173,7 +260,9 @@ def compare_variants(
     return paired, contract, availability
 
 
-def summarize(paired: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+def summarize(
+    paired: pd.DataFrame, contract: pd.DataFrame | None = None
+) -> tuple[pd.DataFrame, pd.DataFrame]:
     trait_summary = (
         paired.groupby(["mode", "trait_name_canonical"])
         .agg(
@@ -199,6 +288,19 @@ def summarize(paired: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
         )
         .reset_index()
     )
+    if contract is not None:
+        coverage = (
+            contract.groupby("mode", as_index=False)
+            .agg(
+                requested_pair_count=("seed", "size"),
+                matched_pair_count=("comparison_eligible", "sum"),
+            )
+        )
+        coverage["skipped_pair_count"] = (
+            coverage["requested_pair_count"] - coverage["matched_pair_count"]
+        )
+        coverage["comparison_grid_complete"] = coverage["skipped_pair_count"].eq(0)
+        macro = coverage.merge(macro, on="mode", how="right", validate="one_to_one")
     return trait_summary, macro
 
 
@@ -227,7 +329,7 @@ def main() -> None:
         seeds=[int(value) for value in csv_values(args.seeds)],
         requested_traits=csv_values(args.traits),
     )
-    trait_summary, macro = summarize(paired)
+    trait_summary, macro = summarize(paired, contract=contract)
     outputs = {
         "paired": out_prefix.with_name(f"{out_prefix.name}_paired.tsv"),
         "contract": out_prefix.with_name(f"{out_prefix.name}_contract.tsv"),
@@ -244,7 +346,19 @@ def main() -> None:
     ]:
         frame.to_csv(outputs[key], sep="\t", index=False, lineterminator="\n")
     print("=== CONTRACT ===")
-    print(contract[["mode", "seed", "supported_trait_count", "status"]].to_string(index=False))
+    print(
+        contract[
+            [
+                "mode",
+                "seed",
+                "baseline_run_available",
+                "corrected_run_available",
+                "supported_trait_count",
+                "status",
+                "skip_reason",
+            ]
+        ].to_string(index=False)
+    )
     print("\n=== MACRO ===")
     print(macro.to_string(index=False))
     print("\n=== TRAIT SUMMARY ===")

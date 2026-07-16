@@ -80,12 +80,49 @@ def test_comparison_allows_seed_specific_but_pair_matched_traits(tmp_path: Path)
     assert macro.loc[0, "delta_normalized_rmse_trait_mean"] < 0
 
 
+def test_comparison_audits_missing_runs_and_uses_only_matched_pairs(tmp_path: Path) -> None:
+    write_run(tmp_path, "baseline", "env", 1, ["A", "B"], rmse_shift=0.0)
+    write_run(tmp_path, "corrected", "env", 1, ["A", "B"], rmse_shift=-0.1)
+    write_run(tmp_path, "corrected", "env", 2, ["A"], rmse_shift=-0.1)
+
+    paired, contract, availability = compare_variants(
+        root=tmp_path,
+        models_root=tmp_path / "trained_models",
+        baseline_variant="baseline",
+        corrected_variant="corrected",
+        modes=["env"],
+        seeds=[1, 2, 3],
+        requested_traits=["A", "B"],
+    )
+
+    _, macro = summarize(paired, contract=contract)
+
+    assert len(paired) == 2
+    assert contract["status"].tolist() == ["PASS", "SKIP", "SKIP"]
+    assert contract["skip_reason"].tolist() == [
+        "",
+        "baseline_run_absent",
+        "baseline_and_corrected_runs_absent",
+    ]
+    seed2 = availability[
+        availability["seed"].eq(2)
+        & availability["trait_name_canonical"].eq("A")
+    ].iloc[0]
+    assert bool(seed2["baseline_available"]) is False
+    assert bool(seed2["corrected_available"]) is True
+    assert bool(seed2["paired_available"]) is False
+    assert macro.loc[0, "requested_pair_count"] == 3
+    assert macro.loc[0, "matched_pair_count"] == 1
+    assert macro.loc[0, "skipped_pair_count"] == 2
+    assert bool(macro.loc[0, "comparison_grid_complete"]) is False
+
+
 def test_comparison_cli_writes_all_reports(
     tmp_path: Path, monkeypatch
 ) -> None:
-    for seed, traits in [(1, ["A", "B"]), (2, ["A"])]:
-        write_run(tmp_path, "baseline", "env", seed, traits, rmse_shift=0.0)
-        write_run(tmp_path, "corrected", "env", seed, traits, rmse_shift=-0.1)
+    write_run(tmp_path, "baseline", "env", 1, ["A", "B"], rmse_shift=0.0)
+    write_run(tmp_path, "corrected", "env", 1, ["A", "B"], rmse_shift=-0.1)
+    write_run(tmp_path, "corrected", "env", 2, ["A"], rmse_shift=-0.1)
     out_prefix = tmp_path / "comparisons" / "matched"
     monkeypatch.setattr(
         sys,
