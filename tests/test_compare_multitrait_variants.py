@@ -56,6 +56,16 @@ def write_run(
             for trait in traits
         ]
     ).to_csv(run / "model_trait_metrics.tsv", sep="\t", index=False)
+    pd.DataFrame(
+        [
+            {
+                "split": split,
+                "trait_name_canonical": trait,
+            }
+            for split in splits
+            for trait in traits
+        ]
+    ).to_csv(run / "model_predictions.tsv.gz", sep="\t", index=False)
     lineage = {
         "source_observations_sha256": "same-source",
         "weight_parameters": {"weight_power": 0.0},
@@ -218,6 +228,86 @@ def test_comparison_rejects_different_training_configuration(tmp_path: Path) -> 
             modes=["env"],
             seeds=[1],
             requested_traits=["A"],
+        )
+
+
+def test_comparison_accepts_trait_with_no_evaluation_rows_in_matched_pair(
+    tmp_path: Path,
+) -> None:
+    for variant, shift in [("baseline", 0.0), ("corrected", -0.1)]:
+        write_run(
+            tmp_path,
+            variant,
+            "env",
+            1,
+            ["A"],
+            rmse_shift=shift,
+            splits=("val", "test"),
+        )
+        metadata_path = next(
+            (
+                tmp_path
+                / "trained_models"
+                / f"multitrait_quantitative_{variant}_env_seed1"
+            ).glob("*_run_metadata.json")
+        )
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        metadata["traits"] = ["A", "B"]
+        metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+
+    paired, contract, availability = compare_variants(
+        root=tmp_path,
+        models_root=tmp_path / "trained_models",
+        baseline_variant="baseline",
+        corrected_variant="corrected",
+        modes=["env"],
+        seeds=[1],
+        requested_traits=["A", "B"],
+    )
+
+    assert len(paired) == 2
+    assert contract.loc[0, "status"] == "PASS"
+    unavailable_b = availability[availability["trait_name_canonical"].eq("B")]
+    assert len(unavailable_b) == 2
+    assert not unavailable_b["paired_available"].any()
+
+
+def test_load_run_rejects_metrics_missing_for_existing_predictions(
+    tmp_path: Path,
+) -> None:
+    write_run(
+        tmp_path,
+        "baseline",
+        "env",
+        1,
+        ["A", "B"],
+        rmse_shift=0.0,
+        splits=("val", "test"),
+    )
+    run_dir = (
+        tmp_path
+        / "trained_models"
+        / "multitrait_quantitative_baseline_env_seed1"
+    )
+    metrics_path = run_dir / "model_trait_metrics.tsv"
+    metrics = pd.read_csv(metrics_path, sep="\t")
+    metrics = metrics[
+        ~(
+            metrics["split"].eq("test")
+            & metrics["trait_name_canonical"].eq("B")
+        )
+    ]
+    metrics.to_csv(metrics_path, sep="\t", index=False)
+
+    with pytest.raises(ValueError, match=r"missing=\[\('test', 'B'\)\]"):
+        compare_variants(
+            root=tmp_path,
+            models_root=tmp_path / "trained_models",
+            baseline_variant="baseline",
+            corrected_variant="corrected",
+            modes=["env"],
+            seeds=[1],
+            requested_traits=["A", "B"],
         )
 
 

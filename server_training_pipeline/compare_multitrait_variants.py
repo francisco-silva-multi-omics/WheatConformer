@@ -48,7 +48,36 @@ def run_directory(models_root: Path, variant: str, mode: str, seed: int) -> Path
     return models_root / f"multitrait_quantitative_{variant}_{mode}_seed{seed}"
 
 
-def load_run(root: Path, models_root: Path, variant: str, mode: str, seed: int) -> dict[str, object]:
+def prediction_metric_keys(run_dir: Path) -> set[tuple[str, str]]:
+    parquet_paths = sorted(run_dir.glob("*_predictions.parquet"))
+    tsv_paths = sorted(run_dir.glob("*_predictions.tsv.gz"))
+    if len(parquet_paths) == 1:
+        predictions = pd.read_parquet(
+            parquet_paths[0], columns=["split", "trait_name_canonical"]
+        )
+    elif len(parquet_paths) > 1:
+        raise ValueError(f"Expected at most one prediction Parquet in {run_dir}")
+    elif len(tsv_paths) == 1:
+        predictions = pd.read_csv(
+            tsv_paths[0], sep="\t", usecols=["split", "trait_name_canonical"]
+        )
+    elif len(tsv_paths) > 1:
+        raise ValueError(
+            f"Expected one prediction TSV in {run_dir}; found {len(tsv_paths)}"
+        )
+    else:
+        raise ValueError(f"Prediction ledger is absent from {run_dir}")
+    predictions = predictions[predictions["split"].isin(EVALUATION_SPLITS)]
+    return set(
+        predictions[["split", "trait_name_canonical"]].drop_duplicates().itertuples(
+            index=False, name=None
+        )
+    )
+
+
+def load_run(
+    root: Path, models_root: Path, variant: str, mode: str, seed: int
+) -> dict[str, object]:
     run_dir = run_directory(models_root, variant, mode, seed)
     if not run_dir.is_dir():
         raise ValueError(f"Required matched run is absent: {run_dir}")
@@ -66,13 +95,28 @@ def load_run(root: Path, models_root: Path, variant: str, mode: str, seed: int) 
     if "model" in selected and metadata["model_label"] in set(selected["model"]):
         selected = selected[selected["model"].eq(metadata["model_label"])].copy()
     if selected.empty:
-        raise ValueError(f"No principal validation/test all-coverage metrics found in {metrics_path}")
+        raise ValueError(
+            f"No principal validation/test all-coverage metrics found in {metrics_path}"
+        )
     metric_keys = ["split", "trait_name_canonical"]
     if selected.duplicated(metric_keys).any():
         duplicate = selected.loc[
             selected.duplicated(metric_keys, keep=False), metric_keys
         ].to_dict("records")
-        raise ValueError(f"Duplicate principal split/trait metrics in {run_dir}: {duplicate}")
+        raise ValueError(
+            f"Duplicate principal split/trait metrics in {run_dir}: {duplicate}"
+        )
+    observed_metric_keys = set(
+        selected[metric_keys].itertuples(index=False, name=None)
+    )
+    prediction_keys = prediction_metric_keys(run_dir)
+    if observed_metric_keys != prediction_keys:
+        missing = sorted(prediction_keys - observed_metric_keys)
+        extra = sorted(observed_metric_keys - prediction_keys)
+        raise ValueError(
+            f"Principal metrics do not match prediction support in {run_dir}: "
+            f"missing={missing}; extra={extra}"
+        )
 
     factor_cache = resolve_from_root(root, str(metadata.get("factor_cache", "")))
     lineage_path = single_path(factor_cache.parent, "*_lineage.json", "ledger lineage file")
@@ -81,6 +125,7 @@ def load_run(root: Path, models_root: Path, variant: str, mode: str, seed: int) 
         "run_dir": run_dir,
         "metadata": metadata,
         "metrics": selected,
+        "prediction_metric_keys": prediction_keys,
         "lineage": lineage,
         "lineage_path": lineage_path,
     }

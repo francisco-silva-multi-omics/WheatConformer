@@ -110,9 +110,12 @@ at least 60% validation seed-trait RMSE wins. Otherwise the decision remains
 
 When the v1 model grid has not been trained, use the matched runner instead of
 running v2 alone. It builds or resumes all 12 v1 runs and all 12 v2 runs
-(three modes by four seeds), verifies that every run contains validation and test
-metrics for all seven traits, and only then produces the validation-only adoption
-decision:
+(three modes by four seeds), verifies that all seven traits remain in run metadata,
+that metrics exactly cover the split/trait pairs present in each prediction ledger,
+and that v1 and v2 have identical evaluable pairs. A trait with no observations in
+a particular held-out split is reported as structurally unavailable rather than
+assigned a fabricated metric. The runner only then produces the validation-only
+adoption decision:
 
 ```bash
 set +u

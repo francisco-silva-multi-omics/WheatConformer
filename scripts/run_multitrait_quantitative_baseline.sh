@@ -70,9 +70,6 @@ from server_training_pipeline.compare_multitrait_variants import csv_values, loa
     inter_op_threads,
 ) = sys.argv[1:]
 traits = set(csv_values(traits_csv))
-expected_metrics = {
-    (split, trait) for split in ["val", "test"] for trait in traits
-}
 expected_configuration = {
     "max_rank_genotype": int(rank_g),
     "max_rank_environment": int(rank_e),
@@ -95,13 +92,8 @@ try:
         int(seed),
     )
     metadata = run["metadata"]
-    observed_metrics = set(
-        run["metrics"][["split", "trait_name_canonical"]].itertuples(
-            index=False, name=None
-        )
-    )
     checks = {
-        "metric_grid": observed_metrics == expected_metrics,
+        "prediction_metric_grid": bool(run["prediction_metric_keys"]),
         "traits": set(metadata.get("traits", [])) == traits,
         "model_label": metadata.get("model_label") == model_label,
         "training_configuration": metadata.get("training_configuration")

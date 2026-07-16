@@ -34,23 +34,30 @@ modes = csv_values(sys.argv[3])
 seeds = [int(value) for value in csv_values(sys.argv[4])]
 traits = set(csv_values(sys.argv[5]))
 models_root = root / "trained_models"
-expected = {(split, trait) for split in ["val", "test"] for trait in traits}
 
 failures = []
+availability = []
 for mode in modes:
     for seed in seeds:
         try:
             run = load_run(root, models_root, variant, mode, seed)
-            observed = set(
-                run["metrics"][["split", "trait_name_canonical"]].itertuples(
-                    index=False, name=None
-                )
-            )
-            if observed != expected:
-                missing = sorted(expected - observed)
-                extra = sorted(observed - expected)
+            metadata_traits = set(run["metadata"].get("traits", []))
+            if metadata_traits != traits:
                 failures.append(
-                    f"mode={mode} seed={seed}: missing={missing}; extra={extra}"
+                    f"mode={mode} seed={seed}: requested traits do not match metadata; "
+                    f"missing={sorted(traits - metadata_traits)}; "
+                    f"extra={sorted(metadata_traits - traits)}"
+                )
+            observed = set(run["prediction_metric_keys"])
+            unavailable = sorted(
+                (split, trait)
+                for split in ["val", "test"]
+                for trait in traits
+                if (split, trait) not in observed
+            )
+            if unavailable:
+                availability.append(
+                    f"mode={mode} seed={seed}: structurally unavailable={unavailable}"
                 )
         except Exception as exc:
             failures.append(f"mode={mode} seed={seed}: {type(exc).__name__}: {exc}")
@@ -59,9 +66,11 @@ if failures:
     raise SystemExit(
         f"Variant {variant} failed matched-run verification:\n" + "\n".join(failures)
     )
+for record in availability:
+    print(f"INFO {record}")
 print(
     f"PASS variant={variant}; runs={len(modes) * len(seeds)}; "
-    f"traits={len(traits)}; validation/test grid complete"
+    f"requested_traits={len(traits)}; metrics match prediction support"
 )
 PY
 }
