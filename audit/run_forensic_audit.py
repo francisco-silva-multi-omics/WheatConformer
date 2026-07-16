@@ -1153,7 +1153,6 @@ def main() -> None:
         "code_root": str(code_root),
         "repository_root": str(code_root),
         "git": git_provenance(code_root, out_dir),
-        "data_deployment": git_provenance(root, out_dir),
         "trial_root": source_summary(trial_root),
         "genotypic_root": source_summary(geno_root),
         "environment": {"python": sys.version, "platform": platform.platform(), "executable": sys.executable, "packages": package_versions()},
