@@ -343,9 +343,16 @@ def main() -> None:
     write_table(marker_qc, args.out_dir / "qc_gbs_sawyt_marker_stats.tsv")
     write_table(sample_qc, args.out_dir / "qc_gbs_sawyt_sample_stats.tsv")
     np.save(args.out_dir / "K_GBS_SAWYT.QCfiltered.npy", K)
-    pd.DataFrame({"sample_id": X_filt["sample_id"]}).to_csv(
+    gbs_order = pd.DataFrame({"sample_id": X_filt["sample_id"]})
+    gbs_order.to_csv(
         args.out_dir / "gbs_sawyt_K_sample_order.QCfiltered.tsv", sep="\t", index=False
     )
+    gbs_order.assign(row_index=np.arange(len(gbs_order), dtype=np.int32))[["row_index", "sample_id"]].to_csv(
+        args.out_dir / "gbs_sawyt_K_row_order.QCfiltered.tsv", sep="\t", index=False
+    )
+    gbs_order.assign(column_index=np.arange(len(gbs_order), dtype=np.int32))[
+        ["column_index", "sample_id"]
+    ].to_csv(args.out_dir / "gbs_sawyt_K_column_order.QCfiltered.tsv", sep="\t", index=False)
 
     summary = pd.DataFrame(
         [

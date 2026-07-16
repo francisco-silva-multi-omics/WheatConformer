@@ -11,6 +11,7 @@ VARIANT="${MULTITRAIT_VARIANT:-ess25}"
 LEDGER_DIR="${MULTITRAIT_LEDGER_DIR:-model_kernels/multitrait_pedigree_env_${VARIANT}}"
 LEDGER_PREFIX="${MULTITRAIT_LEDGER_PREFIX:-multitrait_pedigree_${VARIANT}}"
 EXPERT_DIR="${MULTITRAIT_EXPERT_DIR:-model_kernels/multitrait_kernel_experts}"
+ENVIRONMENT_DIR="${MULTITRAIT_ENVIRONMENT_DIR:-environment}"
 HMP_MODEL_DIR="${MULTITRAIT_HMP_MODEL_DIR:-model_kernels/stage1_hmp_env_ke_diag_norm}"
 GBS_MODEL_DIR="${MULTITRAIT_GBS_MODEL_DIR:-model_kernels/stage1_gbs_sawyt_env_ke_diag_norm}"
 DTH_MODEL_DIR="${MULTITRAIT_DTH_MODEL_DIR:-model_kernels/stage1_pedigree_env_dth_v2}"
@@ -78,6 +79,7 @@ log "START prepare aligned K_A, HMP/GBS K_G, and environment experts"
   --gbs-model-dir "$GBS_MODEL_DIR" \
   --dth-model-dir "$DTH_MODEL_DIR" \
   --trait-environment-manifest "$TRAIT_ENV_MANIFEST" \
+  --environment-dir "$ENVIRONMENT_DIR" \
   --out-dir "$EXPERT_DIR" \
   "${prepare_args[@]}"
 log "DONE prepare kernel experts"

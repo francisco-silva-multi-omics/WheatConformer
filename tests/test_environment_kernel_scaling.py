@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import shutil
 from pathlib import Path
 
@@ -68,5 +69,25 @@ def test_environment_kernel_main_writes_scaled_components_and_provenance(tmp_pat
     ]).issubset(weights.columns)
     assert np.isclose(weights["normalized_weight"].sum(), 1.0)
     assert (tmp_path / "qc_location_key_collisions.tsv").exists()
+    assert (tmp_path / "env_kernel_row_order.tsv").exists()
+    assert (tmp_path / "env_kernel_column_order.tsv").exists()
     assert np.isclose(np.diag(np.load(tmp_path / "K_E.npy")).mean(), 1.0)
     assert (tmp_path / "K_E.raw.npy").exists()
+
+
+def test_environment_kernel_main_supports_non_destructive_output_dir(tmp_path, monkeypatch) -> None:
+    source = tmp_path / "source"
+    output = tmp_path / "corrected"
+    source.mkdir()
+    shutil.copyfile(FIXTURES / "toy_envdata.tsv", source / "envdata.tsv")
+    shutil.copyfile(FIXTURES / "toy_locdata.tsv", source / "locdata.tsv")
+    monkeypatch.setattr(pd.DataFrame, "to_parquet", lambda self, path, index=False: None)
+
+    environment_kernels.main(environment_dir=source, output_dir=output)
+
+    assert not (source / "K_E.npy").exists()
+    assert (output / "K_E.npy").exists()
+    qc = json.loads((output / "K_E.qc.json").read_text(encoding="utf-8"))
+    assert qc["environment_input_dir"] == str(source.resolve())
+    assert qc["environment_output_dir"] == str(output.resolve())
+    assert len(qc["builder_sha256"]) == 64
