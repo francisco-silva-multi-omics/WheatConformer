@@ -934,6 +934,16 @@ def report(
     kernel_failures = int((kernels.get("status", pd.Series(dtype=str)) == "FAIL").sum())
     trial_argument = source_path_label(root, Path(str(config["trial_root"]["path"])))
     genotypic_argument = source_path_label(root, Path(str(config["genotypic_root"]["path"])))
+    code_root = Path(str(config["code_root"]))
+    audit_script = code_root / "audit" / "run_forensic_audit.py"
+    compare_script = code_root / "audit" / "compare_corrected_environment_kernel.py"
+    validate_script = code_root / "audit" / "validate_server_artifacts.py"
+    correction_script = code_root / "scripts" / "run_forensic_kernel_corrections_server.sh"
+    reproducible_command = (
+        f'python "{audit_script}" --root "{root}" --code-root "{code_root}" '
+        f'--trial-root "{trial_argument}" --genotypic-root "{genotypic_argument}" '
+        f'--out-dir "{out_dir}"'
+    )
     lines = [
         "# Kernel Validation Report",
         "",
@@ -1080,17 +1090,17 @@ def report(
         "## 18. Reproducible commands",
         "",
         "```powershell",
-        f".\\.audit-venv\\Scripts\\python.exe audit\\run_forensic_audit.py --root . --trial-root {trial_argument} --genotypic-root {genotypic_argument} --out-dir audit",
-        ".\\.audit-venv\\Scripts\\python.exe audit\\compare_corrected_environment_kernel.py --root .",
-        ".\\.audit-venv\\Scripts\\python.exe -m pytest tests\\test_forensic_kernel_math.py tests\\test_environment_kernel_scaling.py tests\\test_end_to_end_toy_pipeline.py -q",
+        reproducible_command,
+        f'python "{compare_script}" --root "{root}"',
+        f'python -m pytest "{code_root / "tests"}" -q',
         "```",
         "",
         "Server continuation:",
         "",
         "```bash",
-        f"python audit/run_forensic_audit.py --root . --trial-root {trial_argument} --genotypic-root {genotypic_argument} --out-dir audit --skip-source-inventory",
-        "python audit/validate_server_artifacts.py --root . --out-dir audit/server_artifacts",
-        "bash scripts/run_forensic_kernel_corrections_server.sh .",
+        reproducible_command,
+        f'python "{validate_script}" --root "{root}" --out-dir "{out_dir / "server_artifacts"}"',
+        f'bash "{correction_script}" "{root}"',
         "```",
         "",
         "## 19. Files created or modified",
@@ -1106,7 +1116,13 @@ def report(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Forensic wheat kernel and data-lineage audit")
-    parser.add_argument("--root", type=Path, default=Path("."))
+    parser.add_argument("--root", type=Path, default=Path("."), help="Data and artifact root")
+    parser.add_argument(
+        "--code-root",
+        type=Path,
+        default=None,
+        help="Git checkout containing the audited pipeline code (defaults to this script's repository)",
+    )
     parser.add_argument("--trial-root", type=Path, required=True)
     parser.add_argument("--genotypic-root", type=Path, required=True)
     parser.add_argument("--out-dir", type=Path, default=Path("audit"))
@@ -1114,10 +1130,17 @@ def main() -> None:
     args = parser.parse_args()
 
     root = args.root.resolve()
+    code_root = (
+        args.code_root.resolve()
+        if args.code_root is not None
+        else Path(__file__).resolve().parents[1]
+    )
     trial_root = (root / args.trial_root).resolve() if not args.trial_root.is_absolute() else args.trial_root.resolve()
     geno_root = (root / args.genotypic_root).resolve() if not args.genotypic_root.is_absolute() else args.genotypic_root.resolve()
     out_dir = (root / args.out_dir).resolve() if not args.out_dir.is_absolute() else args.out_dir.resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
+    if not (code_root / "audit" / "run_forensic_audit.py").is_file():
+        raise SystemExit(f"Code root does not contain audit/run_forensic_audit.py: {code_root}")
     for path, label in ((trial_root, "trial"), (geno_root, "genotypic")):
         if not path.is_dir() or not os.access(path, os.R_OK):
             raise SystemExit(f"Required read-only {label} source root is unavailable: {path}")
@@ -1126,8 +1149,11 @@ def main() -> None:
         "audit_started_utc": pd.Timestamp.now("UTC").isoformat(),
         "seed": SEED,
         "command": " ".join(sys.argv),
-        "repository_root": str(root),
-        "git": git_provenance(root, out_dir),
+        "data_root": str(root),
+        "code_root": str(code_root),
+        "repository_root": str(code_root),
+        "git": git_provenance(code_root, out_dir),
+        "data_deployment": git_provenance(root, out_dir),
         "trial_root": source_summary(trial_root),
         "genotypic_root": source_summary(geno_root),
         "environment": {"python": sys.version, "platform": platform.platform(), "executable": sys.executable, "packages": package_versions()},
@@ -1142,7 +1168,7 @@ def main() -> None:
     )
 
     static_lineage(root, out_dir, trial_root, geno_root)
-    corpus = source_code_corpus(root)
+    corpus = source_code_corpus(code_root)
     if args.skip_source_inventory and (out_dir / "genotypic_data_inventory.csv").exists():
         geno_inventory = pd.read_csv(out_dir / "genotypic_data_inventory.csv", low_memory=False)
         raw_inventory = pd.read_csv(out_dir / "raw_source_file_inventory.csv", low_memory=False)
