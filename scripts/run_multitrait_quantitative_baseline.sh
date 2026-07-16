@@ -22,11 +22,102 @@ TRAITS="${MULTITRAIT_TRAITS:-DAYS_TO_HEADING,DAYS_TO_MATURITY,PLANT_HEIGHT,GRAIN
 FORCE="${MULTITRAIT_FORCE:-0}"
 EXCLUDE_KERNELS="${MULTITRAIT_EXCLUDE_KERNELS:-}"
 INCLUDE_DISABLED_KERNELS="${MULTITRAIT_INCLUDE_DISABLED_KERNELS:-}"
+RANK_G="${MULTITRAIT_RANK_G:-128}"
+RANK_E="${MULTITRAIT_RANK_E:-64}"
+LATENT_DIM="${MULTITRAIT_LATENT_DIM:-16}"
+EPOCHS="${MULTITRAIT_EPOCHS:-200}"
+BATCH_SIZE="${MULTITRAIT_BATCH_SIZE:-8192}"
+LEARNING_RATE="${MULTITRAIT_LR:-0.001}"
+WEIGHT_DECAY="${MULTITRAIT_WEIGHT_DECAY:-0.0001}"
+PATIENCE="${MULTITRAIT_PATIENCE:-25}"
+INTRA_OP_THREADS="${MULTITRAIT_INTRA_OP_THREADS:-16}"
+INTER_OP_THREADS="${MULTITRAIT_INTER_OP_THREADS:-2}"
 
 mkdir -p "$LEDGER_DIR" "$EXPERT_DIR" trained_models/model_comparisons logs
 
 timestamp() { date '+%Y-%m-%d %H:%M:%S'; }
 log() { printf '[%s] %s\n' "$(timestamp)" "$*"; }
+
+run_is_complete() {
+  local mode="$1"
+  local seed="$2"
+  local model_label="$3"
+  "$PYTHON" - \
+    "$VARIANT" "$mode" "$seed" "$model_label" "$TRAITS" \
+    "$RANK_G" "$RANK_E" "$LATENT_DIM" "$EPOCHS" "$BATCH_SIZE" \
+    "$LEARNING_RATE" "$WEIGHT_DECAY" "$PATIENCE" \
+    "$INTRA_OP_THREADS" "$INTER_OP_THREADS" <<'PY'
+import sys
+from pathlib import Path
+
+from server_training_pipeline.compare_multitrait_variants import csv_values, load_run
+
+(
+    variant,
+    mode,
+    seed,
+    model_label,
+    traits_csv,
+    rank_g,
+    rank_e,
+    latent_dim,
+    epochs,
+    batch_size,
+    learning_rate,
+    weight_decay,
+    patience,
+    intra_op_threads,
+    inter_op_threads,
+) = sys.argv[1:]
+traits = set(csv_values(traits_csv))
+expected_metrics = {
+    (split, trait) for split in ["val", "test"] for trait in traits
+}
+expected_configuration = {
+    "max_rank_genotype": int(rank_g),
+    "max_rank_environment": int(rank_e),
+    "latent_dim": int(latent_dim),
+    "epochs": int(epochs),
+    "batch_size": int(batch_size),
+    "learning_rate": float(learning_rate),
+    "weight_decay": float(weight_decay),
+    "patience": int(patience),
+    "intra_op_threads": int(intra_op_threads),
+    "inter_op_threads": int(inter_op_threads),
+}
+
+try:
+    run = load_run(
+        Path.cwd().resolve(),
+        Path.cwd().resolve() / "trained_models",
+        variant,
+        mode,
+        int(seed),
+    )
+    metadata = run["metadata"]
+    observed_metrics = set(
+        run["metrics"][["split", "trait_name_canonical"]].itertuples(
+            index=False, name=None
+        )
+    )
+    checks = {
+        "metric_grid": observed_metrics == expected_metrics,
+        "traits": set(metadata.get("traits", [])) == traits,
+        "model_label": metadata.get("model_label") == model_label,
+        "training_configuration": metadata.get("training_configuration")
+        == expected_configuration,
+    }
+    failed = [name for name, passed in checks.items() if not passed]
+    if failed:
+        raise ValueError(f"failed completeness checks: {failed}")
+except Exception as exc:
+    print(
+        f"INCOMPLETE variant={variant} mode={mode} seed={seed}: {exc}",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+PY
+}
 
 "$PYTHON" - <<'PY'
 import tensorflow as tf
@@ -133,8 +224,11 @@ for seed in "${seed_values[@]}"; do
     run_dir="trained_models/multitrait_quantitative_${VARIANT}_${mode}_seed${seed}"
     prefix="multitrait_quantitative_${VARIANT}_${mode}_seed${seed}"
     if [[ "$FORCE" != "1" && -s "$run_dir/${prefix}_trait_metrics.tsv" ]]; then
-      log "SKIP seed=$seed mode=$mode: metrics exist"
-      continue
+      if run_is_complete "$mode" "$seed" "$model_label"; then
+        log "SKIP seed=$seed mode=$mode: complete matched outputs exist"
+        continue
+      fi
+      log "REBUILD seed=$seed mode=$mode: existing outputs are incomplete or stale"
     fi
     mkdir -p "$run_dir"
     log "START seed=$seed mode=$mode"
@@ -149,16 +243,16 @@ for seed in "${seed_values[@]}"; do
       --model-label "$model_label" \
       --split gho_environment \
       --seed "$seed" \
-      --max-rank-genotype "${MULTITRAIT_RANK_G:-128}" \
-      --max-rank-environment "${MULTITRAIT_RANK_E:-64}" \
-      --latent-dim "${MULTITRAIT_LATENT_DIM:-16}" \
-      --epochs "${MULTITRAIT_EPOCHS:-200}" \
-      --batch-size "${MULTITRAIT_BATCH_SIZE:-8192}" \
-      --learning-rate "${MULTITRAIT_LR:-0.001}" \
-      --weight-decay "${MULTITRAIT_WEIGHT_DECAY:-0.0001}" \
-      --patience "${MULTITRAIT_PATIENCE:-25}" \
-      --intra-op-threads "${MULTITRAIT_INTRA_OP_THREADS:-16}" \
-      --inter-op-threads "${MULTITRAIT_INTER_OP_THREADS:-2}" \
+      --max-rank-genotype "$RANK_G" \
+      --max-rank-environment "$RANK_E" \
+      --latent-dim "$LATENT_DIM" \
+      --epochs "$EPOCHS" \
+      --batch-size "$BATCH_SIZE" \
+      --learning-rate "$LEARNING_RATE" \
+      --weight-decay "$WEIGHT_DECAY" \
+      --patience "$PATIENCE" \
+      --intra-op-threads "$INTRA_OP_THREADS" \
+      --inter-op-threads "$INTER_OP_THREADS" \
       "${kernel_filter_args[@]}" \
       "${extra_args[@]}"
     log "DONE seed=$seed mode=$mode"

@@ -5,6 +5,7 @@ import sys
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
 from server_training_pipeline.compare_multitrait_variants import compare_variants, main, summarize
 
@@ -31,6 +32,11 @@ def write_run(
         "traits": traits,
         "rows": {"train": 100, "val": 20, "test": 30},
         "active_kernels": ["K_A", "K_E_MGMT", "K_E_TGW_V2", *added_kernels],
+        "training_configuration": {
+            "max_rank_genotype": 128,
+            "max_rank_environment": 64,
+            "latent_dim": 16,
+        },
         "factor_cache": str(factor_cache),
     }
     (run / "model_run_metadata.json").write_text(json.dumps(metadata), encoding="utf-8")
@@ -187,6 +193,32 @@ def test_comparison_allows_only_declared_additional_kernel(tmp_path: Path) -> No
     assert len(paired) == 1
     assert contract.loc[0, "active_kernels_match"]
     assert contract.loc[0, "allowed_added_kernels"] == "K_E_CLIMATOLOGY"
+
+
+def test_comparison_rejects_different_training_configuration(tmp_path: Path) -> None:
+    write_run(tmp_path, "baseline", "env", 1, ["A"], rmse_shift=0.0)
+    write_run(tmp_path, "corrected", "env", 1, ["A"], rmse_shift=-0.1)
+    corrected_metadata = next(
+        (
+            tmp_path
+            / "trained_models"
+            / "multitrait_quantitative_corrected_env_seed1"
+        ).glob("*_run_metadata.json")
+    )
+    metadata = json.loads(corrected_metadata.read_text(encoding="utf-8"))
+    metadata["training_configuration"]["latent_dim"] = 32
+    corrected_metadata.write_text(json.dumps(metadata), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="training_configuration_match"):
+        compare_variants(
+            root=tmp_path,
+            models_root=tmp_path / "trained_models",
+            baseline_variant="baseline",
+            corrected_variant="corrected",
+            modes=["env"],
+            seeds=[1],
+            requested_traits=["A"],
+        )
 
 
 def test_comparison_cli_writes_all_reports(

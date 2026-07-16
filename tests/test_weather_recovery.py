@@ -420,3 +420,39 @@ def test_raw_trial_date_recovery_preserves_curated_base_supplement(
 
     assert combined.loc[0, "sowing_date"] == "2020-11-15"
     assert combined.loc[0, "provenance"] == "manual_review"
+
+
+def test_matched_weather_runner_freezes_and_verifies_complete_experiment() -> None:
+    repo = Path(__file__).resolve().parents[1]
+    matched = (
+        repo / "scripts" / "run_matched_weather_recovery_comparison.sh"
+    ).read_text()
+    pipeline = (repo / "scripts" / "run_weather_recovery_pipeline.sh").read_text()
+    multitrait = (
+        repo / "scripts" / "run_multitrait_quantitative_baseline.sh"
+    ).read_text()
+
+    assert matched.index('run_weather_variant "$BASELINE_TAG"') < matched.index(
+        'run_weather_variant "$CORRECTED_TAG"'
+    )
+    assert 'MULTITRAIT_WEIGHT_POWER="0"' in matched
+    assert 'MULTITRAIT_INCLUDE_DISABLED_KERNELS="K_E_TGW_V2"' in matched
+    assert 'MULTITRAIT_SEEDS="$SEEDS"' in matched
+    assert 'MULTITRAIT_MODES="$MODES"' in matched
+    assert 'MULTITRAIT_TRAITS="$TRAITS"' in matched
+    assert 'verify_variant "$variant"' in matched
+    assert "run_is_complete" in multitrait
+    assert "training_configuration" in multitrait
+    for suffix in [
+        "contract",
+        "paired",
+        "trait_summary",
+        "macro_summary",
+        "trait_availability",
+        "adoption_decision",
+    ]:
+        assert suffix in matched
+
+    assert '--seeds "$SEEDS"' in pipeline
+    assert '--modes "$MODES"' in pipeline
+    assert '--traits "$TRAITS"' in pipeline

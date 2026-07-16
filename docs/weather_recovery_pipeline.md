@@ -106,6 +106,40 @@ validation normalized RMSE and Pearson, at least 75% seed-level wins for each, a
 at least 60% validation seed-trait RMSE wins. Otherwise the decision remains
 `retain_current_corrected_kernel`.
 
+### Matched v1 versus v2 experiment
+
+When the v1 model grid has not been trained, use the matched runner instead of
+running v2 alone. It builds or resumes all 12 v1 runs and all 12 v2 runs
+(three modes by four seeds), verifies that every run contains validation and test
+metrics for all seven traits, and only then produces the validation-only adoption
+decision:
+
+```bash
+set +u
+
+CODE="$HOME/tools/WheatConformer"
+DATA="/DATA2/estancias/tesis_javier/model_DATA/genotipoXambiente"
+PYTHON="$HOME/tools/tf_wheat_cpu/bin/python"
+
+cd "$DATA"
+mkdir -p logs
+
+nohup env \
+  PYTHON="$PYTHON" \
+  WHEATCONFORMER_CODE_ROOT="$CODE" \
+  WEATHER_RECOVERY_TRIAL_ROOT="$DATA/TRIALS_AND_NURSERIES" \
+  WEATHER_RECOVERY_WORKERS="4" \
+  MATCHED_WEATHER_FORCE="0" \
+  bash "$CODE/scripts/run_matched_weather_recovery_comparison.sh" "$DATA" \
+  > logs/matched_weather_recovery_v1_vs_v2.nohup.log 2>&1 &
+```
+
+The runner is sequential to avoid competing for server RAM and CPU. Existing
+complete runs are reused. Set `MATCHED_WEATHER_FORCE=1` only when an existing run
+is known to be stale or incomplete. The comparison contract must contain 12
+`PASS` rows and the runner must end with `DONE matched v1 versus v2 raw-date
+weather comparison`.
+
 ## Primary outputs
 
 - `model_kernels/weather_recovery_audit_v2_raw_dates/final/weather_recovery_availability_summary.tsv`

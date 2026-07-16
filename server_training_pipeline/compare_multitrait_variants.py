@@ -22,6 +22,7 @@ CONTRACT_CHECKS = [
     "split_rows_match",
     "source_observations_match",
     "weight_parameters_match",
+    "training_configuration_match",
     "uniform_weighting",
 ]
 EVALUATION_SPLITS = ["val", "test"]
@@ -122,6 +123,9 @@ def require_matching_contract(
         == c_lineage["source_observations_sha256"],
         "weight_parameters_match": b_lineage["weight_parameters"]
         == c_lineage["weight_parameters"],
+        "training_configuration_match": bool(b_meta.get("training_configuration"))
+        and b_meta.get("training_configuration")
+        == c_meta.get("training_configuration"),
         "uniform_weighting": float(b_lineage["weight_parameters"]["weight_power"]) == 0.0
         and float(c_lineage["weight_parameters"]["weight_power"]) == 0.0,
     }
