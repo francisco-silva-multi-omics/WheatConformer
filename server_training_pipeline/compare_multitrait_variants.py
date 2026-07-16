@@ -24,6 +24,7 @@ CONTRACT_CHECKS = [
     "weight_parameters_match",
     "uniform_weighting",
 ]
+EVALUATION_SPLITS = ["val", "test"]
 
 
 def csv_values(value: str) -> list[str]:
@@ -59,17 +60,18 @@ def load_run(root: Path, models_root: Path, variant: str, mode: str, seed: int) 
     if missing:
         raise ValueError(f"{metrics_path} is missing metric columns: {missing}")
     selected = metrics[
-        metrics["split"].eq("test") & metrics["coverage_group"].eq("all")
+        metrics["split"].isin(EVALUATION_SPLITS) & metrics["coverage_group"].eq("all")
     ].copy()
     if "model" in selected and metadata["model_label"] in set(selected["model"]):
         selected = selected[selected["model"].eq(metadata["model_label"])].copy()
     if selected.empty:
-        raise ValueError(f"No principal test/all metrics found in {metrics_path}")
-    if selected["trait_name_canonical"].duplicated().any():
+        raise ValueError(f"No principal validation/test all-coverage metrics found in {metrics_path}")
+    metric_keys = ["split", "trait_name_canonical"]
+    if selected.duplicated(metric_keys).any():
         duplicate = selected.loc[
-            selected["trait_name_canonical"].duplicated(keep=False), "trait_name_canonical"
-        ].tolist()
-        raise ValueError(f"Duplicate principal trait metrics in {run_dir}: {duplicate}")
+            selected.duplicated(metric_keys, keep=False), metric_keys
+        ].to_dict("records")
+        raise ValueError(f"Duplicate principal split/trait metrics in {run_dir}: {duplicate}")
 
     factor_cache = resolve_from_root(root, str(metadata.get("factor_cache", "")))
     lineage_path = single_path(factor_cache.parent, "*_lineage.json", "ledger lineage file")
@@ -93,8 +95,16 @@ def require_matching_contract(
     checks = {
         "active_kernels_match": set(b_meta["active_kernels"]) == set(c_meta["active_kernels"]),
         "metadata_traits_match": set(b_meta["traits"]) == set(c_meta["traits"]),
-        "metric_traits_match": set(baseline["metrics"]["trait_name_canonical"])
-        == set(corrected["metrics"]["trait_name_canonical"]),
+        "metric_traits_match": set(
+            baseline["metrics"][["split", "trait_name_canonical"]].itertuples(
+                index=False, name=None
+            )
+        )
+        == set(
+            corrected["metrics"][["split", "trait_name_canonical"]].itertuples(
+                index=False, name=None
+            )
+        ),
         "split_mode_match": b_meta["canonical_split_mode"] == c_meta["canonical_split_mode"],
         "split_rows_match": b_meta["rows"] == c_meta["rows"],
         "source_observations_match": b_lineage["source_observations_sha256"]
@@ -154,16 +164,26 @@ def compare_variants(
                 else None
             )
             baseline_supported = (
-                set(baseline["metrics"]["trait_name_canonical"])
+                set(
+                    baseline["metrics"][["split", "trait_name_canonical"]].itertuples(
+                        index=False, name=None
+                    )
+                )
                 if baseline is not None
                 else set()
             )
             corrected_supported = (
-                set(corrected["metrics"]["trait_name_canonical"])
+                set(
+                    corrected["metrics"][["split", "trait_name_canonical"]].itertuples(
+                        index=False, name=None
+                    )
+                )
                 if corrected is not None
                 else set()
             )
-            observed_traits.update(baseline_supported | corrected_supported)
+            observed_traits.update(
+                trait for _, trait in baseline_supported | corrected_supported
+            )
             availability_records.append(
                 {
                     "mode": mode,
@@ -180,7 +200,9 @@ def compare_variants(
                     skip_reason = "baseline_run_absent"
                 else:
                     skip_reason = "corrected_run_absent"
-                paired_supported = baseline_supported & corrected_supported
+                paired_supported = {
+                    trait for _, trait in baseline_supported & corrected_supported
+                }
                 contract_rows.append(
                     {
                         "mode": mode,
@@ -204,10 +226,9 @@ def compare_variants(
             contract_rows.append(contract)
             baseline_metrics = baseline["metrics"]
             corrected_metrics = corrected["metrics"]
-            supported = set(baseline_metrics["trait_name_canonical"])
             merged = baseline_metrics.merge(
                 corrected_metrics,
-                on="trait_name_canonical",
+                on=["split", "trait_name_canonical"],
                 suffixes=("_legacy", "_corrected"),
                 validate="one_to_one",
             )
@@ -231,19 +252,22 @@ def compare_variants(
 
     traits_for_audit = requested_traits or sorted(observed_traits)
     for record in availability_records:
-        for trait in traits_for_audit:
-            baseline_available = trait in record["baseline_supported"]
-            corrected_available = trait in record["corrected_supported"]
-            availability_rows.append(
-                {
-                    "mode": record["mode"],
-                    "seed": record["seed"],
-                    "trait_name_canonical": trait,
-                    "baseline_available": baseline_available,
-                    "corrected_available": corrected_available,
-                    "paired_available": baseline_available and corrected_available,
-                }
-            )
+        for split in EVALUATION_SPLITS:
+            for trait in traits_for_audit:
+                key = (split, trait)
+                baseline_available = key in record["baseline_supported"]
+                corrected_available = key in record["corrected_supported"]
+                availability_rows.append(
+                    {
+                        "split": split,
+                        "mode": record["mode"],
+                        "seed": record["seed"],
+                        "trait_name_canonical": trait,
+                        "baseline_available": baseline_available,
+                        "corrected_available": corrected_available,
+                        "paired_available": baseline_available and corrected_available,
+                    }
+                )
 
     if not paired_frames:
         missing = pd.DataFrame(contract_rows)[
@@ -264,7 +288,7 @@ def summarize(
     paired: pd.DataFrame, contract: pd.DataFrame | None = None
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     trait_summary = (
-        paired.groupby(["mode", "trait_name_canonical"])
+        paired.groupby(["split", "mode", "trait_name_canonical"])
         .agg(
             seed_count=("seed", "nunique"),
             seeds=("seed", lambda values: ";".join(str(value) for value in sorted(set(values)))),
@@ -278,7 +302,7 @@ def summarize(
         .reset_index()
     )
     macro = (
-        trait_summary.groupby("mode")
+        trait_summary.groupby(["split", "mode"])
         .agg(
             supported_traits=("trait_name_canonical", "nunique"),
             delta_normalized_rmse_trait_mean=("delta_normalized_rmse_mean", "mean"),
@@ -300,7 +324,7 @@ def summarize(
             coverage["requested_pair_count"] - coverage["matched_pair_count"]
         )
         coverage["comparison_grid_complete"] = coverage["skipped_pair_count"].eq(0)
-        macro = coverage.merge(macro, on="mode", how="right", validate="one_to_one")
+        macro = coverage.merge(macro, on="mode", how="right", validate="one_to_many")
     return trait_summary, macro
 
 

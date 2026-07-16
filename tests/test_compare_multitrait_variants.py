@@ -16,6 +16,7 @@ def write_run(
     seed: int,
     traits: list[str],
     rmse_shift: float,
+    splits: tuple[str, ...] = ("test",),
 ) -> None:
     run = root / "trained_models" / f"multitrait_quantitative_{variant}_{mode}_seed{seed}"
     ledger = root / "model_kernels" / f"ledger_{variant}"
@@ -35,7 +36,7 @@ def write_run(
     pd.DataFrame(
         [
             {
-                "split": "test",
+                "split": split,
                 "coverage_group": "all",
                 "model": metadata["model_label"],
                 "trait_name_canonical": trait,
@@ -44,6 +45,7 @@ def write_run(
                 "pearson": 0.2 - rmse_shift,
                 "prediction_sd_ratio": 0.8,
             }
+            for split in splits
             for trait in traits
         ]
     ).to_csv(run / "model_trait_metrics.tsv", sep="\t", index=False)
@@ -73,7 +75,9 @@ def test_comparison_allows_seed_specific_but_pair_matched_traits(tmp_path: Path)
     assert len(paired) == 3
     assert contract["supported_trait_count"].tolist() == [2, 1]
     missing = availability[
-        availability["trait_name_canonical"].eq("B") & availability["seed"].eq(2)
+        availability["split"].eq("test")
+        & availability["trait_name_canonical"].eq("B")
+        & availability["seed"].eq(2)
     ].iloc[0]
     assert bool(missing["paired_available"]) is False
     assert trait_summary.set_index("trait_name_canonical").loc["B", "seed_count"] == 1
@@ -106,6 +110,7 @@ def test_comparison_audits_missing_runs_and_uses_only_matched_pairs(tmp_path: Pa
     ]
     seed2 = availability[
         availability["seed"].eq(2)
+        & availability["split"].eq("test")
         & availability["trait_name_canonical"].eq("A")
     ].iloc[0]
     assert bool(seed2["baseline_available"]) is False
@@ -115,6 +120,44 @@ def test_comparison_audits_missing_runs_and_uses_only_matched_pairs(tmp_path: Pa
     assert macro.loc[0, "matched_pair_count"] == 1
     assert macro.loc[0, "skipped_pair_count"] == 2
     assert bool(macro.loc[0, "comparison_grid_complete"]) is False
+
+
+def test_comparison_reports_validation_and_test_separately(tmp_path: Path) -> None:
+    write_run(
+        tmp_path,
+        "baseline",
+        "env",
+        1,
+        ["A", "B"],
+        rmse_shift=0.0,
+        splits=("val", "test"),
+    )
+    write_run(
+        tmp_path,
+        "corrected",
+        "env",
+        1,
+        ["A", "B"],
+        rmse_shift=-0.1,
+        splits=("val", "test"),
+    )
+
+    paired, contract, _ = compare_variants(
+        root=tmp_path,
+        models_root=tmp_path / "trained_models",
+        baseline_variant="baseline",
+        corrected_variant="corrected",
+        modes=["env"],
+        seeds=[1],
+        requested_traits=["A", "B"],
+    )
+    trait_summary, macro = summarize(paired, contract=contract)
+
+    assert set(paired["split"]) == {"val", "test"}
+    assert len(paired) == 4
+    assert set(trait_summary["split"]) == {"val", "test"}
+    assert set(macro["split"]) == {"val", "test"}
+    assert macro.groupby("split")["comparison_grid_complete"].first().all()
 
 
 def test_comparison_cli_writes_all_reports(
