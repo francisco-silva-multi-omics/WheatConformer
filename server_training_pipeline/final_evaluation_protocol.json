@@ -1,7 +1,7 @@
 {
-  "protocol_version": "multitrait_quantitative_final_v2",
+  "protocol_version": "multitrait_quantitative_final_v3",
   "status": "frozen",
-  "frozen_after_discovery": "2026-07-16",
+  "frozen_after_discovery": "2026-07-17",
   "discovery_seeds_forbidden": [2026, 2027, 2028, 2029],
   "traits": [
     "DAYS_TO_HEADING",
@@ -38,13 +38,30 @@
   },
   "outer_folds": 5,
   "inner_folds": 3,
-  "final_holdout_policy": "recent_cycle_block_minimum_support",
+  "final_holdout_policy": "deterministic_environment_block_minimum_support",
   "final_holdout_support": {
     "minimum_environment_fraction": 0.1,
     "minimum_environment_count": 50,
     "maximum_environment_fraction": 0.2,
     "minimum_rows_per_trait": 20,
     "minimum_environments_per_trait": 5
+  },
+  "protected_genotype_experts": [
+    "K_G_HMP",
+    "K_G_GBS"
+  ],
+  "final_holdout_genotype_expert_support": {
+    "minimum_development_unique_genotypes": 10,
+    "minimum_development_unique_fraction": 0.75,
+    "minimum_development_observation_rows": 100,
+    "minimum_holdout_unique_genotypes": 2,
+    "minimum_holdout_unique_fraction": 0.01,
+    "minimum_holdout_observation_rows": 20
+  },
+  "nested_genotype_expert_support": {
+    "minimum_train_unique_genotypes": 3,
+    "minimum_train_unique_fraction": 0.1,
+    "minimum_train_observation_rows": 20
   },
   "generalization_families": {
     "unseen_environments": ["unseen_environments"],

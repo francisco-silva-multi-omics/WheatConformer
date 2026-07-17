@@ -271,24 +271,35 @@ country_holdout
 The default runs the frozen full model. Set `FINAL_EVAL_MODES=env,additive,full`
 only for a predeclared diagnostic ablation; the outer test still cannot select
 hyperparameters. Each invocation is resumable and writes fold contracts under
-`model_kernels/final_nested_evaluation_v2/`. The final holdout is a complete
-block of recent cycle-years, accumulated without phenotype values until it
-contains at least 10% (and at least 50) of model environments, at least 20 rows,
-and at least five independent environments for every frozen trait. The builder
-refuses to freeze a block larger than 20% of environments. Inspect
+`model_kernels/final_nested_evaluation_v3/` and model runs under
+`trained_models/final_nested_evaluation_v3_runs/`. The final holdout is a
+deterministically selected environment block constructed without phenotype
+values. It contains at least 10% (and at least 50) of model environments, at
+least 20 rows and five independent environments for every frozen trait, and
+explicit HMP/GBS representation in both development and holdout partitions.
+The builder refuses to freeze a block larger than 20% of environments or one
+that leaves a protected genotype expert unidentifiable. Inspect
 `final_holdout_preflight.json`,
-`final_holdout_cycle_support.tsv`, and `final_holdout_trait_support.tsv` before
-starting any fold.
+`final_holdout_cycle_support.tsv`, `final_holdout_trait_support.tsv`, and
+`final_holdout_genotype_expert_support.tsv` before starting any fold.
+`nested_fold_genotype_expert_support.tsv` additionally certifies that every
+unseen-environment inner-training partition can estimate both protected
+genotype experts. The frozen nested threshold requires at least three exact
+IDs, at least 10% of the expert's development GIDs, and at least 20 mapped
+training observations. The fractional requirement prevents a nominally
+factorable but scientifically empty HMP branch.
 
 The earlier `final_nested_evaluation_v1` single-cycle manifest is retained only
 as a failed preflight record. Its one-environment 2022 holdout must not be used
-for training or final reporting.
+for training or final reporting. `final_nested_evaluation_v2` is also retained
+only as a failed design record: its recent-cycle block left only one of 2,263
+HMP-linked ledger genotypes in development, making the HMP experts unidentifiable.
 
 Final reports are:
 
 ```text
-trained_models/final_nested_evaluation_summary/nested_outer_fold_metrics.tsv
-trained_models/final_nested_evaluation_summary/nested_outer_fold_summary.tsv
+trained_models/final_nested_evaluation_v3_summary/nested_outer_fold_metrics.tsv
+trained_models/final_nested_evaluation_v3_summary/nested_outer_fold_summary.tsv
 ```
 
 They include fold means, standard deviations, 95% t confidence intervals,

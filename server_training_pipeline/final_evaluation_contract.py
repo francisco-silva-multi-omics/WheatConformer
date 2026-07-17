@@ -74,8 +74,64 @@ def load_protocol(path: Path | None = None) -> dict[str, Any]:
         raise ValueError("Final holdout requires positive per-trait row support")
     if int(support["minimum_environments_per_trait"]) < 2:
         raise ValueError("Final holdout requires at least two environments per trait")
+    protected_experts = [
+        str(value).strip() for value in protocol.get("protected_genotype_experts", [])
+    ]
+    if not protected_experts or any(not value for value in protected_experts):
+        raise ValueError("Final evaluation requires named protected genotype experts")
+    if len(protected_experts) != len(set(protected_experts)):
+        raise ValueError("Protected genotype expert names must be unique")
+    expert_support = protocol.get("final_holdout_genotype_expert_support", {})
+    required_expert_support = {
+        "minimum_development_unique_genotypes",
+        "minimum_development_unique_fraction",
+        "minimum_development_observation_rows",
+        "minimum_holdout_unique_genotypes",
+        "minimum_holdout_unique_fraction",
+        "minimum_holdout_observation_rows",
+    }
+    if set(expert_support) != required_expert_support:
+        raise ValueError(
+            "Frozen genotype-expert support policy is incomplete: "
+            f"expected={sorted(required_expert_support)} "
+            f"observed={sorted(expert_support)}"
+        )
+    for field in [
+        "minimum_development_unique_fraction",
+        "minimum_holdout_unique_fraction",
+    ]:
+        value = float(expert_support[field])
+        if not 0 < value < 1:
+            raise ValueError(f"Final-holdout genotype expert fraction is invalid: {field}")
+    for field in required_expert_support.difference(
+        {"minimum_development_unique_fraction", "minimum_holdout_unique_fraction"}
+    ):
+        if int(expert_support[field]) < 1:
+            raise ValueError(f"Final-holdout genotype expert threshold must be positive: {field}")
+    nested_expert_support = protocol.get("nested_genotype_expert_support", {})
+    required_nested_expert_support = {
+        "minimum_train_unique_genotypes",
+        "minimum_train_unique_fraction",
+        "minimum_train_observation_rows",
+    }
+    if set(nested_expert_support) != required_nested_expert_support:
+        raise ValueError(
+            "Frozen nested genotype-expert support policy is incomplete: "
+            f"expected={sorted(required_nested_expert_support)} "
+            f"observed={sorted(nested_expert_support)}"
+        )
+    nested_fraction = float(nested_expert_support["minimum_train_unique_fraction"])
+    if not 0 < nested_fraction < 1:
+        raise ValueError("Nested genotype-expert train fraction is invalid")
+    for field in [
+        "minimum_train_unique_genotypes",
+        "minimum_train_observation_rows",
+    ]:
+        if int(nested_expert_support[field]) < 1:
+            raise ValueError(f"Nested genotype-expert threshold must be positive: {field}")
     protocol["traits"] = traits
     protocol["climatology_eligible_traits"] = sorted(climatology)
+    protocol["protected_genotype_experts"] = protected_experts
     protocol["protocol_path"] = str(protocol_path)
     protocol["protocol_sha256"] = file_sha256(protocol_path)
     return protocol

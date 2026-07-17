@@ -14,6 +14,8 @@ from build_environment_component_kernels import (
 )
 from server_training_pipeline.build_final_evaluation_manifests import (
     choose_final_cycle_block,
+    choose_final_environment_block,
+    genotype_expert_support_table,
     main as build_manifests,
 )
 from server_training_pipeline.final_evaluation_contract import (
@@ -86,6 +88,13 @@ def build_toy_manifests(tmp_path: Path, monkeypatch) -> tuple[pd.DataFrame, Path
     )
     protocol_path.write_text(json.dumps(protocol), encoding="utf-8")
     ledger.to_csv(ledger_path, sep="\t", index=False)
+    protected_orders = []
+    for name in ["K_G_HMP", "K_G_GBS"]:
+        path = tmp_path / f"{name}_order.tsv"
+        pd.DataFrame({"sample_id": sorted(ledger["panel_sample_id"].unique())}).to_csv(
+            path, sep="\t", index=False
+        )
+        protected_orders.extend(["--protected-genotype-order", f"{name}={path}"])
     monkeypatch.setattr(
         sys,
         "argv",
@@ -97,6 +106,7 @@ def build_toy_manifests(tmp_path: Path, monkeypatch) -> tuple[pd.DataFrame, Path
             str(out_dir),
             "--protocol",
             str(protocol_path),
+            *protected_orders,
         ],
     )
     build_manifests()
@@ -126,13 +136,18 @@ def test_manifest_is_hashed_and_final_holdout_is_excluded(tmp_path, monkeypatch)
     ledger, manifest_path, contract_path, manifest = build_toy_manifests(tmp_path, monkeypatch)
     contract = verify_manifest_contract(manifest_path, contract_path)
     assert contract["status"] == "frozen"
-    assert contract["final_holdout_cycle_years"] == [2011, 2010]
     assert contract["final_holdout_environment_count"] == 10
     assert contract["final_holdout_preflight_status"] == "pass"
+    assert contract["final_holdout_policy"] == "deterministic_environment_block_minimum_support"
     support = pd.read_csv(
         contract_path.parent / "final_holdout_trait_support.tsv", sep="\t"
     )
     assert support["support_status"].eq("PASS").all()
+    expert_support = pd.read_csv(
+        contract_path.parent / "final_holdout_genotype_expert_support.tsv", sep="\t"
+    )
+    assert expert_support["support_status"].eq("PASS").all()
+    assert set(expert_support["kernel_expert"]) == {"K_G_HMP", "K_G_GBS"}
     final_ids = set(
         manifest.loc[manifest["partition"].eq("final_holdout"), "entity_id"]
     )
@@ -170,6 +185,50 @@ def test_single_recent_cycle_fails_final_holdout_preflight() -> None:
     assert "below 10" in preflight["failures"][0]
 
 
+def test_environment_block_preserves_recent_cycle_marker_support() -> None:
+    ledger = synthetic_ledger()
+    environment_number = pd.to_numeric(
+        ledger["env_kernel_id"].str.removeprefix("e"), errors="raise"
+    )
+    original = ledger["panel_sample_id"].str.removeprefix("g")
+    ledger["panel_sample_id"] = np.where(
+        environment_number.ge(50), "h" + original, "p" + original
+    )
+    protocol = load_protocol().copy()
+    protocol["traits"] = ["DAYS_TO_HEADING", "GRAIN_YIELD"]
+    protocol["final_holdout_support"] = {
+        "minimum_environment_fraction": 0.15,
+        "minimum_environment_count": 10,
+        "maximum_environment_fraction": 0.4,
+        "minimum_rows_per_trait": 20,
+        "minimum_environments_per_trait": 5,
+    }
+    protected = {
+        "K_G_HMP": {f"h{i:02d}" for i in range(30)},
+        "K_G_GBS": {f"p{i:02d}" for i in range(30)},
+    }
+
+    _, recent_environments, _, _, _ = choose_final_cycle_block(ledger, protocol, None)
+    recent_support = genotype_expert_support_table(
+        ledger,
+        recent_environments,
+        protected,
+        protocol["final_holdout_genotype_expert_support"],
+    ).set_index("kernel_expert")
+    assert recent_support.loc["K_G_HMP", "development_unique_genotypes"] == 0
+    assert recent_support.loc["K_G_HMP", "support_status"] == "FAIL"
+
+    _, selected, _, _, preflight, expert_support = choose_final_environment_block(
+        ledger, protocol, protected
+    )
+    expert_support = expert_support.set_index("kernel_expert")
+    assert preflight["status"] == "pass"
+    assert len(selected) == 10
+    assert expert_support["support_status"].eq("PASS").all()
+    assert expert_support.loc["K_G_HMP", "development_unique_genotypes"] == 30
+    assert expert_support.loc["K_G_HMP", "holdout_unique_genotypes"] == 30
+
+
 def test_manifest_contract_protects_holdout_support_artifacts(tmp_path, monkeypatch) -> None:
     _, manifest_path, contract_path, _ = build_toy_manifests(tmp_path, monkeypatch)
     support_path = contract_path.parent / "final_holdout_trait_support.tsv"
@@ -177,6 +236,16 @@ def test_manifest_contract_protects_holdout_support_artifacts(tmp_path, monkeypa
         support_path.read_text(encoding="utf-8") + "tampered\n", encoding="utf-8"
     )
     with pytest.raises(ValueError, match="trait_support hash mismatch"):
+        verify_manifest_contract(manifest_path, contract_path)
+
+
+def test_manifest_contract_protects_genotype_expert_orders(tmp_path, monkeypatch) -> None:
+    _, manifest_path, contract_path, _ = build_toy_manifests(tmp_path, monkeypatch)
+    contract = json.loads(contract_path.read_text(encoding="utf-8"))
+    order_path = Path(contract["protected_genotype_order_identities"]["K_G_HMP"]["path"])
+    order_path.write_text(order_path.read_text(encoding="utf-8") + "tampered\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="Protected genotype order hash mismatch"):
         verify_manifest_contract(manifest_path, contract_path)
 
 

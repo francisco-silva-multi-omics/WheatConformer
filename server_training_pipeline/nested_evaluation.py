@@ -90,6 +90,8 @@ def verify_manifest_contract(manifest_path: Path, contract_path: Path) -> dict[s
         "final_holdout_trait_support",
         "final_holdout_cycle_support",
         "final_holdout_environment_ids",
+        "final_holdout_genotype_expert_support",
+        "nested_fold_genotype_expert_support",
     )
     for artifact in protected_artifacts:
         path_value = contract.get(f"{artifact}_path")
@@ -106,6 +108,17 @@ def verify_manifest_contract(manifest_path: Path, contract_path: Path) -> dict[s
             raise ValueError(
                 f"Immutable {artifact} hash mismatch: "
                 f"expected={expected} observed={artifact_observed}"
+            )
+    for name, identity in contract.get("protected_genotype_order_identities", {}).items():
+        path = Path(str(identity.get("path", "")))
+        expected = identity.get("sha256")
+        if not path.is_file() or not expected:
+            raise ValueError(f"Protected genotype order identity is incomplete: {name}")
+        observed = file_sha256(path)
+        if observed != expected:
+            raise ValueError(
+                f"Protected genotype order hash mismatch for {name}: "
+                f"expected={expected} observed={observed}"
             )
     return contract
 

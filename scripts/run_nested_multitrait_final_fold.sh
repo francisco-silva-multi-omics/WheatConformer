@@ -17,12 +17,16 @@ BASE_MODEL_DIR="${FINAL_EVAL_BASE_MODEL_DIR:-model_kernels/stage1_pedigree_env}"
 BASE_PREFIX="${FINAL_EVAL_BASE_PREFIX:-stage1_pedigree_env}"
 HMP_MODEL_DIR="${FINAL_EVAL_HMP_MODEL_DIR:-model_kernels/stage1_hmp_env_ke_diag_norm}"
 GBS_MODEL_DIR="${FINAL_EVAL_GBS_MODEL_DIR:-model_kernels/stage1_gbs_sawyt_env_ke_diag_norm}"
+HMP_PREFIX="${FINAL_EVAL_HMP_PREFIX:-stage1_hmp_env}"
+GBS_PREFIX="${FINAL_EVAL_GBS_PREFIX:-stage1_gbs_sawyt_env}"
 DTH_MODEL_DIR="${FINAL_EVAL_DTH_MODEL_DIR:-model_kernels/stage1_pedigree_env_dth_v2}"
 TRAIT_ENV_MANIFEST="${FINAL_EVAL_TRAIT_ENV_MANIFEST:-model_kernels/trait_environment_v2/trait_environment_kernel_manifest.tsv}"
 ENVIRONMENT_INPUT_DIR="${FINAL_EVAL_ENVIRONMENT_INPUT_DIR:-environment}"
 WEATHER_DIR="${FINAL_EVAL_WEATHER_DIR:?Set FINAL_EVAL_WEATHER_DIR to the frozen current-v1 weather feature directory}"
 WEATHER_AUDIT_DIR="${FINAL_EVAL_WEATHER_AUDIT_DIR:?Set FINAL_EVAL_WEATHER_AUDIT_DIR to the matching weather recovery audit directory}"
-EVALUATION_DIR="${FINAL_EVAL_DIR:-model_kernels/final_nested_evaluation_v2}"
+EVALUATION_DIR="${FINAL_EVAL_DIR:-model_kernels/final_nested_evaluation_v3}"
+MODELS_DIR="${FINAL_EVAL_MODELS_DIR:-trained_models/final_nested_evaluation_v3_runs}"
+SUMMARY_DIR="${FINAL_EVAL_SUMMARY_DIR:-trained_models/final_nested_evaluation_v3_summary}"
 MODES="${FINAL_EVAL_MODES:-full}"
 FORCE="${FINAL_EVAL_FORCE:-0}"
 
@@ -33,7 +37,7 @@ ID_DIR="$FOLD_DIR/ids"
 ENV_DIR="$FOLD_DIR/environment"
 EXPERT_DIR="$FOLD_DIR/experts"
 CERT_DIR="$FOLD_DIR/certification"
-mkdir -p "$EVALUATION_DIR" "$ID_DIR" "$ENV_DIR" "$EXPERT_DIR" "$CERT_DIR" logs trained_models
+mkdir -p "$EVALUATION_DIR" "$ID_DIR" "$ENV_DIR" "$EXPERT_DIR" "$CERT_DIR" logs "$MODELS_DIR"
 
 timestamp() { date '+%Y-%m-%d %H:%M:%S'; }
 log() { printf '[%s] %s\n' "$(timestamp)" "$*"; }
@@ -94,7 +98,9 @@ for required in \
   "$ENVIRONMENT_INPUT_DIR/locdata.tsv" \
   "$WEATHER_DIR/trial_weather_fetch_manifest.tsv" \
   "$WEATHER_AUDIT_DIR/weather_recovery_environment_audit.tsv" \
-  "$BASE_MODEL_DIR/${BASE_PREFIX}_K_E_unique_order.tsv"
+  "$BASE_MODEL_DIR/${BASE_PREFIX}_K_E_unique_order.tsv" \
+  "$HMP_MODEL_DIR/${HMP_PREFIX}_K_G_unique_order.tsv" \
+  "$GBS_MODEL_DIR/${GBS_PREFIX}_K_G_unique_order.tsv"
 do
   [[ -s "$required" ]] || { echo "Required final-evaluation input is missing: $required" >&2; exit 2; }
 done
@@ -104,6 +110,8 @@ if [[ ! -s "$MANIFEST" || ! -s "$CONTRACT" ]]; then
   "$PYTHON" -m server_training_pipeline.build_final_evaluation_manifests \
     --ledger "$LEDGER" \
     --protocol "$PROTOCOL" \
+    --protected-genotype-order "K_G_HMP=$HMP_MODEL_DIR/${HMP_PREFIX}_K_G_unique_order.tsv" \
+    --protected-genotype-order "K_G_GBS=$GBS_MODEL_DIR/${GBS_PREFIX}_K_G_unique_order.tsv" \
     --out-dir "$EVALUATION_DIR"
 fi
 
@@ -259,7 +267,7 @@ for mode in "${MODE_VALUES[@]}"; do
     IFS=$'\t' read -r candidate_index candidate latent_dim learning_rate weight_decay rank_g rank_e <<< "$candidate_line"
     for ((inner=0; inner<INNER_FOLDS; inner++)); do
       seed=$((41001 + candidate_index + OUTER_FOLD * 100 + inner * 10))
-      run_dir="trained_models/nested_inner_${SCENARIO}_outer${OUTER_FOLD}_${mode}_${candidate}_inner${inner}"
+      run_dir="$MODELS_DIR/nested_inner_${SCENARIO}_outer${OUTER_FOLD}_${mode}_${candidate}_inner${inner}"
       prefix="nested_inner_${SCENARIO}_outer${OUTER_FOLD}_${mode}_${candidate}_inner${inner}"
       if [[ "$FORCE" != "1" ]] && nested_run_is_current \
         "$run_dir" "$prefix" inner_selection "$inner" "$candidate" "$seed" \
@@ -290,7 +298,7 @@ for mode in "${MODE_VALUES[@]}"; do
 
   decision="$FOLD_DIR/selected_${mode}.json"
   "$PYTHON" -m server_training_pipeline.select_nested_hyperparameters \
-    --models-root trained_models \
+    --models-root "$MODELS_DIR" \
     --run-glob "nested_inner_${SCENARIO}_outer${OUTER_FOLD}_${mode}_*_inner*" \
     --expected-inner-folds "$INNER_FOLDS" \
     --out "$decision"
@@ -309,7 +317,7 @@ PY
 
   for ((inner=0; inner<INNER_FOLDS; inner++)); do
     seed=$((41001 + candidate_index + OUTER_FOLD * 100 + inner * 10))
-    run_dir="trained_models/nested_outer_member_${SCENARIO}_outer${OUTER_FOLD}_${mode}_${candidate}_inner${inner}"
+    run_dir="$MODELS_DIR/nested_outer_member_${SCENARIO}_outer${OUTER_FOLD}_${mode}_${candidate}_inner${inner}"
     prefix="nested_outer_member_${SCENARIO}_outer${OUTER_FOLD}_${mode}_${candidate}_inner${inner}"
     if [[ "$FORCE" != "1" ]] && nested_run_is_current \
       "$run_dir" "$prefix" outer_evaluation "$inner" "$candidate" "$seed" \
@@ -337,10 +345,10 @@ PY
       --prefix "$prefix"
   done
 
-  ensemble_dir="trained_models/final_nested_${SCENARIO}_outer${OUTER_FOLD}_${mode}"
+  ensemble_dir="$MODELS_DIR/final_nested_${SCENARIO}_outer${OUTER_FOLD}_${mode}"
   ensemble_prefix="final_nested_${SCENARIO}_outer${OUTER_FOLD}_${mode}"
   "$PYTHON" -m server_training_pipeline.ensemble_nested_outer_predictions \
-    --models-root trained_models \
+    --models-root "$MODELS_DIR" \
     --run-glob "nested_outer_member_${SCENARIO}_outer${OUTER_FOLD}_${mode}_${candidate}_inner*" \
     --expected-inner-folds "$INNER_FOLDS" \
     --out-dir "$ensemble_dir" \
@@ -348,7 +356,7 @@ PY
 done
 
 "$PYTHON" -m server_training_pipeline.summarize_nested_evaluation \
-  --models-root trained_models \
+  --models-root "$MODELS_DIR" \
   --run-glob 'final_nested_*' \
-  --out-dir trained_models/final_nested_evaluation_summary
+  --out-dir "$SUMMARY_DIR"
 log "DONE scenario=$SCENARIO outer_fold=$OUTER_FOLD"
