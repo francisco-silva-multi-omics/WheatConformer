@@ -272,8 +272,8 @@ country_holdout
 The default runs the frozen full model. Set `FINAL_EVAL_MODES=env,additive,full`
 only for a predeclared diagnostic ablation; the outer test still cannot select
 hyperparameters. Each invocation is resumable and writes fold contracts under
-`model_kernels/final_nested_evaluation_v5/` and model runs under
-`trained_models/final_nested_evaluation_v5_runs/`. The final holdout is a
+`model_kernels/final_nested_evaluation_v5_fixed/` and model runs under
+`trained_models/final_nested_evaluation_v5_fixed_runs/`. The final holdout is a
 deterministically selected environment block constructed without phenotype
 values. It contains at least 10% (and at least 50) of model environments, at
 least 20 rows for every frozen trait, and explicit HMP/GBS representation in
@@ -315,12 +315,15 @@ its trait-balanced holdout passed, but the unconstrained country and pre-2016
 temporal folds left only one HMP GID in several training partitions. Its exact
 protocol is archived as `final_evaluation_protocol_v4.json`. The v5 holdout
 uses the v4 assignment identity, preserving the already accepted trait balance.
+The original `final_nested_evaluation_v5` directory is retained as a failed
+contract-metadata record: its builder incorrectly wrote the v4 assignment ID
+as the v5 protocol version. No model results from that directory are valid.
 
 Final reports are:
 
 ```text
-trained_models/final_nested_evaluation_v5_summary/nested_outer_fold_metrics.tsv
-trained_models/final_nested_evaluation_v5_summary/nested_outer_fold_summary.tsv
+trained_models/final_nested_evaluation_v5_fixed_summary/nested_outer_fold_metrics.tsv
+trained_models/final_nested_evaluation_v5_fixed_summary/nested_outer_fold_summary.tsv
 ```
 
 They include fold means, standard deviations, 95% t confidence intervals,

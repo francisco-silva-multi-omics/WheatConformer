@@ -999,7 +999,10 @@ def main() -> None:
     environment = set(nonempty(working, "env_kernel_id")).difference({""})
     genotype = set(nonempty(working, "panel_sample_id")).difference({""})
     country = set(nonempty(working, "country")).difference({""})
-    protocol_id = str(protocol.get("scenario_assignment_id", protocol["protocol_version"]))
+    protocol_version = str(protocol["protocol_version"])
+    scenario_assignment_id = str(
+        protocol.get("scenario_assignment_id", protocol_version)
+    )
     outer_folds = int(protocol["outer_folds"])
     scenario_outer_folds = {
         str(name): int(value)
@@ -1014,7 +1017,7 @@ def main() -> None:
         final_environments=final_environments,
         outer_folds=scenario_outer_folds["unseen_environments"],
         inner_folds=inner_folds,
-        protocol_id=protocol_id,
+        protocol_id=scenario_assignment_id,
     )
     add_hashed_scenario(
         rows,
@@ -1023,7 +1026,7 @@ def main() -> None:
         final_environments=final_environments,
         outer_folds=scenario_outer_folds["unseen_genotypes"],
         inner_folds=inner_folds,
-        protocol_id=protocol_id,
+        protocol_id=scenario_assignment_id,
     )
     add_hashed_scenario(
         rows,
@@ -1032,7 +1035,7 @@ def main() -> None:
         final_environments=final_environments,
         outer_folds=scenario_outer_folds["unseen_genotypes_and_environments"],
         inner_folds=inner_folds,
-        protocol_id=protocol_id,
+        protocol_id=scenario_assignment_id,
     )
     add_temporal_scenario(
         rows,
@@ -1048,7 +1051,7 @@ def main() -> None:
         final_environments=final_environments,
         outer_folds=scenario_outer_folds["country_holdout"],
         inner_folds=inner_folds,
-        protocol_id=protocol_id,
+        protocol_id=scenario_assignment_id,
     )
     manifest = pd.DataFrame(rows).sort_values(
         ["scenario", "outer_fold", "inner_fold", "axis", "partition", "entity_id"],
@@ -1109,7 +1112,11 @@ def main() -> None:
     )
     contract = {
         "status": "frozen",
-        "protocol_version": protocol_id,
+        "protocol_version": protocol_version,
+        "scenario_assignment_id": scenario_assignment_id,
+        "final_holdout_assignment_id": str(
+            protocol.get("final_holdout_assignment_id", protocol_version)
+        ),
         "protocol_sha256": protocol["protocol_sha256"],
         "ledger_path": str(ledger_path),
         "ledger_sha256": file_sha256(ledger_path),

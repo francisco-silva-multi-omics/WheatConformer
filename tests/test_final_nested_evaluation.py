@@ -166,6 +166,10 @@ def test_manifest_is_hashed_and_final_holdout_is_excluded(tmp_path, monkeypatch)
     ledger, manifest_path, contract_path, manifest = build_toy_manifests(tmp_path, monkeypatch)
     contract = verify_manifest_contract(manifest_path, contract_path)
     assert contract["status"] == "frozen"
+    assert contract["protocol_version"] == "toy_multitrait_quantitative_final_v5"
+    assert contract["scenario_assignment_id"] == "multitrait_quantitative_final_v4"
+    assert contract["final_holdout_assignment_id"] == "multitrait_quantitative_final_v4"
+    assert contract["protocol_version"] != contract["scenario_assignment_id"]
     assert contract["final_holdout_environment_count"] == 10
     assert contract["final_holdout_preflight_status"] == "pass"
     assert contract["final_holdout_policy"] == "deterministic_environment_block_minimum_support"

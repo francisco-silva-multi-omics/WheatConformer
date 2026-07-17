@@ -24,9 +24,9 @@ TRAIT_ENV_MANIFEST="${FINAL_EVAL_TRAIT_ENV_MANIFEST:-model_kernels/trait_environ
 ENVIRONMENT_INPUT_DIR="${FINAL_EVAL_ENVIRONMENT_INPUT_DIR:-environment}"
 WEATHER_DIR="${FINAL_EVAL_WEATHER_DIR:?Set FINAL_EVAL_WEATHER_DIR to the frozen current-v1 weather feature directory}"
 WEATHER_AUDIT_DIR="${FINAL_EVAL_WEATHER_AUDIT_DIR:?Set FINAL_EVAL_WEATHER_AUDIT_DIR to the matching weather recovery audit directory}"
-EVALUATION_DIR="${FINAL_EVAL_DIR:-model_kernels/final_nested_evaluation_v5}"
-MODELS_DIR="${FINAL_EVAL_MODELS_DIR:-trained_models/final_nested_evaluation_v5_runs}"
-SUMMARY_DIR="${FINAL_EVAL_SUMMARY_DIR:-trained_models/final_nested_evaluation_v5_summary}"
+EVALUATION_DIR="${FINAL_EVAL_DIR:-model_kernels/final_nested_evaluation_v5_fixed}"
+MODELS_DIR="${FINAL_EVAL_MODELS_DIR:-trained_models/final_nested_evaluation_v5_fixed_runs}"
+SUMMARY_DIR="${FINAL_EVAL_SUMMARY_DIR:-trained_models/final_nested_evaluation_v5_fixed_summary}"
 MODES="${FINAL_EVAL_MODES:-full}"
 FORCE="${FINAL_EVAL_FORCE:-0}"
 
@@ -142,6 +142,10 @@ contract = json.loads(contract_path.read_text(encoding="utf-8"))
 protocol_sha256 = hashlib.sha256(protocol_path.read_bytes()).hexdigest()
 checks = {
     "protocol_version": contract.get("protocol_version") == protocol.get("protocol_version"),
+    "scenario_assignment_id": contract.get("scenario_assignment_id")
+    == protocol.get("scenario_assignment_id", protocol.get("protocol_version")),
+    "final_holdout_assignment_id": contract.get("final_holdout_assignment_id")
+    == protocol.get("final_holdout_assignment_id", protocol.get("protocol_version")),
     "protocol_sha256": contract.get("protocol_sha256") == protocol_sha256,
     "preflight": contract.get("final_holdout_preflight_status") == "pass",
 }
