@@ -32,6 +32,8 @@ WEIGHT_DECAY="${MULTITRAIT_WEIGHT_DECAY:-0.0001}"
 PATIENCE="${MULTITRAIT_PATIENCE:-25}"
 INTRA_OP_THREADS="${MULTITRAIT_INTRA_OP_THREADS:-16}"
 INTER_OP_THREADS="${MULTITRAIT_INTER_OP_THREADS:-2}"
+MIN_TRAIN_ROWS_PER_TRAIT="${MULTITRAIT_MIN_TRAIN_ROWS_PER_TRAIT:-100}"
+MIN_EVAL_ROWS_PER_TRAIT="${MULTITRAIT_MIN_EVAL_ROWS_PER_TRAIT:-20}"
 
 mkdir -p "$LEDGER_DIR" "$EXPERT_DIR" trained_models/model_comparisons logs
 
@@ -44,13 +46,18 @@ run_is_complete() {
   local model_label="$3"
   "$PYTHON" - \
     "$VARIANT" "$mode" "$seed" "$model_label" "$TRAITS" \
+    "$ledger" "$MIN_TRAIN_ROWS_PER_TRAIT" "$MIN_EVAL_ROWS_PER_TRAIT" \
     "$RANK_G" "$RANK_E" "$LATENT_DIM" "$EPOCHS" "$BATCH_SIZE" \
     "$LEARNING_RATE" "$WEIGHT_DECAY" "$PATIENCE" \
     "$INTRA_OP_THREADS" "$INTER_OP_THREADS" <<'PY'
 import sys
 from pathlib import Path
 
-from server_training_pipeline.compare_multitrait_variants import csv_values, load_run
+from server_training_pipeline.compare_multitrait_variants import (
+    csv_values,
+    load_run,
+    retained_traits_for_split,
+)
 
 (
     variant,
@@ -58,6 +65,9 @@ from server_training_pipeline.compare_multitrait_variants import csv_values, loa
     seed,
     model_label,
     traits_csv,
+    ledger_path,
+    min_train_rows,
+    min_eval_rows,
     rank_g,
     rank_e,
     latent_dim,
@@ -84,6 +94,26 @@ expected_configuration = {
 }
 
 try:
+    import pandas as pd
+
+    ledger_file = Path(ledger_path)
+    if ledger_file.suffix == ".parquet":
+        ledger_frame = pd.read_parquet(
+            ledger_file, columns=["trait_name_canonical", "env_kernel_id"]
+        )
+    else:
+        ledger_frame = pd.read_csv(
+            ledger_file,
+            sep="\t",
+            usecols=["trait_name_canonical", "env_kernel_id"],
+        )
+    expected_retained_traits, _ = retained_traits_for_split(
+        ledger_frame,
+        traits,
+        int(seed),
+        int(min_train_rows),
+        int(min_eval_rows),
+    )
     run = load_run(
         Path.cwd().resolve(),
         Path.cwd().resolve() / "trained_models",
@@ -94,7 +124,8 @@ try:
     metadata = run["metadata"]
     checks = {
         "prediction_metric_grid": bool(run["prediction_metric_keys"]),
-        "traits": set(metadata.get("traits", [])) == traits,
+        "retained_traits": set(metadata.get("traits", []))
+        == expected_retained_traits,
         "model_label": metadata.get("model_label") == model_label,
         "training_configuration": metadata.get("training_configuration")
         == expected_configuration,
@@ -235,6 +266,8 @@ for seed in "${seed_values[@]}"; do
       --model-label "$model_label" \
       --split gho_environment \
       --seed "$seed" \
+      --min-train-rows-per-trait "$MIN_TRAIN_ROWS_PER_TRAIT" \
+      --min-eval-rows-per-trait "$MIN_EVAL_ROWS_PER_TRAIT" \
       --max-rank-genotype "$RANK_G" \
       --max-rank-environment "$RANK_E" \
       --latent-dim "$LATENT_DIM" \

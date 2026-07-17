@@ -7,7 +7,12 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from server_training_pipeline.compare_multitrait_variants import compare_variants, main, summarize
+from server_training_pipeline.compare_multitrait_variants import (
+    compare_variants,
+    main,
+    retained_traits_for_split,
+    summarize,
+)
 
 
 def write_run(
@@ -270,6 +275,37 @@ def test_comparison_accepts_trait_with_no_evaluation_rows_in_matched_pair(
     unavailable_b = availability[availability["trait_name_canonical"].eq("B")]
     assert len(unavailable_b) == 2
     assert not unavailable_b["paired_available"].any()
+
+
+def test_retained_traits_are_recomputed_from_seed_specific_split_support() -> None:
+    rows = []
+    for env_index in range(10):
+        for replicate in range(2):
+            rows.append(
+                {
+                    "trait_name_canonical": "A",
+                    "env_kernel_id": f"E{env_index}",
+                }
+            )
+    rows.append(
+        {
+            "trait_name_canonical": "B",
+            "env_kernel_id": "E0",
+        }
+    )
+    ledger = pd.DataFrame(rows)
+
+    retained, support = retained_traits_for_split(
+        ledger,
+        {"A", "B"},
+        seed=2027,
+        min_train_rows=1,
+        min_eval_rows=1,
+    )
+
+    assert retained == {"A"}
+    b_support = support.set_index("trait_name_canonical").loc["B"]
+    assert (b_support[["train", "val", "test"]] == 0).any()
 
 
 def test_load_run_rejects_metrics_missing_for_existing_predictions(

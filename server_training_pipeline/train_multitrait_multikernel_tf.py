@@ -636,6 +636,7 @@ def main() -> None:
     ledger = ledger.reset_index(drop=True)
     if ledger.empty:
         raise SystemExit("No observations remain after trait filtering")
+    requested_trait_names = sorted(ledger["trait_name_canonical"].unique().tolist())
 
     canonical_split = canonical_split_mode(args.split, warn=True)
     group_col = split_group_column(canonical_split)
@@ -662,6 +663,24 @@ def main() -> None:
         & support["val"].ge(args.min_eval_rows_per_trait)
         & support["test"].ge(args.min_eval_rows_per_trait)
     ].index.tolist()
+    support_report = support[["train", "val", "test"]].reset_index()
+    support_report["min_train_rows_required"] = args.min_train_rows_per_trait
+    support_report["min_eval_rows_required"] = args.min_eval_rows_per_trait
+    support_report["retained"] = support_report["trait_name_canonical"].isin(retained)
+    support_report["filter_reason"] = support_report.apply(
+        lambda row: "retained"
+        if row["retained"]
+        else ";".join(
+            reason
+            for reason, failed in [
+                ("insufficient_train_rows", row["train"] < args.min_train_rows_per_trait),
+                ("insufficient_val_rows", row["val"] < args.min_eval_rows_per_trait),
+                ("insufficient_test_rows", row["test"] < args.min_eval_rows_per_trait),
+            ]
+            if failed
+        ),
+        axis=1,
+    )
     ledger = ledger[ledger["trait_name_canonical"].isin(retained)].copy().reset_index(drop=True)
     if len(retained) < 2:
         raise SystemExit(f"Multi-trait training requires at least two supported traits; found {retained}")
@@ -916,6 +935,9 @@ def main() -> None:
     improvement.to_csv(args.out_dir / f"{args.prefix}_vs_train_mean.tsv", sep="\t", index=False)
     history.to_csv(args.out_dir / f"{args.prefix}_history.tsv", sep="\t", index=False)
     scaling.to_csv(args.out_dir / f"{args.prefix}_trait_scaling.tsv", sep="\t", index=False)
+    support_report.to_csv(
+        args.out_dir / f"{args.prefix}_trait_split_support.tsv", sep="\t", index=False
+    )
     retained_order.to_csv(args.out_dir / f"{args.prefix}_trait_order.tsv", sep="\t", index=False)
     gate_frame.to_csv(args.out_dir / f"{args.prefix}_kernel_gates.tsv", sep="\t", index=False)
     coverage.to_csv(args.out_dir / f"{args.prefix}_kernel_coverage.tsv", sep="\t", index=False)
@@ -946,6 +968,14 @@ def main() -> None:
             "run_seed": args.seed,
         },
         "traits": retained_trait_names,
+        "requested_traits": requested_trait_names,
+        "support_filtered_traits": sorted(
+            set(requested_trait_names) - set(retained_trait_names)
+        ),
+        "trait_support_thresholds": {
+            "min_train_rows_per_trait": args.min_train_rows_per_trait,
+            "min_eval_rows_per_trait": args.min_eval_rows_per_trait,
+        },
         "rows": {"train": len(train), "val": len(val), "test": len(test)},
         "active_kernels": registry["kernel"].tolist(),
         "training_configuration": {

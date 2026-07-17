@@ -443,6 +443,9 @@ def test_matched_weather_runner_freezes_and_verifies_complete_experiment() -> No
     assert 'verify_variant "$variant"' in matched
     assert "run_is_complete" in multitrait
     assert "training_configuration" in multitrait
+    assert "expected_retained_traits" in multitrait
+    assert "MIN_TRAIN_ROWS_PER_TRAIT" in multitrait
+    assert "MIN_EVAL_ROWS_PER_TRAIT" in multitrait
     for suffix in [
         "contract",
         "paired",

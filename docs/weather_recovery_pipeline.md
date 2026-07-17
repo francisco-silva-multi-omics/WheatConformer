@@ -110,12 +110,19 @@ at least 60% validation seed-trait RMSE wins. Otherwise the decision remains
 
 When the v1 model grid has not been trained, use the matched runner instead of
 running v2 alone. It builds or resumes all 12 v1 runs and all 12 v2 runs
-(three modes by four seeds), verifies that all seven traits remain in run metadata,
-that metrics exactly cover the split/trait pairs present in each prediction ledger,
-and that v1 and v2 have identical evaluable pairs. A trait with no observations in
-a particular held-out split is reported as structurally unavailable rather than
+(three modes by four seeds), recomputes trait support from the frozen ledger using
+the training rule of at least 100 training rows and 20 rows in both validation and
+test, verifies that run metadata contains exactly that seed-specific retained set,
+checks that metrics exactly cover the split/trait pairs present in each prediction
+ledger, and requires v1 and v2 to have identical evaluable pairs. A trait that does
+not meet the per-seed support rule is reported as support-filtered rather than
 assigned a fabricated metric. The runner only then produces the validation-only
 adoption decision:
+
+Each newly trained run writes `*_trait_split_support.tsv` and records requested,
+retained, and support-filtered traits in `*_run_metadata.json`, including the exact
+row thresholds. This makes seed-specific omissions auditable without interpreting
+an absent metric as a failed model.
 
 ```bash
 set +u

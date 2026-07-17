@@ -7,6 +7,11 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+try:
+    from .split_utils import make_split, split_group_column
+except ImportError:
+    from split_utils import make_split, split_group_column
+
 
 METRICS = [
     "unweighted_rmse",
@@ -73,6 +78,50 @@ def prediction_metric_keys(run_dir: Path) -> set[tuple[str, str]]:
             index=False, name=None
         )
     )
+
+
+def retained_traits_for_split(
+    ledger: pd.DataFrame,
+    requested_traits: set[str],
+    seed: int,
+    min_train_rows: int,
+    min_eval_rows: int,
+    split_mode: str = "gho_environment",
+    test_fraction: float = 0.2,
+    val_fraction: float = 0.1,
+) -> tuple[set[str], pd.DataFrame]:
+    frame = ledger[
+        ledger["trait_name_canonical"].isin(requested_traits)
+    ].reset_index(drop=True)
+    train, val, test = make_split(
+        frame,
+        split_mode,
+        seed,
+        test_fraction,
+        val_fraction,
+        split_group_column(split_mode),
+    )
+    split_labels = np.full(len(frame), "", dtype=object)
+    split_labels[train] = "train"
+    split_labels[val] = "val"
+    split_labels[test] = "test"
+    support = (
+        frame.assign(split=split_labels)
+        .groupby(["trait_name_canonical", "split"])
+        .size()
+        .unstack(fill_value=0)
+    )
+    for split in ["train", "val", "test"]:
+        if split not in support:
+            support[split] = 0
+    retained = set(
+        support[
+            support["train"].ge(min_train_rows)
+            & support["val"].ge(min_eval_rows)
+            & support["test"].ge(min_eval_rows)
+        ].index
+    )
+    return retained, support.reset_index()
 
 
 def load_run(

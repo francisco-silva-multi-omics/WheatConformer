@@ -42,11 +42,15 @@ for mode in modes:
         try:
             run = load_run(root, models_root, variant, mode, seed)
             metadata_traits = set(run["metadata"].get("traits", []))
-            if metadata_traits != traits:
+            if not metadata_traits or not metadata_traits.issubset(traits):
                 failures.append(
-                    f"mode={mode} seed={seed}: requested traits do not match metadata; "
-                    f"missing={sorted(traits - metadata_traits)}; "
+                    f"mode={mode} seed={seed}: invalid retained trait metadata; "
                     f"extra={sorted(metadata_traits - traits)}"
+                )
+            dropped = sorted(traits - metadata_traits)
+            if dropped:
+                availability.append(
+                    f"mode={mode} seed={seed}: support-filtered traits={dropped}"
                 )
             observed = set(run["prediction_metric_keys"])
             unavailable = sorted(
