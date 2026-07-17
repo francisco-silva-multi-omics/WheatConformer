@@ -1,5 +1,5 @@
 {
-  "protocol_version": "multitrait_quantitative_final_v4",
+  "protocol_version": "multitrait_quantitative_final_v3",
   "status": "frozen",
   "frozen_after_discovery": "2026-07-17",
   "discovery_seeds_forbidden": [2026, 2027, 2028, 2029],
@@ -43,16 +43,8 @@
     "minimum_environment_fraction": 0.1,
     "minimum_environment_count": 50,
     "maximum_environment_fraction": 0.2,
-    "minimum_rows_per_trait": 20
-  },
-  "trait_environment_support": {
-    "default_minimum_holdout_fraction": 0.1,
-    "trait_minimum_holdout_environments": {
-      "ABOVE_GROUND_BIOMASS": 5,
-      "TEST_WEIGHT": 10
-    },
-    "minimum_development_environment_fraction": 0.75,
-    "minimum_development_environments": 15
+    "minimum_rows_per_trait": 20,
+    "minimum_environments_per_trait": 5
   },
   "protected_genotype_experts": [
     "K_G_HMP",

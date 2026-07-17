@@ -24,9 +24,9 @@ TRAIT_ENV_MANIFEST="${FINAL_EVAL_TRAIT_ENV_MANIFEST:-model_kernels/trait_environ
 ENVIRONMENT_INPUT_DIR="${FINAL_EVAL_ENVIRONMENT_INPUT_DIR:-environment}"
 WEATHER_DIR="${FINAL_EVAL_WEATHER_DIR:?Set FINAL_EVAL_WEATHER_DIR to the frozen current-v1 weather feature directory}"
 WEATHER_AUDIT_DIR="${FINAL_EVAL_WEATHER_AUDIT_DIR:?Set FINAL_EVAL_WEATHER_AUDIT_DIR to the matching weather recovery audit directory}"
-EVALUATION_DIR="${FINAL_EVAL_DIR:-model_kernels/final_nested_evaluation_v3}"
-MODELS_DIR="${FINAL_EVAL_MODELS_DIR:-trained_models/final_nested_evaluation_v3_runs}"
-SUMMARY_DIR="${FINAL_EVAL_SUMMARY_DIR:-trained_models/final_nested_evaluation_v3_summary}"
+EVALUATION_DIR="${FINAL_EVAL_DIR:-model_kernels/final_nested_evaluation_v4}"
+MODELS_DIR="${FINAL_EVAL_MODELS_DIR:-trained_models/final_nested_evaluation_v4_runs}"
+SUMMARY_DIR="${FINAL_EVAL_SUMMARY_DIR:-trained_models/final_nested_evaluation_v4_summary}"
 MODES="${FINAL_EVAL_MODES:-full}"
 FORCE="${FINAL_EVAL_FORCE:-0}"
 

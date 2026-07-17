@@ -31,12 +31,74 @@ def unique_nonempty(values: pd.Series) -> int:
     )
 
 
+def trait_environment_requirements(
+    ledger: pd.DataFrame,
+    traits: list[str],
+    default_minimum_environments: int,
+    policy: dict[str, object] | None = None,
+) -> dict[str, dict[str, object]]:
+    environment = nonempty(ledger, "env_kernel_id")
+    trait = nonempty(ledger, "trait_name_canonical").str.upper()
+    overrides = {
+        str(name).strip().upper(): int(value)
+        for name, value in dict(
+            (policy or {}).get("trait_minimum_holdout_environments", {})
+        ).items()
+    }
+    requirements: dict[str, dict[str, object]] = {}
+    for trait_name in traits:
+        total = int(environment[trait.eq(trait_name) & environment.ne("")].nunique())
+        if policy:
+            if trait_name in overrides:
+                minimum_holdout = overrides[trait_name]
+                minimum_rule = "trait_specific_floor"
+            else:
+                minimum_holdout = int(
+                    math.ceil(
+                        total
+                        * float(policy["default_minimum_holdout_fraction"])
+                    )
+                )
+                minimum_rule = "default_fraction"
+            minimum_development = max(
+                int(policy["minimum_development_environments"]),
+                int(
+                    math.ceil(
+                        total
+                        * float(policy["minimum_development_environment_fraction"])
+                    )
+                ),
+            )
+            maximum_holdout = max(0, total - minimum_development)
+        else:
+            minimum_holdout = int(default_minimum_environments)
+            minimum_development = 0
+            maximum_holdout = total
+            minimum_rule = "legacy_absolute_floor"
+        if total == 0:
+            raise ValueError(f"Frozen trait has no environments in the ledger: {trait_name}")
+        if minimum_holdout > maximum_holdout:
+            raise ValueError(
+                "Trait holdout/development requirements are impossible: "
+                f"trait={trait_name} total={total} minimum_holdout={minimum_holdout} "
+                f"maximum_holdout={maximum_holdout}"
+            )
+        requirements[trait_name] = {
+            "total_environment_count": total,
+            "minimum_holdout_environments": minimum_holdout,
+            "maximum_holdout_environments": maximum_holdout,
+            "minimum_development_environments": minimum_development,
+            "minimum_rule": minimum_rule,
+        }
+    return requirements
+
+
 def trait_support_table(
     ledger: pd.DataFrame,
     environments: set[str],
     traits: list[str],
     minimum_rows_per_trait: int,
-    minimum_environments_per_trait: int,
+    requirements: dict[str, dict[str, object]],
 ) -> pd.DataFrame:
     environment = nonempty(ledger, "env_kernel_id")
     trait = nonempty(ledger, "trait_name_canonical").str.upper()
@@ -49,6 +111,7 @@ def trait_support_table(
     )
     rows = []
     for trait_name in traits:
+        requirement = requirements[trait_name]
         if trait_name in grouped.index:
             values = grouped.loc[trait_name]
             observation_rows = int(values["observation_rows"])
@@ -56,18 +119,34 @@ def trait_support_table(
             genotype_count = int(values["genotype_count"])
         else:
             observation_rows = environment_count = genotype_count = 0
+        total_environment_count = int(requirement["total_environment_count"])
+        development_environment_count = total_environment_count - environment_count
+        minimum_holdout = int(requirement["minimum_holdout_environments"])
+        maximum_holdout = int(requirement["maximum_holdout_environments"])
         rows.append(
             {
                 "trait_name_canonical": trait_name,
                 "observation_rows": observation_rows,
-                "environment_count": environment_count,
+                "holdout_environment_count": environment_count,
+                "total_environment_count": total_environment_count,
+                "holdout_environment_fraction": environment_count / total_environment_count,
+                "development_environment_count": development_environment_count,
+                "development_environment_fraction": (
+                    development_environment_count / total_environment_count
+                ),
                 "genotype_count": genotype_count,
                 "minimum_required_rows": minimum_rows_per_trait,
-                "minimum_required_environments": minimum_environments_per_trait,
+                "minimum_required_environments": minimum_holdout,
+                "maximum_allowed_environments": maximum_holdout,
+                "minimum_required_development_environments": int(
+                    requirement["minimum_development_environments"]
+                ),
+                "holdout_requirement_rule": requirement["minimum_rule"],
                 "support_status": (
                     "PASS"
                     if observation_rows >= minimum_rows_per_trait
-                    and environment_count >= minimum_environments_per_trait
+                    and environment_count >= minimum_holdout
+                    and environment_count <= maximum_holdout
                     else "FAIL"
                 ),
             }
@@ -205,7 +284,7 @@ def environment_rank(value: str, protocol_id: str, attempt: int) -> int:
     return int.from_bytes(digest[:8], "big")
 
 
-def nested_environment_expert_support_table(
+def nested_genotype_expert_support_table(
     ledger: pd.DataFrame,
     manifest: pd.DataFrame,
     protected_ids: dict[str, set[str]],
@@ -215,70 +294,72 @@ def nested_environment_expert_support_table(
 ) -> pd.DataFrame:
     genotype = nonempty(ledger, "panel_sample_id")
     rows = []
-    for outer_fold in range(outer_folds):
-        for inner_fold in range(inner_folds):
-            train, val, test, omitted, leakage = assign_nested_split(
-                ledger,
-                manifest,
-                scenario="unseen_environments",
-                outer_fold=outer_fold,
-                inner_fold=inner_fold,
-            )
-            for name, ids in protected_ids.items():
-                counts = {}
-                development_indices = np.concatenate([train, val, test])
-                development_genotypes = genotype.iloc[development_indices]
-                development_mapped = development_genotypes[
-                    development_genotypes.isin(ids)
-                ]
-                development_unique = int(development_mapped.nunique())
-                required_train_unique = min(
-                    development_unique,
-                    max(
-                        int(support_policy["minimum_train_unique_genotypes"]),
-                        int(
-                            math.ceil(
-                                development_unique
-                                * float(support_policy["minimum_train_unique_fraction"])
-                            )
-                        ),
-                    ),
+    scenarios = sorted(set(nonempty(manifest, "scenario")).difference({""}))
+    for scenario in scenarios:
+        for outer_fold in range(outer_folds):
+            for inner_fold in range(inner_folds):
+                train, val, test, omitted, leakage = assign_nested_split(
+                    ledger,
+                    manifest,
+                    scenario=scenario,
+                    outer_fold=outer_fold,
+                    inner_fold=inner_fold,
                 )
-                for partition, indices in [
-                    ("train", train),
-                    ("val", val),
-                    ("test", test),
-                    ("omitted", omitted),
-                ]:
-                    local = genotype.iloc[indices]
-                    mapped = local[local.isin(ids)]
-                    counts[f"{partition}_observation_rows"] = len(mapped)
-                    counts[f"{partition}_unique_genotypes"] = mapped.nunique()
-                train_supported = (
-                    development_unique >= 2
-                    and counts["train_unique_genotypes"] >= required_train_unique
-                    and counts["train_observation_rows"]
-                    >= int(support_policy["minimum_train_observation_rows"])
-                )
-                rows.append(
-                    {
-                        "scenario": "unseen_environments",
-                        "outer_fold": outer_fold,
-                        "inner_fold": inner_fold,
-                        "kernel_expert": name,
-                        **counts,
-                        "development_unique_genotypes": development_unique,
-                        "required_train_unique_genotypes": required_train_unique,
-                        "required_train_unique_fraction": float(
-                            support_policy["minimum_train_unique_fraction"]
+                for name, ids in protected_ids.items():
+                    counts = {}
+                    development_indices = np.concatenate([train, val, test])
+                    development_genotypes = genotype.iloc[development_indices]
+                    development_mapped = development_genotypes[
+                        development_genotypes.isin(ids)
+                    ]
+                    development_unique = int(development_mapped.nunique())
+                    required_train_unique = min(
+                        development_unique,
+                        max(
+                            int(support_policy["minimum_train_unique_genotypes"]),
+                            int(
+                                math.ceil(
+                                    development_unique
+                                    * float(support_policy["minimum_train_unique_fraction"])
+                                )
+                            ),
                         ),
-                        "required_train_observation_rows": int(
-                            support_policy["minimum_train_observation_rows"]
-                        ),
-                        "leakage_status": leakage["leakage_status"],
-                        "support_status": "PASS" if train_supported else "FAIL",
-                    }
-                )
+                    )
+                    for partition, indices in [
+                        ("train", train),
+                        ("val", val),
+                        ("test", test),
+                        ("omitted", omitted),
+                    ]:
+                        local = genotype.iloc[indices]
+                        mapped = local[local.isin(ids)]
+                        counts[f"{partition}_observation_rows"] = len(mapped)
+                        counts[f"{partition}_unique_genotypes"] = mapped.nunique()
+                    train_supported = (
+                        development_unique >= 2
+                        and counts["train_unique_genotypes"] >= required_train_unique
+                        and counts["train_observation_rows"]
+                        >= int(support_policy["minimum_train_observation_rows"])
+                    )
+                    rows.append(
+                        {
+                            "scenario": scenario,
+                            "outer_fold": outer_fold,
+                            "inner_fold": inner_fold,
+                            "kernel_expert": name,
+                            **counts,
+                            "development_unique_genotypes": development_unique,
+                            "required_train_unique_genotypes": required_train_unique,
+                            "required_train_unique_fraction": float(
+                                support_policy["minimum_train_unique_fraction"]
+                            ),
+                            "required_train_observation_rows": int(
+                                support_policy["minimum_train_observation_rows"]
+                            ),
+                            "leakage_status": leakage["leakage_status"],
+                            "support_status": "PASS" if train_supported else "FAIL",
+                        }
+                    )
     return pd.DataFrame(rows)
 
 
@@ -309,7 +390,18 @@ def choose_final_environment_block(
             f"maximum_environments={maximum_environment_count}"
         )
     minimum_rows_per_trait = int(support["minimum_rows_per_trait"])
-    minimum_environments_per_trait = int(support["minimum_environments_per_trait"])
+    trait_requirements = trait_environment_requirements(
+        ledger,
+        traits,
+        default_minimum_environments=int(
+            support.get("minimum_environments_per_trait", 1)
+        ),
+        policy=(
+            dict(protocol["trait_environment_support"])
+            if protocol.get("trait_environment_support")
+            else None
+        ),
+    )
     environment_rows = environment.value_counts().to_dict()
     trait_environment_rows = (
         pd.DataFrame({"environment": environment, "trait": trait})
@@ -345,6 +437,9 @@ def choose_final_environment_block(
         )
         candidate: set[str] = set()
         for trait_name in traits:
+            minimum_environments_for_trait = int(
+                trait_requirements[trait_name]["minimum_holdout_environments"]
+            )
             trait_candidates = [
                 value for value in ranked if trait_environment_rows.get((trait_name, value), 0) > 0
             ]
@@ -363,7 +458,7 @@ def choose_final_environment_block(
                 )
                 if (
                     row_count >= minimum_rows_per_trait
-                    and environment_count >= minimum_environments_per_trait
+                    and environment_count >= minimum_environments_for_trait
                 ):
                     break
         for name, ids in protected_ids.items():
@@ -413,7 +508,7 @@ def choose_final_environment_block(
             candidate,
             traits,
             minimum_rows_per_trait,
-            minimum_environments_per_trait,
+            trait_requirements,
         )
         expert_support = genotype_expert_support_table(
             ledger, candidate, protected_ids, expert_support_policy
@@ -435,7 +530,9 @@ def choose_final_environment_block(
                     sum(environment_rows.get(value, 0) for value in candidate)
                 ),
                 "minimum_trait_rows": int(trait_support["observation_rows"].min()),
-                "minimum_trait_environments": int(trait_support["environment_count"].min()),
+                "minimum_trait_environments": int(
+                    trait_support["holdout_environment_count"].min()
+                ),
                 "trait_support_pass": bool(trait_support["support_status"].eq("PASS").all()),
                 "genotype_expert_support_pass": bool(
                     expert_support["support_status"].eq("PASS").all()
@@ -480,10 +577,13 @@ def choose_final_environment_block(
         "minimum_environment_count": minimum_environment_count,
         "maximum_environment_count": maximum_environment_count,
         "minimum_rows_per_trait": minimum_rows_per_trait,
-        "minimum_environments_per_trait": minimum_environments_per_trait,
+        "trait_environment_support_policy": protocol.get("trait_environment_support"),
         "minimum_observed_trait_rows": int(selected_trait_support["observation_rows"].min()),
         "minimum_observed_trait_environments": int(
-            selected_trait_support["environment_count"].min()
+            selected_trait_support["holdout_environment_count"].min()
+        ),
+        "minimum_observed_development_trait_environments": int(
+            selected_trait_support["development_environment_count"].min()
         ),
         "protected_genotype_experts": sorted(protected_ids),
         "phenotype_values_used_for_assignment": False,
@@ -519,7 +619,12 @@ def choose_final_cycle_block(
     )
     minimum_rows_per_trait = int(support["minimum_rows_per_trait"])
     minimum_environments_per_trait = int(
-        support["minimum_environments_per_trait"]
+        support.get("minimum_environments_per_trait", 2)
+    )
+    trait_requirements = trait_environment_requirements(
+        ledger,
+        traits,
+        default_minimum_environments=minimum_environments_per_trait,
     )
     if minimum_environment_count > maximum_environment_count:
         raise ValueError(
@@ -566,7 +671,7 @@ def choose_final_cycle_block(
             selected_environments,
             traits,
             minimum_rows_per_trait,
-            minimum_environments_per_trait,
+            trait_requirements,
         )
         environment_minimum_met = len(selected_environments) >= minimum_environment_count
         trait_minimum_met = bool(current_support["support_status"].eq("PASS").all())
@@ -584,7 +689,7 @@ def choose_final_cycle_block(
                     current_support["observation_rows"].min()
                 ),
                 "cumulative_minimum_trait_environments": int(
-                    current_support["environment_count"].min()
+                    current_support["holdout_environment_count"].min()
                 ),
                 "meets_environment_minimum": environment_minimum_met,
                 "meets_trait_minimum": trait_minimum_met,
@@ -603,7 +708,7 @@ def choose_final_cycle_block(
         selected_environments,
         traits,
         minimum_rows_per_trait,
-        minimum_environments_per_trait,
+        trait_requirements,
     )
     failures = []
     if len(selected_environments) < minimum_environment_count:
@@ -634,7 +739,7 @@ def choose_final_cycle_block(
         "minimum_environments_per_trait": minimum_environments_per_trait,
         "minimum_observed_trait_rows": int(final_trait_support["observation_rows"].min()),
         "minimum_observed_trait_environments": int(
-            final_trait_support["environment_count"].min()
+            final_trait_support["holdout_environment_count"].min()
         ),
         "phenotype_values_used_for_assignment": False,
         "failures": failures,
@@ -926,7 +1031,7 @@ def main() -> None:
         ["scenario", "outer_fold", "inner_fold", "axis", "partition", "entity_id"],
         kind="stable",
     )
-    nested_expert_support = nested_environment_expert_support_table(
+    nested_expert_support = nested_genotype_expert_support_table(
         ledger,
         manifest,
         protected_ids,
@@ -943,7 +1048,7 @@ def main() -> None:
     ]
     if not unsupported_nested.empty:
         raise SystemExit(
-            "Nested unseen-environment folds leave protected genotype experts "
+            "Nested evaluation folds leave protected genotype experts "
             f"unidentifiable; see {nested_expert_support_path}"
         )
     manifest.to_csv(manifest_path, sep="\t", index=False, lineterminator="\n")

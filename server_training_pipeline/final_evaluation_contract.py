@@ -52,13 +52,16 @@ def load_protocol(path: Path | None = None) -> dict[str, Any]:
     if int(protocol.get("outer_folds", 0)) < 2 or int(protocol.get("inner_folds", 0)) < 2:
         raise ValueError("Nested evaluation requires at least two outer and inner folds")
     support = protocol.get("final_holdout_support", {})
-    required_support = {
+    base_required_support = {
         "minimum_environment_fraction",
         "minimum_environment_count",
         "maximum_environment_fraction",
         "minimum_rows_per_trait",
-        "minimum_environments_per_trait",
     }
+    trait_environment_support = protocol.get("trait_environment_support")
+    required_support = set(base_required_support)
+    if trait_environment_support is None:
+        required_support.add("minimum_environments_per_trait")
     if set(support) != required_support:
         raise ValueError(
             "Frozen final-holdout support policy is incomplete: "
@@ -72,8 +75,48 @@ def load_protocol(path: Path | None = None) -> dict[str, Any]:
         raise ValueError("Final holdout requires at least one environment")
     if int(support["minimum_rows_per_trait"]) < 1:
         raise ValueError("Final holdout requires positive per-trait row support")
-    if int(support["minimum_environments_per_trait"]) < 2:
-        raise ValueError("Final holdout requires at least two environments per trait")
+    if trait_environment_support is None:
+        if int(support["minimum_environments_per_trait"]) < 2:
+            raise ValueError("Final holdout requires at least two environments per trait")
+    else:
+        required_trait_environment_support = {
+            "default_minimum_holdout_fraction",
+            "trait_minimum_holdout_environments",
+            "minimum_development_environment_fraction",
+            "minimum_development_environments",
+        }
+        if set(trait_environment_support) != required_trait_environment_support:
+            raise ValueError(
+                "Frozen trait-environment support policy is incomplete: "
+                f"expected={sorted(required_trait_environment_support)} "
+                f"observed={sorted(trait_environment_support)}"
+            )
+        default_holdout_fraction = float(
+            trait_environment_support["default_minimum_holdout_fraction"]
+        )
+        development_fraction = float(
+            trait_environment_support["minimum_development_environment_fraction"]
+        )
+        if not 0 < default_holdout_fraction < 1:
+            raise ValueError("Trait holdout environment fraction is invalid")
+        if not 0 < development_fraction < 1:
+            raise ValueError("Trait development environment fraction is invalid")
+        if default_holdout_fraction + development_fraction > 1:
+            raise ValueError(
+                "Trait holdout and development environment fractions are incompatible"
+            )
+        if int(trait_environment_support["minimum_development_environments"]) < 1:
+            raise ValueError("Trait development environment minimum must be positive")
+        overrides = {
+            str(name).strip().upper(): int(value)
+            for name, value in dict(
+                trait_environment_support["trait_minimum_holdout_environments"]
+            ).items()
+        }
+        if not set(overrides).issubset(set(traits)):
+            raise ValueError("Trait-specific holdout overrides contain unknown traits")
+        if any(value < 1 for value in overrides.values()):
+            raise ValueError("Trait-specific holdout minimums must be positive")
     protected_experts = [
         str(value).strip() for value in protocol.get("protected_genotype_experts", [])
     ]

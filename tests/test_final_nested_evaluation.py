@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import sys
 from pathlib import Path
@@ -16,6 +17,7 @@ from server_training_pipeline.build_final_evaluation_manifests import (
     choose_final_cycle_block,
     choose_final_environment_block,
     genotype_expert_support_table,
+    trait_environment_requirements,
     main as build_manifests,
 )
 from server_training_pipeline.final_evaluation_contract import (
@@ -73,7 +75,7 @@ def build_toy_manifests(tmp_path: Path, monkeypatch) -> tuple[pd.DataFrame, Path
     )
     protocol.update(
         {
-            "protocol_version": "toy_multitrait_quantitative_final_v2",
+            "protocol_version": "toy_multitrait_quantitative_final_v4",
             "traits": ["DAYS_TO_HEADING", "GRAIN_YIELD"],
             "climatology_eligible_traits": ["DAYS_TO_HEADING", "GRAIN_YIELD"],
             "climatology_ineligible_traits": [],
@@ -82,10 +84,12 @@ def build_toy_manifests(tmp_path: Path, monkeypatch) -> tuple[pd.DataFrame, Path
                 "minimum_environment_count": 10,
                 "maximum_environment_fraction": 0.4,
                 "minimum_rows_per_trait": 20,
-                "minimum_environments_per_trait": 5,
             },
         }
     )
+    protocol["trait_environment_support"][
+        "trait_minimum_holdout_environments"
+    ] = {}
     protocol_path.write_text(json.dumps(protocol), encoding="utf-8")
     ledger.to_csv(ledger_path, sep="\t", index=False)
     protected_orders = []
@@ -130,6 +134,16 @@ def test_frozen_protocol_blocks_discovery_seeds() -> None:
     else:
         raise AssertionError("Discovery seed was not blocked")
     require_non_discovery_seed(41001, protocol)
+
+
+def test_archived_v3_protocol_preserves_frozen_bytes() -> None:
+    path = Path("server_training_pipeline/final_evaluation_protocol_v3.json")
+    assert hashlib.sha256(path.read_bytes()).hexdigest() == (
+        "fe304f6c3fbeecabb343f5aecd607648e81a549518e6283bf80da3bdc96ee100"
+    )
+    protocol = load_protocol(path)
+    assert protocol["protocol_version"] == "multitrait_quantitative_final_v3"
+    assert "trait_environment_support" not in protocol
 
 
 def test_manifest_is_hashed_and_final_holdout_is_excluded(tmp_path, monkeypatch) -> None:
@@ -227,6 +241,39 @@ def test_environment_block_preserves_recent_cycle_marker_support() -> None:
     assert expert_support["support_status"].eq("PASS").all()
     assert expert_support.loc["K_G_HMP", "development_unique_genotypes"] == 30
     assert expert_support.loc["K_G_HMP", "holdout_unique_genotypes"] == 30
+
+
+def test_v4_trait_environment_requirements_preserve_sparse_training_support() -> None:
+    rows = []
+    trait_environment_counts = {
+        "DAYS_TO_HEADING": 864,
+        "ABOVE_GROUND_BIOMASS": 22,
+        "TEST_WEIGHT": 72,
+    }
+    for trait_name, count in trait_environment_counts.items():
+        for environment_index in range(count):
+            rows.append(
+                {
+                    "env_kernel_id": f"{trait_name}_e{environment_index}",
+                    "trait_name_canonical": trait_name,
+                    "panel_sample_id": "g1",
+                }
+            )
+    ledger = pd.DataFrame(rows)
+    protocol = load_protocol()
+    requirements = trait_environment_requirements(
+        ledger,
+        list(trait_environment_counts),
+        default_minimum_environments=1,
+        policy=protocol["trait_environment_support"],
+    )
+
+    assert requirements["DAYS_TO_HEADING"]["minimum_holdout_environments"] == 87
+    assert requirements["DAYS_TO_HEADING"]["maximum_holdout_environments"] == 216
+    assert requirements["ABOVE_GROUND_BIOMASS"]["minimum_holdout_environments"] == 5
+    assert requirements["ABOVE_GROUND_BIOMASS"]["maximum_holdout_environments"] == 5
+    assert requirements["TEST_WEIGHT"]["minimum_holdout_environments"] == 10
+    assert requirements["TEST_WEIGHT"]["maximum_holdout_environments"] == 18
 
 
 def test_manifest_contract_protects_holdout_support_artifacts(tmp_path, monkeypatch) -> None:

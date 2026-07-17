@@ -271,20 +271,23 @@ country_holdout
 The default runs the frozen full model. Set `FINAL_EVAL_MODES=env,additive,full`
 only for a predeclared diagnostic ablation; the outer test still cannot select
 hyperparameters. Each invocation is resumable and writes fold contracts under
-`model_kernels/final_nested_evaluation_v3/` and model runs under
-`trained_models/final_nested_evaluation_v3_runs/`. The final holdout is a
+`model_kernels/final_nested_evaluation_v4/` and model runs under
+`trained_models/final_nested_evaluation_v4_runs/`. The final holdout is a
 deterministically selected environment block constructed without phenotype
 values. It contains at least 10% (and at least 50) of model environments, at
-least 20 rows and five independent environments for every frozen trait, and
-explicit HMP/GBS representation in both development and holdout partitions.
+least 20 rows for every frozen trait, and explicit HMP/GBS representation in
+both development and holdout partitions. `ABOVE_GROUND_BIOMASS` requires five
+holdout environments, `TEST_WEIGHT` requires ten, and every other trait
+requires at least 10% of its available environments. Every trait retains at
+least 75% and at least 15 environments for development.
 The builder refuses to freeze a block larger than 20% of environments or one
 that leaves a protected genotype expert unidentifiable. Inspect
 `final_holdout_preflight.json`,
 `final_holdout_cycle_support.tsv`, `final_holdout_trait_support.tsv`, and
 `final_holdout_genotype_expert_support.tsv` before starting any fold.
 `nested_fold_genotype_expert_support.tsv` additionally certifies that every
-unseen-environment inner-training partition can estimate both protected
-genotype experts. The frozen nested threshold requires at least three exact
+inner-training partition in all five generalization scenarios can estimate
+both protected genotype experts. The frozen nested threshold requires at least three exact
 IDs, at least 10% of the expert's development GIDs, and at least 20 mapped
 training observations. The fractional requirement prevents a nominally
 factorable but scientifically empty HMP branch.
@@ -294,12 +297,16 @@ as a failed preflight record. Its one-environment 2022 holdout must not be used
 for training or final reporting. `final_nested_evaluation_v2` is also retained
 only as a failed design record: its recent-cycle block left only one of 2,263
 HMP-linked ledger genotypes in development, making the HMP experts unidentifiable.
+Its support-balanced successor, `final_nested_evaluation_v3`, is retained as a
+valid preflight record but was superseded before any model metrics were
+inspected because `TEST_WEIGHT` had only five holdout environments. The exact
+v3 protocol is archived as `final_evaluation_protocol_v3.json`.
 
 Final reports are:
 
 ```text
-trained_models/final_nested_evaluation_v3_summary/nested_outer_fold_metrics.tsv
-trained_models/final_nested_evaluation_v3_summary/nested_outer_fold_summary.tsv
+trained_models/final_nested_evaluation_v4_summary/nested_outer_fold_metrics.tsv
+trained_models/final_nested_evaluation_v4_summary/nested_outer_fold_summary.tsv
 ```
 
 They include fold means, standard deviations, 95% t confidence intervals,
