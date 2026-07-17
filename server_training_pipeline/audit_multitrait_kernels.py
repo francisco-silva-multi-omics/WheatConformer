@@ -77,6 +77,7 @@ def certify_kernel(
     eligible_traits: str = "*",
     minimum_ledger_coverage: float = 1.0,
     coverage_basis: str = "observation_rows",
+    minimum_eligible_entities: int = 0,
     allow_partial: bool = False,
     coverage_path: Path | None = None,
     coverage_id_col: str = "",
@@ -114,6 +115,9 @@ def certify_kernel(
         and np.array_equal(np.sort(compact.astype(int).to_numpy()), np.arange(n, dtype=int))
     )
     add("compact_index_sequence", compact_ok, f"compact_min={compact.min()}; compact_max={compact.max()}")
+    coverage_mask_entity_coverage = float("nan")
+    coverage_universe_ids: set[str] = set()
+    coverage_order_ids: set[str] = set()
     if coverage_path is not None:
         coverage_present = coverage_path.exists()
         add("coverage_mask_present", coverage_present, f"path={coverage_path}")
@@ -131,6 +135,13 @@ def certify_kernel(
         add("coverage_mask_ids_unique_nonempty", unique_coverage, f"unique={coverage_ids.nunique()}")
         available_ids = set(
             coverage_ids[coverage_frame[coverage_column].map(parse_bool)]
+        )
+        coverage_universe_ids = set(coverage_ids[coverage_ids.ne("")])
+        coverage_order_ids = set(ids).intersection(coverage_universe_ids)
+        coverage_mask_entity_coverage = (
+            len(coverage_order_ids) / len(coverage_universe_ids)
+            if coverage_universe_ids
+            else 0.0
         )
         order_covered = ids.isin(available_ids)
         add(
@@ -177,9 +188,18 @@ def certify_kernel(
         eligible = ledger[
             ledger["trait_name_canonical"].fillna("").astype(str).str.upper().isin(requested)
         ]
-    if coverage_basis not in {"observation_rows", "unique_entities"}:
+    valid_coverage_bases = {
+        "observation_rows",
+        "unique_entities",
+        "coverage_mask_entities",
+    }
+    if coverage_basis not in valid_coverage_bases:
         raise ValueError(
             f"Unsupported coverage basis {coverage_basis!r} for kernel {name}"
+        )
+    if coverage_basis == "coverage_mask_entities" and coverage_path is None:
+        raise ValueError(
+            f"Kernel {name} requires a coverage mask for basis {coverage_basis!r}"
         )
     observed = eligible[ledger_id_col].fillna("").astype(str)
     order_id_set = set(ids)
@@ -191,11 +211,11 @@ def certify_kernel(
     unique_entity_coverage = (
         len(mapped_entity_ids) / len(observed_entity_ids) if observed_entity_ids else 0.0
     )
-    coverage = (
-        observation_coverage
-        if coverage_basis == "observation_rows"
-        else unique_entity_coverage
-    )
+    coverage = {
+        "observation_rows": observation_coverage,
+        "unique_entities": unique_entity_coverage,
+        "coverage_mask_entities": coverage_mask_entity_coverage,
+    }[coverage_basis]
     coverage_ok = coverage >= minimum_ledger_coverage and (
         allow_partial or bool(mapped_by_id.all())
     )
@@ -207,8 +227,17 @@ def certify_kernel(
         f"observation_coverage={observation_coverage:.8g}; "
         f"mapped_unique_entities={len(mapped_entity_ids)}/{len(observed_entity_ids)}; "
         f"unique_entity_coverage={unique_entity_coverage:.8g}; "
+        f"coverage_mask_entities={len(coverage_order_ids)}/{len(coverage_universe_ids)}; "
+        f"coverage_mask_entity_coverage={coverage_mask_entity_coverage:.8g}; "
         f"minimum={minimum_ledger_coverage}; allow_partial={allow_partial}",
     )
+    if minimum_eligible_entities > 0:
+        add(
+            "eligible_entity_support",
+            len(mapped_entity_ids) >= minimum_eligible_entities,
+            f"mapped_unique_entities={len(mapped_entity_ids)}; "
+            f"minimum={minimum_eligible_entities}",
+        )
 
     if ledger_index_col and ledger_index_col in eligible.columns:
         index = pd.to_numeric(eligible[ledger_index_col], errors="coerce")
@@ -247,11 +276,15 @@ def certify_kernel(
         "eligible_traits": eligible_traits,
         "minimum_ledger_coverage": minimum_ledger_coverage,
         "coverage_basis": coverage_basis,
+        "minimum_eligible_entities": minimum_eligible_entities,
         "ledger_id_coverage": coverage,
         "ledger_observation_coverage": observation_coverage,
         "ledger_unique_entity_coverage": unique_entity_coverage,
         "ledger_unique_entity_matches": len(mapped_entity_ids),
         "ledger_unique_entity_count": len(observed_entity_ids),
+        "coverage_mask_entity_coverage": coverage_mask_entity_coverage,
+        "coverage_mask_entity_matches": len(coverage_order_ids),
+        "coverage_mask_entity_count": len(coverage_universe_ids),
         "dimension": n,
         "dtype": str(kernel.dtype),
         "certification_status": "PASS" if all(row["status"] == "PASS" for row in checks) else "FAIL",
@@ -277,6 +310,10 @@ def certify_kernel(
         "ledger_observation_coverage": observation_coverage,
         "ledger_unique_entity_coverage": unique_entity_coverage,
         "coverage_basis": coverage_basis,
+        "minimum_eligible_entities": minimum_eligible_entities,
+        "coverage_mask_entity_coverage": coverage_mask_entity_coverage,
+        "coverage_mask_entity_matches": len(coverage_order_ids),
+        "coverage_mask_entity_count": len(coverage_universe_ids),
     }
     return checks, registry, spectrum
 
@@ -342,6 +379,11 @@ def main() -> None:
                 if pd.isna(row.get("coverage_basis"))
                 else str(row.get("coverage_basis", "observation_rows")).strip()
                 or "observation_rows"
+            ),
+            "minimum_eligible_entities": (
+                0
+                if pd.isna(row.get("minimum_eligible_entities"))
+                else int(row.get("minimum_eligible_entities", 0))
             ),
             "allow_partial": float(row["minimum_ledger_coverage"]) < 1.0,
             "coverage_path": (
