@@ -9,6 +9,7 @@ cd "$ROOT"
 PYTHON="${PYTHON:-python}"
 CODE_ROOT="${WHEATCONFORMER_CODE_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 export PYTHONPATH="$CODE_ROOT${PYTHONPATH:+:$PYTHONPATH}"
+export PYTHONSAFEPATH=1
 PROTOCOL="${FINAL_EVAL_PROTOCOL:-$CODE_ROOT/server_training_pipeline/final_evaluation_protocol.json}"
 LEDGER="${FINAL_EVAL_LEDGER:-model_kernels/multitrait_pedigree_env_uniform_tgw_certified/multitrait_pedigree_uniform_tgw_certified_observations.parquet}"
 TRAIT_ORDER="${FINAL_EVAL_TRAIT_ORDER:-model_kernels/multitrait_pedigree_env_uniform_tgw_certified/multitrait_pedigree_uniform_tgw_certified_trait_order.tsv}"

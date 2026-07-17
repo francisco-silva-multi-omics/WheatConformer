@@ -249,6 +249,7 @@ directories. The raw-date recovery arm is intentionally not used.
 ```bash
 export PYTHON="$HOME/tools/tf_wheat_cpu/bin/python"
 export WHEATCONFORMER_CODE_ROOT="$HOME/tools/WheatConformer"
+export PYTHONSAFEPATH=1
 export FINAL_EVAL_WEATHER_DIR="environment_weather_recovery_v1"
 export FINAL_EVAL_WEATHER_AUDIT_DIR="model_kernels/weather_recovery_audit_v1/api_final"
 
