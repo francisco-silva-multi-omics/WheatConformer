@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
+import json
 import re
 from pathlib import Path
 
@@ -85,6 +87,18 @@ def main() -> None:
     parser.add_argument("--out-dir", type=Path, required=True)
     parser.add_argument("--location-registry", type=Path, default=None)
     parser.add_argument("--minimum-donors", type=int, default=3)
+    parser.add_argument(
+        "--donor-environment-ids",
+        type=Path,
+        default=None,
+        help="TSV of outer-training env_id values allowed to contribute climatology donors.",
+    )
+    parser.add_argument(
+        "--fit-environment-ids",
+        type=Path,
+        default=None,
+        help="TSV of outer-training env_id values used for feature scaling.",
+    )
     args = parser.parse_args()
 
     root = args.root.resolve()
@@ -106,6 +120,24 @@ def main() -> None:
         audit_dir / "weather_recovery_environment_audit.tsv", sep="\t", dtype=str, low_memory=False
     ).drop_duplicates("env_id", keep="first")
     observed = audit.set_index("env_id")["weather_observed"].str.lower().eq("true").reindex(env_ids).fillna(False)
+    donor_allowed = pd.Series(True, index=env_ids)
+    donor_ids_path = None
+    if args.donor_environment_ids is not None:
+        donor_ids_path = resolve(root, args.donor_environment_ids)
+        donor_table = pd.read_csv(donor_ids_path, sep="\t", dtype=str)
+        donor_column = "env_id" if "env_id" in donor_table else donor_table.columns[0]
+        donor_ids = set(donor_table[donor_column].fillna("").astype(str).str.strip())
+        donor_allowed = pd.Series(env_ids.isin(donor_ids), index=env_ids)
+    fit_index = None
+    fit_ids_path = None
+    if args.fit_environment_ids is not None:
+        fit_ids_path = resolve(root, args.fit_environment_ids)
+        fit_table = pd.read_csv(fit_ids_path, sep="\t", dtype=str)
+        fit_column = "env_id" if "env_id" in fit_table else fit_table.columns[0]
+        fit_ids = set(fit_table[fit_column].fillna("").astype(str).str.strip())
+        fit_index = env_ids[env_ids.isin(fit_ids)]
+        if len(fit_index) < 2:
+            raise SystemExit("Climatology scaling requires at least two fit environments")
 
     weather, stress = build_fetched_weather_feature_sets(env_ids, environment_dir=weather_dir)
     features = pd.concat([weather, stress], axis=1)
@@ -124,6 +156,7 @@ def main() -> None:
     donor_frame["weather_observed"] = observed
     donors = donor_frame[
         donor_frame["weather_observed"]
+        & donor_allowed.reindex(donor_frame.index).fillna(False)
         & donor_frame["location_key"].fillna("").ne("")
         & donor_frame[feature_columns].notna().any(axis=1)
     ].copy()
@@ -197,8 +230,23 @@ def main() -> None:
     if not climatology_available.any():
         raise SystemExit("No missing environments met the location-season climatology criteria")
 
-    kernel_raw, standardized, scaling = standardized_kernel(climatology)
-    kernel, raw_mean_diag, scaled_mean_diag = scale_kernel_mean_diagonal(kernel_raw)
+    available_fit_index = (
+        env_ids[climatology_available.to_numpy()]
+        if fit_index is None
+        else fit_index.intersection(env_ids[climatology_available.to_numpy()])
+    )
+    if len(available_fit_index) < 2:
+        raise SystemExit(
+            "Fewer than two training environments have a recoverable climatology expert"
+        )
+    kernel_raw, standardized, scaling = standardized_kernel(
+        climatology, fit_index=available_fit_index
+    )
+    position = pd.Series(np.arange(len(env_ids), dtype=int), index=env_ids)
+    fit_positions = position.loc[available_fit_index].to_numpy(dtype=int)
+    kernel, raw_mean_diag, scaled_mean_diag = scale_kernel_mean_diagonal(
+        kernel_raw, reference_indices=fit_positions
+    )
     assert_kernel_valid(kernel, "K_climatology")
     np.save(out_dir / "K_climatology.raw.npy", kernel_raw)
     np.save(out_dir / "K_climatology.npy", kernel)
@@ -264,9 +312,29 @@ def main() -> None:
             {"metric": "K_climatology_mean_diagonal_raw", "value": raw_mean_diag},
             {"metric": "K_climatology_mean_diagonal_scaled", "value": scaled_mean_diag},
             {"metric": "minimum_donors", "value": args.minimum_donors},
+            {"metric": "donor_scope", "value": "outer_training_only" if donor_ids_path else "all_observed"},
+            {"metric": "donor_environment_count", "value": int(donor_allowed.sum())},
+            {"metric": "scaling_fit_environment_count", "value": len(available_fit_index)},
         ]
     )
     qc.to_csv(out_dir / "weather_climatology_qc.tsv", sep="\t", index=False)
+    lineage = {
+        "builder_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+        "donor_scope": "outer_training_only" if donor_ids_path else "all_observed",
+        "donor_environment_ids_path": str(donor_ids_path.resolve()) if donor_ids_path else "",
+        "donor_environment_ids_sha256": (
+            hashlib.sha256(donor_ids_path.read_bytes()).hexdigest() if donor_ids_path else ""
+        ),
+        "fit_environment_ids_path": str(fit_ids_path.resolve()) if fit_ids_path else "",
+        "fit_environment_ids_sha256": (
+            hashlib.sha256(fit_ids_path.read_bytes()).hexdigest() if fit_ids_path else ""
+        ),
+        "fit_environment_count": len(available_fit_index),
+        "output_environment_count": len(env_ids),
+    }
+    (out_dir / "weather_climatology_lineage.json").write_text(
+        json.dumps(lineage, indent=2), encoding="utf-8"
+    )
     print(qc.to_string(index=False))
 
 

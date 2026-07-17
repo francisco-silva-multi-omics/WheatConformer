@@ -448,14 +448,28 @@ def build_openmeteo_feature_sets(
     return weather, stress
 
 
-def standardize_environment_features(features: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+def standardize_environment_features(
+    features: pd.DataFrame, fit_index: pd.Index | None = None
+) -> tuple[pd.DataFrame, pd.DataFrame]:
     features = features.apply(pd.to_numeric, errors="coerce").astype(np.float32)
     features = features.replace([np.inf, -np.inf], np.nan)
+    if fit_index is None:
+        reference = features
+        fit_scope = "all_environments"
+    else:
+        selected = features.index.intersection(pd.Index(fit_index))
+        if len(selected) < 2:
+            raise ValueError(
+                f"Environment scaling requires at least two fit environments; found {len(selected)}"
+            )
+        reference = features.loc[selected]
+        fit_scope = "training_environments_only"
     all_columns = features.columns.copy()
-    finite_counts = features.notna().sum(axis=0).reindex(all_columns, fill_value=0)
-    mean = features.mean(axis=0).reindex(all_columns)
+    finite_counts = reference.notna().sum(axis=0).reindex(all_columns, fill_value=0)
+    mean = reference.mean(axis=0).reindex(all_columns)
     filled = features.fillna(mean)
-    std = filled.std(axis=0).reindex(all_columns)
+    reference_filled = reference.fillna(mean)
+    std = reference_filled.std(axis=0).reindex(all_columns)
     retained = (finite_counts > 0) & np.isfinite(mean) & np.isfinite(std) & std.gt(0)
     drop_reason = pd.Series("", index=all_columns, dtype=object)
     drop_reason.loc[finite_counts.eq(0)] = "no_finite_values"
@@ -469,6 +483,8 @@ def standardize_environment_features(features: pd.DataFrame) -> tuple[pd.DataFra
             "n_nonmissing": finite_counts.to_numpy(),
             "retained": retained.to_numpy(),
             "drop_reason": drop_reason.to_numpy(),
+            "fit_scope": fit_scope,
+            "fit_environment_count": len(reference),
         }
     )
     if not retained.any():
@@ -480,8 +496,10 @@ def standardize_environment_features(features: pd.DataFrame) -> tuple[pd.DataFra
     return z, scaling
 
 
-def standardized_kernel(features: pd.DataFrame) -> tuple[np.ndarray, pd.DataFrame, pd.DataFrame]:
-    z, scaling = standardize_environment_features(features)
+def standardized_kernel(
+    features: pd.DataFrame, fit_index: pd.Index | None = None
+) -> tuple[np.ndarray, pd.DataFrame, pd.DataFrame]:
+    z, scaling = standardize_environment_features(features, fit_index=fit_index)
     if z.shape[1] == 0:
         return np.zeros((len(features), len(features)), dtype=np.float32), z, scaling
     K = (z.to_numpy(dtype=np.float32) @ z.to_numpy(dtype=np.float32).T) / max(z.shape[1], 1)
@@ -507,13 +525,21 @@ def assert_kernel_valid(kernel: np.ndarray, label: str, sample_size: int = 512) 
         raise ValueError(f"{label} is materially non-PSD; sampled_min_eigenvalue={min_eigenvalue}")
 
 
-def scale_kernel_mean_diagonal(kernel: np.ndarray) -> tuple[np.ndarray, float, float]:
+def scale_kernel_mean_diagonal(
+    kernel: np.ndarray, reference_indices: np.ndarray | list[int] | None = None
+) -> tuple[np.ndarray, float, float]:
     raw = np.asarray(kernel, dtype=np.float32)
-    mean_diag_raw = float(np.mean(np.diag(raw))) if raw.size else 0.0
+    diagonal = np.diag(raw)
+    if reference_indices is not None:
+        diagonal = diagonal[np.asarray(reference_indices, dtype=int)]
+    mean_diag_raw = float(np.mean(diagonal)) if diagonal.size else 0.0
     if not np.isfinite(mean_diag_raw) or mean_diag_raw <= 0:
         return raw.copy(), mean_diag_raw, mean_diag_raw
     scaled = (raw / mean_diag_raw).astype(np.float32)
-    return scaled, mean_diag_raw, float(np.mean(np.diag(scaled)))
+    scaled_diagonal = np.diag(scaled)
+    if reference_indices is not None:
+        scaled_diagonal = scaled_diagonal[np.asarray(reference_indices, dtype=int)]
+    return scaled, mean_diag_raw, float(np.mean(scaled_diagonal))
 
 
 def component_weights(nonempty: list[str], component_names: list[str]) -> tuple[dict[str, float], dict[str, float]]:
@@ -551,6 +577,8 @@ def main(
     output_dir: Path | str | None = None,
     weather_dir: Path | str | None = None,
     require_fetched_weather: bool = False,
+    fit_environment_ids: Path | str | None = None,
+    target_environment_ids: Path | str | None = None,
 ) -> None:
     environment_dir = Path(environment_dir) if environment_dir is not None else OUT
     output_dir = Path(output_dir) if output_dir is not None else OUT
@@ -563,7 +591,42 @@ def main(
 
     env_base = env[[*ID_COLS]].drop_duplicates().copy()
     env_base["env_id"] = env_id_from_frame(env_base)
-    env_ids = pd.Index(env_base["env_id"].drop_duplicates())
+    all_env_ids = pd.Index(env_base["env_id"].drop_duplicates())
+    env_ids = all_env_ids
+    target_environment_ids_path = None
+    if target_environment_ids is not None:
+        target_environment_ids_path = Path(target_environment_ids)
+        target_table = pd.read_csv(target_environment_ids_path, sep="\t", dtype=str)
+        target_column = "env_id" if "env_id" in target_table else target_table.columns[0]
+        requested_target_ids = pd.Index(
+            target_table[target_column].fillna("").astype(str).str.strip().drop_duplicates()
+        )
+        unknown = requested_target_ids.difference(all_env_ids)
+        if len(unknown):
+            raise SystemExit(
+                f"Target-environment manifest contains {len(unknown)} IDs absent from envdata.tsv"
+            )
+        env_ids = requested_target_ids
+    fit_index = None
+    fit_positions = None
+    fit_environment_ids_path = None
+    if fit_environment_ids is not None:
+        fit_environment_ids_path = Path(fit_environment_ids)
+        fit_table = pd.read_csv(fit_environment_ids_path, sep="\t", dtype=str)
+        fit_column = "env_id" if "env_id" in fit_table else fit_table.columns[0]
+        requested_fit_ids = pd.Index(
+            fit_table[fit_column].fillna("").astype(str).str.strip().drop_duplicates()
+        )
+        unknown = requested_fit_ids.difference(env_ids)
+        if len(unknown):
+            raise SystemExit(
+                f"Fit-environment manifest contains {len(unknown)} IDs absent from the environment order"
+            )
+        fit_index = env_ids.intersection(requested_fit_ids)
+        if len(fit_index) < 2:
+            raise SystemExit("At least two fit environments are required")
+        position = pd.Series(np.arange(len(env_ids), dtype=int), index=env_ids)
+        fit_positions = position.loc[fit_index].to_numpy(dtype=int)
 
     environment_order = pd.DataFrame({"env_id": env_ids})
     environment_order.to_csv(output_dir / "env_kernel_sample_order.tsv", sep="\t", index=False)
@@ -605,7 +668,7 @@ def main(
     coverage_rows = []
     scaling_rows = []
     for name, features in feature_sets.items():
-        K_raw, z, scaling = standardized_kernel(features)
+        K_raw, z, scaling = standardized_kernel(features, fit_index=fit_index)
         feature_count = z.shape[1]
         covered_envs = int(features[z.columns].notna().any(axis=1).sum()) if feature_count else 0
         coverage_rows.append(
@@ -619,7 +682,9 @@ def main(
                 "dropped_feature_count": features.shape[1] - feature_count,
             }
         )
-        K_scaled, mean_diag_raw, mean_diag_scaled = scale_kernel_mean_diagonal(K_raw)
+        K_scaled, mean_diag_raw, mean_diag_scaled = scale_kernel_mean_diagonal(
+            K_raw, reference_indices=fit_positions
+        )
         active, inactive_reason = component_activity(feature_count, mean_diag_raw)
         kernels[name] = K_scaled
         assert_kernel_valid(K_scaled, f"K_{name}")
@@ -645,7 +710,9 @@ def main(
     active_components = [name for name in feature_sets if component_stats[name]["active_component"]]
     raw_weights, weights = component_weights(active_components, list(feature_sets))
     K_E_raw = sum(weights[name] * kernels[name] for name in feature_sets).astype(np.float32)
-    K_E, environment_mean_diag_raw, environment_mean_diag_scaled = scale_kernel_mean_diagonal(K_E_raw)
+    K_E, environment_mean_diag_raw, environment_mean_diag_scaled = scale_kernel_mean_diagonal(
+        K_E_raw, reference_indices=fit_positions
+    )
     assert_kernel_valid(K_E, "K_E")
     np.save(output_dir / "K_E.raw.npy", K_E_raw)
     np.save(output_dir / "K_E.npy", K_E)
@@ -662,6 +729,23 @@ def main(
         "location_hash_fallback_count": int(keyed_locations["location_key_method"].eq("unresolved_location_hash_fallback").sum()),
         "country_loc_desc_fallback_count": int(keyed_locations["location_key_method"].eq("country_loc_desc_fallback").sum()),
         "empty_loc_no_excluded_from_fallback": True,
+        "feature_fit_scope": "training_environments_only" if fit_index is not None else "all_environments",
+        "feature_fit_environment_count": len(fit_index) if fit_index is not None else len(env_ids),
+        "fit_environment_ids_path": str(fit_environment_ids_path.resolve()) if fit_environment_ids_path else "",
+        "fit_environment_ids_sha256": (
+            hashlib.sha256(fit_environment_ids_path.read_bytes()).hexdigest()
+            if fit_environment_ids_path
+            else ""
+        ),
+        "target_environment_ids_path": (
+            str(target_environment_ids_path.resolve()) if target_environment_ids_path else ""
+        ),
+        "target_environment_ids_sha256": (
+            hashlib.sha256(target_environment_ids_path.read_bytes()).hexdigest()
+            if target_environment_ids_path
+            else ""
+        ),
+        "target_environment_count": len(env_ids),
     }, indent=2), encoding="utf-8")
 
     pd.DataFrame(
@@ -709,12 +793,26 @@ def cli() -> None:
         action="store_true",
         help="Fail instead of falling back to trial traits when fetched weather is absent.",
     )
+    parser.add_argument(
+        "--fit-environment-ids",
+        type=Path,
+        default=None,
+        help="TSV of outer-training env_id values used to fit imputation, scaling, and diagonal normalization.",
+    )
+    parser.add_argument(
+        "--target-environment-ids",
+        type=Path,
+        default=None,
+        help="TSV defining the output env_id order; use the compact pedigree order for final folds.",
+    )
     args = parser.parse_args()
     main(
         environment_dir=args.environment_dir,
         output_dir=args.out_dir,
         weather_dir=args.weather_dir,
         require_fetched_weather=args.require_fetched_weather,
+        fit_environment_ids=args.fit_environment_ids,
+        target_environment_ids=args.target_environment_ids,
     )
 
 

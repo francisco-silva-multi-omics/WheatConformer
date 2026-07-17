@@ -202,7 +202,90 @@ rejected experts remain diagnostic. Trait inclusion is a separate decision:
 an accepted kernel strengthens evidence for its eligible trait but does not by
 itself add a poorly supported trait to the seven-trait family.
 
-## 2B. Legacy Single-Trait Multikernel GxE Baseline
+## 2B. Frozen Nested Evaluation And Overfitting Control
+
+The discovery runs using seeds `2026-2029` are not reused for final model
+selection. The immutable protocol is:
+
+```text
+server_training_pipeline/final_evaluation_protocol.json
+```
+
+It freezes the seven-trait family, the full multi-kernel architecture,
+`K_E_TGW_V2`, and climatology eligibility for exactly:
+
+```text
+DAYS_TO_HEADING
+DAYS_TO_MATURITY
+GRAIN_YIELD
+```
+
+The protocol creates five outer folds and three grouped inner folds for unseen
+environments, unseen genotypes, unseen genotypes and environments, temporal
+holdout, and country holdout. Temporal and country scenarios form one reported
+generalization family. The most recent cycle is written to a separate final
+holdout manifest and is omitted before any phenotype scaling, weight fitting,
+early stopping, or metric calculation.
+
+Fold-local preprocessing is enforced as follows:
+
+* Precision-weight variance floors, missing-variance fills, clipping, and
+  tempering are fitted on the active training partition only.
+* Environment missing-value statistics, feature scaling, and diagonal kernel
+  scaling use outer-training environment IDs only.
+* Climatology donors are restricted to outer-training environments.
+* Kernel centering and Nystrom factorization use inner-training IDs only.
+* Environment/temporal/country tests retain Stage-1 adjusted targets because
+  Stage-1 fits are isolated within environment-trait groups. Genotype and CV0
+  tests use genotype-environment raw means and raw sampling variances, avoiding
+  nuisance fits that included held genotypes.
+* Inner-selection runs emit validation metrics only. They cannot write outer
+  test metrics. The selected configuration is retrained for each inner fold;
+  its outer predictions are averaged once before reporting.
+
+On the server, point to the frozen current-v1 weather feature and audit
+directories. The raw-date recovery arm is intentionally not used.
+
+```bash
+export PYTHON="$HOME/tools/tf_wheat_cpu/bin/python"
+export WHEATCONFORMER_CODE_ROOT="$HOME/tools/WheatConformer"
+export FINAL_EVAL_WEATHER_DIR="environment_weather_recovery_v1"
+export FINAL_EVAL_WEATHER_AUDIT_DIR="model_kernels/weather_recovery_audit_v1/api_final"
+
+bash "$WHEATCONFORMER_CODE_ROOT/scripts/run_nested_multitrait_final_fold.sh" \
+  /DATA2/estancias/tesis_javier/model_DATA/genotipoXambiente \
+  unseen_environments 0
+```
+
+Use outer-fold indices `0-4`. Valid scenarios are:
+
+```text
+unseen_environments
+unseen_genotypes
+unseen_genotypes_and_environments
+temporal_holdout
+country_holdout
+```
+
+The default runs the frozen full model. Set `FINAL_EVAL_MODES=env,additive,full`
+only for a predeclared diagnostic ablation; the outer test still cannot select
+hyperparameters. Each invocation is resumable and writes fold contracts under
+`model_kernels/final_nested_evaluation_v1/`.
+
+Final reports are:
+
+```text
+trained_models/final_nested_evaluation_summary/nested_outer_fold_metrics.tsv
+trained_models/final_nested_evaluation_summary/nested_outer_fold_summary.tsv
+```
+
+They include fold means, standard deviations, 95% t confidence intervals,
+validation-fitted calibration, and improvement over the train mean. There is
+deliberately no final-holdout evaluation command in this runner. That holdout
+is evaluated once only after outer-fold results, hyperparameters, and reporting
+code are frozen in a separate release commit.
+
+## 2C. Legacy Single-Trait Multikernel GxE Baseline
 
 Run:
 

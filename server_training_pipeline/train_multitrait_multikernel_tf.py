@@ -13,12 +13,34 @@ import pandas as pd
 import tensorflow as tf
 
 try:
+    from .final_evaluation_contract import file_sha256, load_protocol, require_non_discovery_seed
     from .kernel_factorization import effective_factorization_mode, kernel_factors
     from .kernel_registry_contract import training_input_identities
+    from .nested_evaluation import (
+        SCENARIO_MODES,
+        assign_nested_split,
+        manifest_identity,
+        verify_manifest_contract,
+    )
+    from .observation_weights import (
+        apply_precision_weight_transform,
+        fit_precision_weight_transform,
+    )
     from .split_utils import canonical_split_mode, make_split, split_group_column, split_leakage_record
 except ImportError:
+    from final_evaluation_contract import file_sha256, load_protocol, require_non_discovery_seed
     from kernel_factorization import effective_factorization_mode, kernel_factors
     from kernel_registry_contract import training_input_identities
+    from nested_evaluation import (
+        SCENARIO_MODES,
+        assign_nested_split,
+        manifest_identity,
+        verify_manifest_contract,
+    )
+    from observation_weights import (
+        apply_precision_weight_transform,
+        fit_precision_weight_transform,
+    )
     from split_utils import canonical_split_mode, make_split, split_group_column, split_leakage_record
 
 
@@ -549,10 +571,22 @@ def main() -> None:
     parser.add_argument("--out-dir", type=Path, required=True)
     parser.add_argument("--prefix", default="multitrait_kernel_experts")
     parser.add_argument("--model-label", default="multitrait_kernel_experts")
+    parser.add_argument("--hyperparameter-label", default="frozen_base")
     parser.add_argument("--trait", action="append")
     parser.add_argument("--exclude-kernel", action="append", default=[])
     parser.add_argument("--include-disabled-kernel", action="append", default=[])
     parser.add_argument("--split", default="gho_environment")
+    parser.add_argument("--split-manifest", type=Path)
+    parser.add_argument("--split-contract", type=Path)
+    parser.add_argument("--evaluation-protocol", type=Path)
+    parser.add_argument("--evaluation-scenario", choices=sorted(SCENARIO_MODES))
+    parser.add_argument("--outer-fold", type=int)
+    parser.add_argument("--inner-fold", type=int)
+    parser.add_argument(
+        "--evaluation-stage",
+        choices=["discovery", "inner_selection", "outer_evaluation"],
+        default="discovery",
+    )
     parser.add_argument("--test-fraction", type=float, default=0.2)
     parser.add_argument("--val-fraction", type=float, default=0.1)
     parser.add_argument("--seed", type=int, default=2026)
@@ -579,7 +613,40 @@ def main() -> None:
     parser.add_argument("--patience", type=int, default=25)
     parser.add_argument("--intra-op-threads", type=int, default=16)
     parser.add_argument("--inter-op-threads", type=int, default=2)
+    parser.add_argument(
+        "--stage1-policy",
+        choices=["existing_adjusted", "leakage_safe_by_scenario"],
+        default="existing_adjusted",
+    )
+    parser.add_argument("--fold-local-weights", action="store_true")
+    parser.add_argument("--weight-var-floor-quantile", type=float, default=0.01)
+    parser.add_argument("--weight-missing-var-quantile", type=float, default=0.75)
+    parser.add_argument("--weight-clip-quantile", type=float, default=0.99)
+    parser.add_argument("--weight-power", type=float, default=0.0)
+    parser.add_argument("--weight-min-effective-sample-fraction", type=float, default=1.0)
+    parser.add_argument("--weight-max-top-1pct-share", type=float, default=0.02)
     args = parser.parse_args()
+
+    manifest_arguments = [
+        args.split_manifest,
+        args.split_contract,
+        args.evaluation_scenario,
+        args.outer_fold,
+        args.inner_fold,
+    ]
+    if any(value is not None for value in manifest_arguments) and not all(
+        value is not None for value in manifest_arguments
+    ):
+        raise SystemExit(
+            "Nested evaluation requires --split-manifest, --split-contract, "
+            "--evaluation-scenario, --outer-fold, and --inner-fold together"
+        )
+    if args.evaluation_stage != "discovery" and args.split_manifest is None:
+        raise SystemExit("Non-discovery evaluation requires an immutable split manifest")
+    protocol = None
+    if args.split_manifest is not None:
+        protocol = load_protocol(args.evaluation_protocol)
+        require_non_discovery_seed(args.seed, protocol)
 
     certification = json.loads(args.certification_summary.read_text(encoding="utf-8"))
     if certification.get("status") != "PASS":
@@ -622,13 +689,6 @@ def main() -> None:
     tf.config.threading.set_inter_op_parallelism_threads(args.inter_op_threads)
 
     ledger = read_table(args.ledger)
-    for column in ["phenotype_value", "weight_g_e"]:
-        ledger[column] = pd.to_numeric(ledger[column], errors="coerce")
-        values = ledger[column].to_numpy(dtype=np.float64)
-        if not np.isfinite(values).all():
-            raise SystemExit(f"Ledger column {column} contains non-finite values")
-    if np.any(ledger["weight_g_e"].to_numpy(dtype=np.float64) <= 0):
-        raise SystemExit("Ledger weight_g_e contains non-positive values")
     trait_order = pd.read_csv(args.trait_order, sep="\t")
     if args.trait:
         requested = {value.strip().upper() for value in args.trait}
@@ -639,20 +699,49 @@ def main() -> None:
     if ledger.empty:
         raise SystemExit("No observations remain after trait filtering")
     requested_trait_names = sorted(ledger["trait_name_canonical"].unique().tolist())
-
-    canonical_split = canonical_split_mode(args.split, warn=True)
-    group_col = split_group_column(canonical_split)
-    train_index, val_index, test_index = make_split(
-        ledger, canonical_split, args.seed, args.test_fraction, args.val_fraction, group_col
-    )
+    external_split_identity: dict[str, object] = {}
+    if args.split_manifest is not None:
+        split_contract = verify_manifest_contract(args.split_manifest, args.split_contract)
+        observed_ledger_sha256 = file_sha256(args.ledger)
+        if observed_ledger_sha256 != split_contract.get("ledger_sha256"):
+            raise SystemExit(
+                "Evaluation manifest was frozen against another ledger: "
+                f"expected={split_contract.get('ledger_sha256')} "
+                f"observed={observed_ledger_sha256}"
+            )
+        split_manifest = pd.read_csv(args.split_manifest, sep="\t", dtype=str)
+        train_index, val_index, test_index, omitted_index, leakage = assign_nested_split(
+            ledger,
+            split_manifest,
+            scenario=args.evaluation_scenario,
+            outer_fold=args.outer_fold,
+            inner_fold=args.inner_fold,
+        )
+        canonical_split = SCENARIO_MODES[args.evaluation_scenario]
+        group_col = split_group_column(canonical_split)
+        external_split_identity = manifest_identity(args.split_manifest, args.split_contract)
+        external_split_identity.update(
+            {
+                "scenario": args.evaluation_scenario,
+                "outer_fold": args.outer_fold,
+                "inner_fold": args.inner_fold,
+                "omitted_rows": int(len(omitted_index)),
+            }
+        )
+    else:
+        canonical_split = canonical_split_mode(args.split, warn=True)
+        group_col = split_group_column(canonical_split)
+        train_index, val_index, test_index = make_split(
+            ledger, canonical_split, args.seed, args.test_fraction, args.val_fraction, group_col
+        )
+        leakage = split_leakage_record(
+            ledger, args.seed, canonical_split, train_index, val_index, test_index, group_col
+        )
     split_labels = np.full(len(ledger), "", dtype=object)
     split_labels[train_index] = "train"
     split_labels[val_index] = "val"
     split_labels[test_index] = "test"
     ledger["split"] = split_labels
-    leakage = split_leakage_record(
-        ledger, args.seed, canonical_split, train_index, val_index, test_index, group_col
-    )
     if leakage["leakage_status"] != "pass":
         raise SystemExit(f"Split leakage detected: {leakage}")
 
@@ -686,6 +775,43 @@ def main() -> None:
     ledger = ledger[ledger["trait_name_canonical"].isin(retained)].copy().reset_index(drop=True)
     if len(retained) < 2:
         raise SystemExit(f"Multi-trait training requires at least two supported traits; found {retained}")
+    # Final-holdout and structurally omitted CV0 rows leave memory before any
+    # phenotype-derived scaling or weight statistic is fitted.
+    ledger = ledger[ledger["split"].isin(["train", "val", "test"])].copy().reset_index(drop=True)
+
+    stage1_policy_applied = "existing_adjusted"
+    if args.stage1_policy == "leakage_safe_by_scenario" and args.split_manifest is not None:
+        if args.evaluation_scenario in {
+            "unseen_genotypes",
+            "unseen_genotypes_and_environments",
+        }:
+            raw_columns = {"raw_mean", "raw_sd", "n_plot_records"}
+            missing_raw_columns = sorted(raw_columns.difference(ledger.columns))
+            if missing_raw_columns:
+                raise SystemExit(
+                    "Leakage-safe genotype evaluation requires raw plot summaries in the ledger: "
+                    f"missing={missing_raw_columns}"
+                )
+            raw_mean = pd.to_numeric(ledger["raw_mean"], errors="coerce").replace(
+                [np.inf, -np.inf], np.nan
+            )
+            if raw_mean.isna().any():
+                raise SystemExit("raw_mean contains non-finite values")
+            ledger["phenotype_value"] = raw_mean
+            raw_sd = pd.to_numeric(ledger["raw_sd"], errors="coerce")
+            raw_n = pd.to_numeric(ledger["n_plot_records"], errors="coerce")
+            raw_variance = np.square(raw_sd) / raw_n.where(raw_n.gt(0))
+            ledger["var_g_e"] = raw_variance.replace([np.inf, -np.inf], np.nan)
+            stage1_policy_applied = "genotype_environment_raw_mean_and_sampling_variance"
+        else:
+            stage1_policy_applied = "environment_isolated_stage1_adjustment"
+    for column in ["phenotype_value", "weight_g_e"]:
+        ledger[column] = pd.to_numeric(ledger[column], errors="coerce")
+        values = ledger[column].to_numpy(dtype=np.float64)
+        if not np.isfinite(values).all():
+            raise SystemExit(f"Ledger column {column} contains non-finite values")
+    if np.any(ledger["weight_g_e"].to_numpy(dtype=np.float64) <= 0):
+        raise SystemExit("Ledger weight_g_e contains non-positive values")
 
     retained_order = trait_order[trait_order["trait_name_canonical"].isin(retained)].copy()
     retained_order = retained_order.sort_values("trait_index").reset_index(drop=True)
@@ -701,6 +827,19 @@ def main() -> None:
         )
     ].copy().reset_index(drop=True)
     ledger, expert_columns, coverage = add_expert_indices(ledger, registry)
+
+    fold_weight_parameters = pd.DataFrame()
+    if args.fold_local_weights:
+        fold_weight_parameters = fit_precision_weight_transform(
+            ledger[ledger["split"].eq("train")],
+            floor_quantile=args.weight_var_floor_quantile,
+            missing_variance_quantile=args.weight_missing_var_quantile,
+            clip_quantile=args.weight_clip_quantile,
+            weight_power=args.weight_power,
+            min_effective_sample_fraction=args.weight_min_effective_sample_fraction,
+            max_top_1pct_share=args.weight_max_top_1pct_share,
+        )
+        ledger = apply_precision_weight_transform(ledger, fold_weight_parameters)
 
     scaling_rows = []
     ledger["y_scaled"] = np.nan
@@ -870,7 +1009,10 @@ def main() -> None:
 
     metric_output = []
     prediction_outputs = []
-    for split_name, frame in [("val", val), ("test", test)]:
+    evaluation_frames = [("val", val)]
+    if args.evaluation_stage != "inner_selection":
+        evaluation_frames.append(("test", test))
+    for split_name, frame in evaluation_frames:
         frame = frame.copy().reset_index(drop=True)
         frame["y_pred_scaled"] = predict_scaled(model, frame, expert_columns, args.batch_size)
         frame["y_pred"] = [
@@ -937,6 +1079,10 @@ def main() -> None:
     improvement.to_csv(args.out_dir / f"{args.prefix}_vs_train_mean.tsv", sep="\t", index=False)
     history.to_csv(args.out_dir / f"{args.prefix}_history.tsv", sep="\t", index=False)
     scaling.to_csv(args.out_dir / f"{args.prefix}_trait_scaling.tsv", sep="\t", index=False)
+    if not fold_weight_parameters.empty:
+        fold_weight_parameters.to_csv(
+            args.out_dir / f"{args.prefix}_fold_weight_parameters.tsv", sep="\t", index=False
+        )
     support_report.to_csv(
         args.out_dir / f"{args.prefix}_trait_split_support.tsv", sep="\t", index=False
     )
@@ -953,7 +1099,19 @@ def main() -> None:
     checkpoint_path = checkpoint.save(str(args.out_dir / f"{args.prefix}_ckpt"))
     run_metadata = {
         "tensorflow_version": tf.__version__,
+        "trainer_sha256": file_sha256(Path(__file__)),
+        "certification_summary_sha256": file_sha256(args.certification_summary),
         "seed": args.seed,
+        "evaluation_stage": args.evaluation_stage,
+        "evaluation_protocol": (
+            {
+                "protocol_version": protocol["protocol_version"],
+                "protocol_sha256": protocol["protocol_sha256"],
+            }
+            if protocol is not None
+            else {}
+        ),
+        "external_split": external_split_identity,
         "canonical_split_mode": canonical_split,
         "requested_factorization_mode": args.factorization_mode,
         "effective_factorization_mode": effective_mode,
@@ -962,6 +1120,7 @@ def main() -> None:
         "include_genotype_main": not args.no_genotype_main,
         "include_environment_main": not args.no_environment_main,
         "model_label": args.model_label,
+        "hyperparameter_label": args.hyperparameter_label,
         "learn_kernel_gates": not args.fixed_kernel_gates,
         "parameter_initialization": {
             "distribution": "RandomNormal",
@@ -983,6 +1142,13 @@ def main() -> None:
         "training_input_identities": training_input_identities(
             certification, registry["kernel"].tolist()
         ),
+        "phenotype_preprocessing": {
+            "stage1_policy": stage1_policy_applied,
+            "fold_local_weights": args.fold_local_weights,
+            "weight_transform_fit_partition": "train" if args.fold_local_weights else "ledger_precomputed",
+            "weight_power": args.weight_power if args.fold_local_weights else None,
+            "final_holdout_removed_before_phenotype_statistics": bool(args.split_manifest),
+        },
         "training_configuration": {
             "max_rank_genotype": args.max_rank_genotype,
             "max_rank_environment": args.max_rank_environment,

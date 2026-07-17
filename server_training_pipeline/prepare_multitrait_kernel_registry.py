@@ -303,6 +303,11 @@ def main() -> None:
     parser.add_argument("--require-recovered-genotype-manifest", action="store_true")
     parser.add_argument("--environment-dir", type=Path, default=Path("environment"))
     parser.add_argument(
+        "--climatology-eligible-traits",
+        default="*",
+        help="Comma-separated frozen trait list for K_E_CLIMATOLOGY; '*' preserves legacy behavior.",
+    )
+    parser.add_argument(
         "--out-dir", type=Path, default=Path("model_kernels/multitrait_kernel_experts")
     )
     parser.add_argument("--diagonal-epsilon", type=float, default=1e-8)
@@ -466,7 +471,7 @@ def main() -> None:
                 "source_id_col": "env_id",
                 "target_order": base_e_order,
                 "target_id_col": "env_id",
-                "eligible_traits": "*",
+                "eligible_traits": args.climatology_eligible_traits,
                 "enabled_default": True,
                 "interaction_enabled": True,
                 "rank": 64,

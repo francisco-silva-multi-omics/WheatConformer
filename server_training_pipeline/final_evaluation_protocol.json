@@ -1,0 +1,68 @@
+{
+  "protocol_version": "multitrait_quantitative_final_v1",
+  "status": "frozen",
+  "frozen_after_discovery": "2026-07-16",
+  "discovery_seeds_forbidden": [2026, 2027, 2028, 2029],
+  "traits": [
+    "DAYS_TO_HEADING",
+    "DAYS_TO_MATURITY",
+    "PLANT_HEIGHT",
+    "GRAIN_YIELD",
+    "1000_GRAIN_WEIGHT",
+    "ABOVE_GROUND_BIOMASS",
+    "TEST_WEIGHT"
+  ],
+  "climatology_eligible_traits": [
+    "DAYS_TO_HEADING",
+    "DAYS_TO_MATURITY",
+    "GRAIN_YIELD"
+  ],
+  "climatology_ineligible_traits": [
+    "PLANT_HEIGHT",
+    "1000_GRAIN_WEIGHT",
+    "ABOVE_GROUND_BIOMASS",
+    "TEST_WEIGHT"
+  ],
+  "generic_weather_variant": "current_corrected_v1",
+  "raw_date_recovery_enabled": false,
+  "include_disabled_kernels": ["K_E_TGW_V2"],
+  "final_model_mode": "full",
+  "diagnostic_model_modes": ["env", "additive"],
+  "weight_policy": {
+    "weight_power": 0.0,
+    "minimum_effective_sample_fraction": 1.0,
+    "maximum_top_1pct_weight_share": 0.02,
+    "variance_floor_quantile": 0.01,
+    "missing_variance_quantile": 0.75,
+    "weight_clip_quantile": 0.99
+  },
+  "outer_folds": 5,
+  "inner_folds": 3,
+  "final_holdout_policy": "most_recent_cycle",
+  "generalization_families": {
+    "unseen_environments": ["unseen_environments"],
+    "unseen_genotypes": ["unseen_genotypes"],
+    "unseen_genotypes_and_environments": ["unseen_genotypes_and_environments"],
+    "temporal_country_holdout": ["temporal_holdout", "country_holdout"]
+  },
+  "hyperparameter_candidates": [
+    {
+      "name": "frozen_base",
+      "latent_dim": 16,
+      "learning_rate": 0.001,
+      "weight_decay": 0.0001,
+      "rank_genotype": 128,
+      "rank_environment": 64
+    },
+    {
+      "name": "regularized",
+      "latent_dim": 16,
+      "learning_rate": 0.001,
+      "weight_decay": 0.001,
+      "rank_genotype": 128,
+      "rank_environment": 64
+    }
+  ],
+  "selection_metric": "validation_macro_normalized_rmse",
+  "selection_tiebreaker": "validation_macro_pearson"
+}

@@ -187,3 +187,120 @@ def stabilize_precision_weights(
     out["stabilized_var_g_e"] = adjusted_variance
     out[output_weight_col] = stabilized
     return out, pd.DataFrame(qc_rows)
+
+
+def fit_precision_weight_transform(
+    frame: pd.DataFrame,
+    *,
+    trait_col: str = "trait_name_canonical",
+    variance_col: str = "var_g_e",
+    floor_quantile: float = 0.01,
+    missing_variance_quantile: float = 0.75,
+    clip_quantile: float = 0.99,
+    weight_power: float = 1.0,
+    min_effective_sample_fraction: float = 0.0,
+    max_top_1pct_share: float = 1.0,
+) -> pd.DataFrame:
+    """Fit precision-weight parameters using training observations only."""
+    if trait_col not in frame or variance_col not in frame:
+        raise ValueError(f"Weight fitting requires {trait_col} and {variance_col}")
+    rows: list[dict[str, float | int | str]] = []
+    traits = frame[trait_col].fillna("").astype(str).str.strip()
+    variance_all = pd.to_numeric(frame[variance_col], errors="coerce").replace(
+        [np.inf, -np.inf], np.nan
+    )
+    for trait, index in traits.groupby(traits, sort=True).groups.items():
+        variance = variance_all.loc[index].to_numpy(dtype=np.float64)
+        positive = variance[np.isfinite(variance) & (variance > 0)]
+        fallback = float(np.median(positive)) if positive.size else 1.0
+        variance_floor = _quantile(positive, floor_quantile, fallback)
+        missing_fill = _quantile(positive, missing_variance_quantile, fallback)
+        working = variance.copy()
+        missing = ~np.isfinite(working) | (working <= 0)
+        working[missing] = missing_fill
+        working = np.maximum(working, variance_floor)
+        raw_weight = 1.0 / working
+        weight_cap = _quantile(raw_weight, clip_quantile, float(np.max(raw_weight)))
+        capped = np.minimum(raw_weight, weight_cap)
+        _, effective_power = _temper_power_to_constraints(
+            capped,
+            requested_power=weight_power,
+            min_effective_sample_fraction=min_effective_sample_fraction,
+            max_top_1pct_share=max_top_1pct_share,
+        )
+        powered = np.power(capped, effective_power)
+        normalization_mean = float(np.mean(powered))
+        normalized = powered / normalization_mean
+        rows.append(
+            {
+                "trait_name_canonical": trait,
+                "training_rows": int(len(index)),
+                "finite_positive_training_variance_rows": int(positive.size),
+                "variance_floor": variance_floor,
+                "missing_variance_fill": missing_fill,
+                "weight_cap_before_power": weight_cap,
+                "requested_weight_power": weight_power,
+                "effective_weight_power": effective_power,
+                "training_normalization_mean": normalization_mean,
+                "training_effective_sample_fraction": effective_sample_size(normalized)
+                / len(normalized),
+                "training_top_1pct_weight_share": top_weight_share(normalized),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def apply_precision_weight_transform(
+    frame: pd.DataFrame,
+    parameters: pd.DataFrame,
+    *,
+    trait_col: str = "trait_name_canonical",
+    variance_col: str = "var_g_e",
+    output_weight_col: str = "weight_g_e",
+) -> pd.DataFrame:
+    """Apply a train-fitted precision-weight transformation to any partition."""
+    required = {
+        "trait_name_canonical",
+        "variance_floor",
+        "missing_variance_fill",
+        "weight_cap_before_power",
+        "effective_weight_power",
+        "training_normalization_mean",
+    }
+    missing = sorted(required.difference(parameters.columns))
+    if missing:
+        raise ValueError(f"Weight-transform parameters are missing columns: {missing}")
+    if parameters["trait_name_canonical"].duplicated().any():
+        raise ValueError("Weight-transform parameters contain duplicate traits")
+    lookup = parameters.set_index("trait_name_canonical").to_dict("index")
+    out = frame.copy()
+    variance = pd.to_numeric(out[variance_col], errors="coerce").replace(
+        [np.inf, -np.inf], np.nan
+    )
+    result = pd.Series(np.nan, index=out.index, dtype=np.float64)
+    imputed = pd.Series(False, index=out.index)
+    floored = pd.Series(False, index=out.index)
+    traits = out[trait_col].fillna("").astype(str).str.strip()
+    for trait, index in traits.groupby(traits, sort=True).groups.items():
+        if trait not in lookup:
+            raise ValueError(f"No train-fitted weight parameters for trait {trait!r}")
+        params = lookup[trait]
+        local = variance.loc[index].to_numpy(dtype=np.float64)
+        missing_mask = ~np.isfinite(local) | (local <= 0)
+        local[missing_mask] = float(params["missing_variance_fill"])
+        floor_mask = local < float(params["variance_floor"])
+        local = np.maximum(local, float(params["variance_floor"]))
+        weights = np.minimum(
+            1.0 / local, float(params["weight_cap_before_power"])
+        )
+        weights = np.power(weights, float(params["effective_weight_power"]))
+        weights /= float(params["training_normalization_mean"])
+        result.loc[index] = weights
+        imputed.loc[index] = missing_mask
+        floored.loc[index] = floor_mask & ~missing_mask
+    if not np.isfinite(result.to_numpy(dtype=float)).all() or (result <= 0).any():
+        raise ValueError("Fold-local weight application produced invalid weights")
+    out[output_weight_col] = result
+    out["weight_variance_imputed"] = imputed
+    out["weight_variance_floored"] = floored
+    return out
