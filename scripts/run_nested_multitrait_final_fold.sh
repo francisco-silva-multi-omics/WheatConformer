@@ -24,9 +24,9 @@ TRAIT_ENV_MANIFEST="${FINAL_EVAL_TRAIT_ENV_MANIFEST:-model_kernels/trait_environ
 ENVIRONMENT_INPUT_DIR="${FINAL_EVAL_ENVIRONMENT_INPUT_DIR:-environment}"
 WEATHER_DIR="${FINAL_EVAL_WEATHER_DIR:?Set FINAL_EVAL_WEATHER_DIR to the frozen current-v1 weather feature directory}"
 WEATHER_AUDIT_DIR="${FINAL_EVAL_WEATHER_AUDIT_DIR:?Set FINAL_EVAL_WEATHER_AUDIT_DIR to the matching weather recovery audit directory}"
-EVALUATION_DIR="${FINAL_EVAL_DIR:-model_kernels/final_nested_evaluation_v4}"
-MODELS_DIR="${FINAL_EVAL_MODELS_DIR:-trained_models/final_nested_evaluation_v4_runs}"
-SUMMARY_DIR="${FINAL_EVAL_SUMMARY_DIR:-trained_models/final_nested_evaluation_v4_summary}"
+EVALUATION_DIR="${FINAL_EVAL_DIR:-model_kernels/final_nested_evaluation_v5}"
+MODELS_DIR="${FINAL_EVAL_MODELS_DIR:-trained_models/final_nested_evaluation_v5_runs}"
+SUMMARY_DIR="${FINAL_EVAL_SUMMARY_DIR:-trained_models/final_nested_evaluation_v5_summary}"
 MODES="${FINAL_EVAL_MODES:-full}"
 FORCE="${FINAL_EVAL_FORCE:-0}"
 
@@ -105,6 +105,21 @@ do
   [[ -s "$required" ]] || { echo "Required final-evaluation input is missing: $required" >&2; exit 2; }
 done
 
+EXPECTED_OUTER_FOLDS="$($PYTHON - "$PROTOCOL" "$SCENARIO" <<'PY'
+import json, sys
+protocol = json.load(open(sys.argv[1]))
+scenario = sys.argv[2]
+folds = protocol.get("scenario_outer_folds", {})
+if scenario not in folds:
+    raise SystemExit(f"Scenario is absent from frozen outer-fold policy: {scenario}")
+print(int(folds[scenario]))
+PY
+)"
+if (( OUTER_FOLD < 0 || OUTER_FOLD >= EXPECTED_OUTER_FOLDS )); then
+  echo "Outer fold $OUTER_FOLD is outside the frozen range 0-$((EXPECTED_OUTER_FOLDS - 1)) for $SCENARIO" >&2
+  exit 2
+fi
+
 if [[ ! -s "$MANIFEST" || ! -s "$CONTRACT" ]]; then
   log "FREEZE immutable nested folds and final holdout"
   "$PYTHON" -m server_training_pipeline.build_final_evaluation_manifests \
@@ -181,6 +196,13 @@ import json, sys
 print(",".join(json.load(open(sys.argv[1])).get("include_disabled_kernels", [])))
 PY
 )"
+mapfile -t SCENARIO_EXCLUDED_KERNELS < <("$PYTHON" - "$PROTOCOL" "$SCENARIO" <<'PY'
+import json, sys
+protocol = json.load(open(sys.argv[1]))
+for kernel in protocol.get("scenario_genotype_expert_policy", {}).get(sys.argv[2], {}).get("excluded_kernels", []):
+    print(kernel)
+PY
+)
 
 log "PREPARE and certify fold-local kernel registry"
 "$PYTHON" -m server_training_pipeline.prepare_multitrait_kernel_registry \
@@ -251,6 +273,9 @@ if [[ -n "$INCLUDE_DISABLED" ]]; then
   IFS=',' read -r -a included_values <<< "$INCLUDE_DISABLED"
   for kernel in "${included_values[@]}"; do trainer_common+=(--include-disabled-kernel "$kernel"); done
 fi
+for kernel in "${SCENARIO_EXCLUDED_KERNELS[@]}"; do
+  trainer_common+=(--exclude-kernel "$kernel")
+done
 
 IFS=',' read -r -a MODE_VALUES <<< "$MODES"
 for mode in "${MODE_VALUES[@]}"; do
@@ -261,6 +286,9 @@ for mode in "${MODE_VALUES[@]}"; do
     full) model_suffix="full" ;;
     *) echo "Unsupported mode: $mode" >&2; exit 2 ;;
   esac
+  if (( ${#SCENARIO_EXCLUDED_KERNELS[@]} > 0 )); then
+    model_suffix="${model_suffix}_protocol_fallback"
+  fi
   model_label="final_nested_${SCENARIO}_${model_suffix}"
 
   for candidate_line in "${CANDIDATES[@]}"; do

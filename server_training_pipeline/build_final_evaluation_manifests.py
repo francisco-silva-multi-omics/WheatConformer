@@ -289,14 +289,18 @@ def nested_genotype_expert_support_table(
     manifest: pd.DataFrame,
     protected_ids: dict[str, set[str]],
     support_policy: dict[str, object],
-    outer_folds: int,
+    outer_folds_by_scenario: dict[str, int],
     inner_folds: int,
+    scenario_expert_policy: dict[str, dict[str, object]],
 ) -> pd.DataFrame:
     genotype = nonempty(ledger, "panel_sample_id")
     rows = []
     scenarios = sorted(set(nonempty(manifest, "scenario")).difference({""}))
     for scenario in scenarios:
-        for outer_fold in range(outer_folds):
+        excluded_experts = set(
+            scenario_expert_policy.get(scenario, {}).get("excluded_experts", [])
+        )
+        for outer_fold in range(outer_folds_by_scenario[scenario]):
             for inner_fold in range(inner_folds):
                 train, val, test, omitted, leakage = assign_nested_split(
                     ledger,
@@ -341,12 +345,21 @@ def nested_genotype_expert_support_table(
                         and counts["train_observation_rows"]
                         >= int(support_policy["minimum_train_observation_rows"])
                     )
+                    expert_policy = (
+                        "excluded_by_protocol" if name in excluded_experts else "required"
+                    )
+                    support_status = (
+                        "EXCLUDED_BY_PROTOCOL"
+                        if name in excluded_experts
+                        else ("PASS" if train_supported else "FAIL")
+                    )
                     rows.append(
                         {
                             "scenario": scenario,
                             "outer_fold": outer_fold,
                             "inner_fold": inner_fold,
                             "kernel_expert": name,
+                            "expert_policy": expert_policy,
                             **counts,
                             "development_unique_genotypes": development_unique,
                             "required_train_unique_genotypes": required_train_unique,
@@ -357,7 +370,7 @@ def nested_genotype_expert_support_table(
                                 support_policy["minimum_train_observation_rows"]
                             ),
                             "leakage_status": leakage["leakage_status"],
-                            "support_status": "PASS" if train_supported else "FAIL",
+                            "support_status": support_status,
                         }
                     )
     return pd.DataFrame(rows)
@@ -430,7 +443,9 @@ def choose_final_environment_block(
     selected_trait_support = pd.DataFrame()
     selected_expert_support = pd.DataFrame()
     selected_attempt = -1
-    protocol_id = str(protocol["protocol_version"])
+    protocol_id = str(
+        protocol.get("final_holdout_assignment_id", protocol["protocol_version"])
+    )
     for attempt in range(maximum_attempts):
         ranked = sorted(
             environments, key=lambda value: (environment_rank(value, protocol_id, attempt), value)
@@ -984,8 +999,12 @@ def main() -> None:
     environment = set(nonempty(working, "env_kernel_id")).difference({""})
     genotype = set(nonempty(working, "panel_sample_id")).difference({""})
     country = set(nonempty(working, "country")).difference({""})
-    protocol_id = str(protocol["protocol_version"])
+    protocol_id = str(protocol.get("scenario_assignment_id", protocol["protocol_version"]))
     outer_folds = int(protocol["outer_folds"])
+    scenario_outer_folds = {
+        str(name): int(value)
+        for name, value in protocol["scenario_outer_folds"].items()
+    }
     inner_folds = int(protocol["inner_folds"])
     rows: list[dict[str, object]] = []
     add_hashed_scenario(
@@ -993,7 +1012,7 @@ def main() -> None:
         scenario="unseen_environments",
         axes={"environment": environment},
         final_environments=final_environments,
-        outer_folds=outer_folds,
+        outer_folds=scenario_outer_folds["unseen_environments"],
         inner_folds=inner_folds,
         protocol_id=protocol_id,
     )
@@ -1002,7 +1021,7 @@ def main() -> None:
         scenario="unseen_genotypes",
         axes={"genotype": genotype},
         final_environments=final_environments,
-        outer_folds=outer_folds,
+        outer_folds=scenario_outer_folds["unseen_genotypes"],
         inner_folds=inner_folds,
         protocol_id=protocol_id,
     )
@@ -1011,19 +1030,23 @@ def main() -> None:
         scenario="unseen_genotypes_and_environments",
         axes={"genotype": genotype, "environment": environment},
         final_environments=final_environments,
-        outer_folds=outer_folds,
+        outer_folds=scenario_outer_folds["unseen_genotypes_and_environments"],
         inner_folds=inner_folds,
         protocol_id=protocol_id,
     )
     add_temporal_scenario(
-        rows, working, final_environments, outer_folds, inner_folds
+        rows,
+        working,
+        final_environments,
+        scenario_outer_folds["temporal_holdout"],
+        inner_folds,
     )
     add_hashed_scenario(
         rows,
         scenario="country_holdout",
         axes={"country": country},
         final_environments=final_environments,
-        outer_folds=outer_folds,
+        outer_folds=scenario_outer_folds["country_holdout"],
         inner_folds=inner_folds,
         protocol_id=protocol_id,
     )
@@ -1036,8 +1059,9 @@ def main() -> None:
         manifest,
         protected_ids,
         protocol["nested_genotype_expert_support"],
-        outer_folds,
+        scenario_outer_folds,
         inner_folds,
+        protocol["scenario_genotype_expert_policy"],
     )
     nested_expert_support_path = out_dir / "nested_fold_genotype_expert_support.tsv"
     nested_expert_support.to_csv(
@@ -1145,7 +1169,11 @@ def main() -> None:
             nested_expert_support_path
         ),
         "outer_folds": outer_folds,
+        "scenario_outer_folds": scenario_outer_folds,
         "inner_folds": inner_folds,
+        "scenario_genotype_expert_policy": protocol[
+            "scenario_genotype_expert_policy"
+        ],
         "scenarios": sorted(manifest["scenario"].unique().tolist()),
         "phenotype_values_used_for_assignment": False,
     }

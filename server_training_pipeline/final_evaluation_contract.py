@@ -51,6 +51,30 @@ def load_protocol(path: Path | None = None) -> dict[str, Any]:
         raise ValueError("Frozen traits and climatology eligibility are inconsistent")
     if int(protocol.get("outer_folds", 0)) < 2 or int(protocol.get("inner_folds", 0)) < 2:
         raise ValueError("Nested evaluation requires at least two outer and inner folds")
+    scenarios = {
+        str(scenario)
+        for values in protocol["generalization_families"].values()
+        for scenario in values
+    }
+    scenario_outer_folds = protocol.get("scenario_outer_folds")
+    if scenario_outer_folds is None:
+        scenario_outer_folds = {
+            scenario: int(protocol["outer_folds"]) for scenario in scenarios
+        }
+    else:
+        scenario_outer_folds = {
+            str(scenario): int(value)
+            for scenario, value in dict(scenario_outer_folds).items()
+        }
+        if set(scenario_outer_folds) != scenarios:
+            raise ValueError(
+                "Scenario-specific outer-fold policy does not match evaluation scenarios"
+            )
+        if any(value < 2 for value in scenario_outer_folds.values()):
+            raise ValueError("Every evaluation scenario requires at least two outer folds")
+        for field in ["final_holdout_assignment_id", "scenario_assignment_id"]:
+            if not str(protocol.get(field, "")).strip():
+                raise ValueError(f"Frozen assignment identity is missing: {field}")
     support = protocol.get("final_holdout_support", {})
     base_required_support = {
         "minimum_environment_fraction",
@@ -124,6 +148,32 @@ def load_protocol(path: Path | None = None) -> dict[str, Any]:
         raise ValueError("Final evaluation requires named protected genotype experts")
     if len(protected_experts) != len(set(protected_experts)):
         raise ValueError("Protected genotype expert names must be unique")
+    scenario_expert_policy = protocol.get("scenario_genotype_expert_policy", {})
+    if not isinstance(scenario_expert_policy, dict):
+        raise ValueError("Scenario genotype-expert policy must be an object")
+    expected_expert_kernels = {
+        "K_G_HMP": {"K_G_HMP_LINEAR", "K_G_HMP_RBF"},
+        "K_G_GBS": {"K_G_GBS_LINEAR", "K_G_GBS_RBF"},
+    }
+    for scenario, value in scenario_expert_policy.items():
+        if scenario not in scenarios:
+            raise ValueError(f"Genotype-expert policy names unknown scenario: {scenario}")
+        required_fields = {"excluded_experts", "excluded_kernels", "reason"}
+        if set(value) != required_fields:
+            raise ValueError(
+                f"Scenario genotype-expert policy is incomplete for {scenario}"
+            )
+        excluded_experts = {str(item) for item in value["excluded_experts"]}
+        excluded_kernels = {str(item) for item in value["excluded_kernels"]}
+        if not excluded_experts or not excluded_experts.issubset(set(protected_experts)):
+            raise ValueError(f"Invalid excluded genotype experts for {scenario}")
+        expected_kernels = set().union(
+            *(expected_expert_kernels[name] for name in excluded_experts)
+        )
+        if excluded_kernels != expected_kernels:
+            raise ValueError(f"Excluded expert kernels do not match experts for {scenario}")
+        if not str(value["reason"]).strip():
+            raise ValueError(f"Excluded genotype experts require a reason for {scenario}")
     expert_support = protocol.get("final_holdout_genotype_expert_support", {})
     required_expert_support = {
         "minimum_development_unique_genotypes",
@@ -175,6 +225,8 @@ def load_protocol(path: Path | None = None) -> dict[str, Any]:
     protocol["traits"] = traits
     protocol["climatology_eligible_traits"] = sorted(climatology)
     protocol["protected_genotype_experts"] = protected_experts
+    protocol["scenario_outer_folds"] = scenario_outer_folds
+    protocol["scenario_genotype_expert_policy"] = scenario_expert_policy
     protocol["protocol_path"] = str(protocol_path)
     protocol["protocol_sha256"] = file_sha256(protocol_path)
     return protocol

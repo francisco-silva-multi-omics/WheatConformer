@@ -258,7 +258,8 @@ bash "$WHEATCONFORMER_CODE_ROOT/scripts/run_nested_multitrait_final_fold.sh" \
   unseen_environments 0
 ```
 
-Use outer-fold indices `0-4`. Valid scenarios are:
+Use outer-fold indices `0-4`, except `temporal_holdout`, which uses `0-2`.
+Valid scenarios are:
 
 ```text
 unseen_environments
@@ -271,8 +272,8 @@ country_holdout
 The default runs the frozen full model. Set `FINAL_EVAL_MODES=env,additive,full`
 only for a predeclared diagnostic ablation; the outer test still cannot select
 hyperparameters. Each invocation is resumable and writes fold contracts under
-`model_kernels/final_nested_evaluation_v4/` and model runs under
-`trained_models/final_nested_evaluation_v4_runs/`. The final holdout is a
+`model_kernels/final_nested_evaluation_v5/` and model runs under
+`trained_models/final_nested_evaluation_v5_runs/`. The final holdout is a
 deterministically selected environment block constructed without phenotype
 values. It contains at least 10% (and at least 50) of model environments, at
 least 20 rows for every frozen trait, and explicit HMP/GBS representation in
@@ -285,12 +286,20 @@ that leaves a protected genotype expert unidentifiable. Inspect
 `final_holdout_preflight.json`,
 `final_holdout_cycle_support.tsv`, `final_holdout_trait_support.tsv`, and
 `final_holdout_genotype_expert_support.tsv` before starting any fold.
-`nested_fold_genotype_expert_support.tsv` additionally certifies that every
-inner-training partition in all five generalization scenarios can estimate
-both protected genotype experts. The frozen nested threshold requires at least three exact
+`nested_fold_genotype_expert_support.tsv` additionally certifies every required
+expert in every inner-training partition. The frozen nested threshold requires at least three exact
 IDs, at least 10% of the expert's development GIDs, and at least 20 mapped
 training observations. The fractional requirement prevents a nominally
 factorable but scientifically empty HMP branch.
+
+HMP marker diversity begins in 2016, so the frozen temporal evaluation uses
+three outer test cycles (`2020-2022`), each with three support-valid historical
+validation windows. HMP is geographically concentrated: India contains 92.9%
+of HMP-linked ledger GIDs. Broad `country_holdout` therefore excludes
+`K_G_HMP_LINEAR` and `K_G_HMP_RBF` consistently in every fold and is reported
+as the pedigree+GBS+environment fallback, not as the full HMP-bridge model.
+HMP remains required for unseen environments, unseen genotypes, combined CV0,
+and recent temporal evaluation.
 
 The earlier `final_nested_evaluation_v1` single-cycle manifest is retained only
 as a failed preflight record. Its one-environment 2022 holdout must not be used
@@ -301,12 +310,17 @@ Its support-balanced successor, `final_nested_evaluation_v3`, is retained as a
 valid preflight record but was superseded before any model metrics were
 inspected because `TEST_WEIGHT` had only five holdout environments. The exact
 v3 protocol is archived as `final_evaluation_protocol_v3.json`.
+`final_nested_evaluation_v4` is retained as a failed nested-support preflight:
+its trait-balanced holdout passed, but the unconstrained country and pre-2016
+temporal folds left only one HMP GID in several training partitions. Its exact
+protocol is archived as `final_evaluation_protocol_v4.json`. The v5 holdout
+uses the v4 assignment identity, preserving the already accepted trait balance.
 
 Final reports are:
 
 ```text
-trained_models/final_nested_evaluation_v4_summary/nested_outer_fold_metrics.tsv
-trained_models/final_nested_evaluation_v4_summary/nested_outer_fold_summary.tsv
+trained_models/final_nested_evaluation_v5_summary/nested_outer_fold_metrics.tsv
+trained_models/final_nested_evaluation_v5_summary/nested_outer_fold_summary.tsv
 ```
 
 They include fold means, standard deviations, 95% t confidence intervals,

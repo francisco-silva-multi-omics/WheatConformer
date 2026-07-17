@@ -75,7 +75,7 @@ def build_toy_manifests(tmp_path: Path, monkeypatch) -> tuple[pd.DataFrame, Path
     )
     protocol.update(
         {
-            "protocol_version": "toy_multitrait_quantitative_final_v4",
+            "protocol_version": "toy_multitrait_quantitative_final_v5",
             "traits": ["DAYS_TO_HEADING", "GRAIN_YIELD"],
             "climatology_eligible_traits": ["DAYS_TO_HEADING", "GRAIN_YIELD"],
             "climatology_ineligible_traits": [],
@@ -127,6 +127,11 @@ def test_frozen_protocol_blocks_discovery_seeds() -> None:
         "DAYS_TO_MATURITY",
         "GRAIN_YIELD",
     ]
+    assert protocol["protocol_version"] == "multitrait_quantitative_final_v5"
+    assert protocol["scenario_outer_folds"]["temporal_holdout"] == 3
+    assert protocol["scenario_genotype_expert_policy"]["country_holdout"][
+        "excluded_experts"
+    ] == ["K_G_HMP"]
     try:
         require_non_discovery_seed(2026, protocol)
     except ValueError as exc:
@@ -146,6 +151,17 @@ def test_archived_v3_protocol_preserves_frozen_bytes() -> None:
     assert "trait_environment_support" not in protocol
 
 
+def test_archived_v4_protocol_preserves_frozen_bytes() -> None:
+    path = Path("server_training_pipeline/final_evaluation_protocol_v4.json")
+    assert hashlib.sha256(path.read_bytes()).hexdigest() == (
+        "93b397da57e99dfdc23c3b8f6793477f2620eec8ae7d5afa07ef10ea065cf676"
+    )
+    protocol = load_protocol(path)
+    assert protocol["protocol_version"] == "multitrait_quantitative_final_v4"
+    assert protocol["scenario_outer_folds"]["temporal_holdout"] == 5
+    assert protocol["scenario_genotype_expert_policy"] == {}
+
+
 def test_manifest_is_hashed_and_final_holdout_is_excluded(tmp_path, monkeypatch) -> None:
     ledger, manifest_path, contract_path, manifest = build_toy_manifests(tmp_path, monkeypatch)
     contract = verify_manifest_contract(manifest_path, contract_path)
@@ -162,6 +178,25 @@ def test_manifest_is_hashed_and_final_holdout_is_excluded(tmp_path, monkeypatch)
     )
     assert expert_support["support_status"].eq("PASS").all()
     assert set(expert_support["kernel_expert"]) == {"K_G_HMP", "K_G_GBS"}
+    nested_support = pd.read_csv(
+        contract_path.parent / "nested_fold_genotype_expert_support.tsv", sep="\t"
+    )
+    country_hmp = nested_support[
+        nested_support["scenario"].eq("country_holdout")
+        & nested_support["kernel_expert"].eq("K_G_HMP")
+    ]
+    assert country_hmp["support_status"].eq("EXCLUDED_BY_PROTOCOL").all()
+    assert country_hmp["expert_policy"].eq("excluded_by_protocol").all()
+    temporal_required = nested_support[
+        nested_support["scenario"].eq("temporal_holdout")
+    ]
+    assert temporal_required["support_status"].eq("PASS").all()
+    assert contract["scenario_outer_folds"]["temporal_holdout"] == 3
+    assert set(
+        manifest.loc[
+            manifest["scenario"].eq("temporal_holdout"), "outer_fold"
+        ].astype(int)
+    ) == {0, 1, 2}
     final_ids = set(
         manifest.loc[manifest["partition"].eq("final_holdout"), "entity_id"]
     )
