@@ -76,6 +76,7 @@ def certify_kernel(
     seed: int,
     eligible_traits: str = "*",
     minimum_ledger_coverage: float = 1.0,
+    coverage_basis: str = "observation_rows",
     allow_partial: bool = False,
     coverage_path: Path | None = None,
     coverage_id_col: str = "",
@@ -176,16 +177,36 @@ def certify_kernel(
         eligible = ledger[
             ledger["trait_name_canonical"].fillna("").astype(str).str.upper().isin(requested)
         ]
+    if coverage_basis not in {"observation_rows", "unique_entities"}:
+        raise ValueError(
+            f"Unsupported coverage basis {coverage_basis!r} for kernel {name}"
+        )
     observed = eligible[ledger_id_col].fillna("").astype(str)
     order_id_set = set(ids)
     mapped_by_id = observed.isin(order_id_set)
     id_match_count = int(mapped_by_id.sum())
-    coverage = float(mapped_by_id.mean()) if len(mapped_by_id) else 0.0
-    coverage_ok = coverage >= minimum_ledger_coverage and (allow_partial or bool(mapped_by_id.all()))
+    observation_coverage = float(mapped_by_id.mean()) if len(mapped_by_id) else 0.0
+    observed_entity_ids = set(observed[observed.ne("")])
+    mapped_entity_ids = observed_entity_ids.intersection(order_id_set)
+    unique_entity_coverage = (
+        len(mapped_entity_ids) / len(observed_entity_ids) if observed_entity_ids else 0.0
+    )
+    coverage = (
+        observation_coverage
+        if coverage_basis == "observation_rows"
+        else unique_entity_coverage
+    )
+    coverage_ok = coverage >= minimum_ledger_coverage and (
+        allow_partial or bool(mapped_by_id.all())
+    )
     add(
         "ledger_id_coverage",
         coverage_ok,
-        f"mapped={id_match_count}/{len(observed)}; coverage={coverage:.8g}; "
+        f"basis={coverage_basis}; selected_coverage={coverage:.8g}; "
+        f"mapped_rows={id_match_count}/{len(observed)}; "
+        f"observation_coverage={observation_coverage:.8g}; "
+        f"mapped_unique_entities={len(mapped_entity_ids)}/{len(observed_entity_ids)}; "
+        f"unique_entity_coverage={unique_entity_coverage:.8g}; "
         f"minimum={minimum_ledger_coverage}; allow_partial={allow_partial}",
     )
 
@@ -225,7 +246,12 @@ def certify_kernel(
         "ledger_id_col": ledger_id_col,
         "eligible_traits": eligible_traits,
         "minimum_ledger_coverage": minimum_ledger_coverage,
+        "coverage_basis": coverage_basis,
         "ledger_id_coverage": coverage,
+        "ledger_observation_coverage": observation_coverage,
+        "ledger_unique_entity_coverage": unique_entity_coverage,
+        "ledger_unique_entity_matches": len(mapped_entity_ids),
+        "ledger_unique_entity_count": len(observed_entity_ids),
         "dimension": n,
         "dtype": str(kernel.dtype),
         "certification_status": "PASS" if all(row["status"] == "PASS" for row in checks) else "FAIL",
@@ -246,6 +272,11 @@ def certify_kernel(
         "participation_ratio": participation_ratio,
         "max_abs_asymmetry": max_asymmetry,
         "ledger_id_matches": id_match_count,
+        "ledger_unique_entity_matches": len(mapped_entity_ids),
+        "ledger_unique_entity_count": len(observed_entity_ids),
+        "ledger_observation_coverage": observation_coverage,
+        "ledger_unique_entity_coverage": unique_entity_coverage,
+        "coverage_basis": coverage_basis,
     }
     return checks, registry, spectrum
 
@@ -306,6 +337,12 @@ def main() -> None:
             "ledger_id_col": "genotype_id" if axis == "genotype" else "environment_id",
             "eligible_traits": str(row["eligible_traits"]),
             "minimum_ledger_coverage": float(row["minimum_ledger_coverage"]),
+            "coverage_basis": (
+                "observation_rows"
+                if pd.isna(row.get("coverage_basis"))
+                else str(row.get("coverage_basis", "observation_rows")).strip()
+                or "observation_rows"
+            ),
             "allow_partial": float(row["minimum_ledger_coverage"]) < 1.0,
             "coverage_path": (
                 None
@@ -362,6 +399,9 @@ def main() -> None:
     )
     print(checks_frame.to_string(index=False), flush=True)
     if result["status"] != "PASS":
+        failed = checks_frame[checks_frame["status"].eq("FAIL")]
+        print("\n=== FAILED KERNEL CERTIFICATION CHECKS ===", flush=True)
+        print(failed.to_string(index=False), flush=True)
         raise SystemExit("Multi-trait kernel certification failed")
 
 

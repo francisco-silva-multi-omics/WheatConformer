@@ -212,3 +212,44 @@ def test_registry_certification_accepts_declared_partial_expert_coverage(tmp_pat
         (out_dir / "multitrait_kernel_certification_summary.json").read_text(encoding="utf-8")
     )
     assert summary["status"] == "PASS"
+
+
+def test_unique_entity_coverage_is_not_distorted_by_row_replication(tmp_path: Path) -> None:
+    kernel_path = tmp_path / "K_E_CLIMATOLOGY.npy"
+    order_path = tmp_path / "K_E_CLIMATOLOGY_order.tsv"
+    np.save(kernel_path, np.eye(1, dtype=np.float32))
+    pd.DataFrame(
+        {"env_id": ["rare"], "compact_kernel_index": [0]}
+    ).to_csv(order_path, sep="\t", index=False)
+    ledger = pd.DataFrame(
+        {
+            "environment_id": ["common"] * 100 + ["rare"],
+            "trait_name_canonical": ["T"] * 101,
+        }
+    )
+
+    checks, registry, _ = certify_kernel(
+        name="K_E_CLIMATOLOGY",
+        biological_role="location_season_weather_climatology",
+        axis="environment",
+        kernel_path=kernel_path,
+        order_path=order_path,
+        id_col="env_id",
+        ledger=ledger,
+        ledger_index_col=None,
+        ledger_id_col="environment_id",
+        symmetry_tolerance=1e-6,
+        mean_diag_tolerance=0.05,
+        exact_eigen_limit=100,
+        seed=2026,
+        eligible_traits="T",
+        minimum_ledger_coverage=0.4,
+        coverage_basis="unique_entities",
+        allow_partial=True,
+    )
+
+    status = {row["check"]: row["status"] for row in checks}
+    assert status["ledger_id_coverage"] == "PASS"
+    assert registry["ledger_id_coverage"] == 0.5
+    assert registry["ledger_observation_coverage"] == 1 / 101
+    assert registry["ledger_unique_entity_coverage"] == 0.5
