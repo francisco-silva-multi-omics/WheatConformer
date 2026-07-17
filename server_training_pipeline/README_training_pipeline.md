@@ -301,6 +301,14 @@ as the pedigree+GBS+environment fallback, not as the full HMP-bridge model.
 HMP remains required for unseen environments, unseen genotypes, combined CV0,
 and recent temporal evaluation.
 
+The fold-local climatology expert is intentionally sparse and coverage-gated.
+Its certification uses an absolute floor of five eligible environments instead
+of a brittle percentage of the complete environment universe. Each training
+partition must also contain at least five distinct eligible climatology
+environments; otherwise that branch is deterministically dropped and recorded
+in the run's `fold_expert_support.tsv` rather than being estimated from
+insufficient support.
+
 The earlier `final_nested_evaluation_v1` single-cycle manifest is retained only
 as a failed preflight record. Its one-environment 2022 holdout must not be used
 for training or final reporting. `final_nested_evaluation_v2` is also retained

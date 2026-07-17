@@ -30,12 +30,16 @@ def factorization_training_support(
     train_ids: np.ndarray,
     factorization_mode: str,
     center: bool,
+    minimum_ids: int = 2,
 ) -> tuple[bool, str]:
     """Return whether a kernel expert is estimable from a fold's training entities."""
     unique_ids = np.unique(np.asarray(train_ids, dtype=np.int32))
     if unique_ids.size == 0:
         return False, "no_eligible_training_kernel_ids"
-    if unique_ids.size < 2:
+    required_ids = max(2, int(minimum_ids))
+    if unique_ids.size < required_ids:
+        if required_ids > 2:
+            return False, f"expert_requires_at_least_{required_ids}_training_ids"
         if factorization_mode == "train_nystrom" and center:
             return False, "centered_train_nystrom_requires_at_least_two_training_ids"
         return False, "expert_requires_at_least_two_training_ids"

@@ -70,6 +70,26 @@ def test_fold_expert_with_two_training_ids_is_estimable() -> None:
     assert reason == ""
 
 
+def test_sparse_expert_requires_declared_training_support() -> None:
+    supported, reason = factorization_training_support(
+        np.array([1, 2, 3, 4]),
+        "train_nystrom",
+        center=True,
+        minimum_ids=5,
+    )
+    assert not supported
+    assert reason == "expert_requires_at_least_5_training_ids"
+
+    supported, reason = factorization_training_support(
+        np.array([1, 2, 3, 4, 5]),
+        "train_nystrom",
+        center=True,
+        minimum_ids=5,
+    )
+    assert supported
+    assert reason == ""
+
+
 def test_tensorflow_trainer_records_factorization_provenance() -> None:
     source = (
         Path(__file__).resolve().parents[1]

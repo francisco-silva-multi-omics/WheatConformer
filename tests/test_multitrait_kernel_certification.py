@@ -7,6 +7,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from server_training_pipeline.audit_multitrait_kernels import certify_kernel
 from server_training_pipeline.prepare_multitrait_kernel_registry import compact_kernel
@@ -305,3 +306,57 @@ def test_coverage_mask_basis_uses_declared_environment_universe(tmp_path: Path) 
     assert registry["ledger_id_coverage"] == 0.01
     assert registry["ledger_unique_entity_coverage"] < 0.01
     assert registry["coverage_mask_entity_coverage"] == 0.01
+
+
+def test_sparse_climatology_uses_absolute_entity_support(tmp_path: Path) -> None:
+    kernel_path = tmp_path / "K_E_CLIMATOLOGY.npy"
+    order_path = tmp_path / "K_E_CLIMATOLOGY_order.tsv"
+    coverage_path = tmp_path / "coverage.tsv"
+    covered = [f"covered_{index}" for index in range(9)]
+    universe = covered + [f"e{index:04d}" for index in range(980)]
+    np.save(kernel_path, np.eye(len(covered), dtype=np.float32))
+    pd.DataFrame(
+        {"env_id": covered, "compact_kernel_index": np.arange(len(covered))}
+    ).to_csv(order_path, sep="\t", index=False)
+    pd.DataFrame(
+        {
+            "env_id": universe,
+            "available": [True] * len(covered) + [False] * 980,
+        }
+    ).to_csv(coverage_path, sep="\t", index=False)
+    ledger = pd.DataFrame(
+        {
+            "environment_id": covered[:8] + universe[9:20],
+            "trait_name_canonical": ["T"] * 19,
+        }
+    )
+
+    checks, registry, _ = certify_kernel(
+        name="K_E_CLIMATOLOGY",
+        biological_role="location_season_weather_climatology",
+        axis="environment",
+        kernel_path=kernel_path,
+        order_path=order_path,
+        id_col="env_id",
+        ledger=ledger,
+        ledger_index_col=None,
+        ledger_id_col="environment_id",
+        symmetry_tolerance=1e-6,
+        mean_diag_tolerance=0.05,
+        exact_eigen_limit=100,
+        seed=2026,
+        eligible_traits="T",
+        minimum_ledger_coverage=0.0,
+        coverage_basis="coverage_mask_entities",
+        minimum_eligible_entities=5,
+        allow_partial=True,
+        coverage_path=coverage_path,
+        coverage_id_col="env_id",
+        coverage_column="available",
+    )
+
+    status = {row["check"]: row["status"] for row in checks}
+    assert status["ledger_id_coverage"] == "PASS"
+    assert status["eligible_entity_support"] == "PASS"
+    assert registry["coverage_mask_entity_coverage"] == pytest.approx(9 / 989)
+    assert registry["ledger_unique_entity_coverage"] == pytest.approx(8 / 19)

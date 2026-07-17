@@ -919,10 +919,17 @@ def main() -> None:
         observed_train_ids = np.unique(
             local.loc[eligible_rows, column].to_numpy(dtype=np.int32)
         )
+        minimum_training_ids_value = spec.get("minimum_training_entities", 2)
+        minimum_training_ids = (
+            2
+            if pd.isna(minimum_training_ids_value)
+            else max(2, int(minimum_training_ids_value))
+        )
         supported, inactive_reason = factorization_training_support(
             observed_train_ids,
             effective_mode,
             centered,
+            minimum_ids=minimum_training_ids,
         )
         fold_expert_support_rows.append(
             {
@@ -931,6 +938,7 @@ def main() -> None:
                 "eligible_traits": str(spec["eligible_traits"]),
                 "eligible_training_rows": int(eligible_rows.sum()),
                 "unique_training_kernel_ids": int(observed_train_ids.size),
+                "minimum_training_kernel_ids": minimum_training_ids,
                 "effective_factorization_mode": effective_mode,
                 "kernel_centered": centered,
                 "fold_status": "ACTIVE" if supported else "DROPPED",
@@ -990,6 +998,7 @@ def main() -> None:
         "kernel",
         "eligible_training_rows",
         "unique_training_kernel_ids",
+        "minimum_training_kernel_ids",
         "fold_status",
         "inactive_reason",
     ]

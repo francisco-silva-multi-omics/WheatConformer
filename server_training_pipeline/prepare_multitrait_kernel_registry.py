@@ -84,6 +84,9 @@ def load_trait_environment_candidates(
                 "minimum_eligible_entities": int(
                     optional_text(row.get("minimum_eligible_entities"), "0")
                 ),
+                "minimum_training_entities": int(
+                    optional_text(row.get("minimum_training_entities"), "2")
+                ),
                 "coverage_path": optional_path(row.get("coverage_path"), root),
                 "coverage_id_col": optional_text(row.get("coverage_id_col"), "env_id"),
                 "coverage_column": optional_text(row.get("coverage_column")),
@@ -139,6 +142,9 @@ def load_recovered_genotype_candidates(
                 ),
                 "minimum_eligible_entities": int(
                     optional_text(row.get("minimum_eligible_entities"), "0")
+                ),
+                "minimum_training_entities": int(
+                    optional_text(row.get("minimum_training_entities"), "2")
                 ),
                 "coverage_path": optional_path(row.get("coverage_path"), root),
                 "coverage_id_col": optional_text(row.get("coverage_id_col"), source_id_col),
@@ -487,9 +493,10 @@ def main() -> None:
                 "enabled_default": True,
                 "interaction_enabled": True,
                 "rank": 64,
-                "minimum_ledger_coverage": 0.01,
+                "minimum_ledger_coverage": 0.0,
                 "coverage_basis": "coverage_mask_entities",
                 "minimum_eligible_entities": 5,
+                "minimum_training_entities": 5,
                 "coverage_path": environment_coverage_path,
                 "coverage_id_col": "env_id",
                 "coverage_column": "weather_climatology",
@@ -604,6 +611,9 @@ def main() -> None:
                 ),
                 "minimum_eligible_entities": candidate.get(
                     "minimum_eligible_entities", 0
+                ),
+                "minimum_training_entities": candidate.get(
+                    "minimum_training_entities", 2
                 ),
                 "dimension": qc["compact_dimension"],
                 "base_id_coverage": qc["base_id_coverage"],
