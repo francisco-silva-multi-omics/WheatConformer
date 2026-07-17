@@ -139,7 +139,11 @@ def assign_nested_split(
         if axis not in AXIS_COLUMNS:
             raise ValueError(f"Unsupported evaluation axis {axis!r}")
         ids = set(group["entity_id"].fillna("").astype(str))
-        masks[(axis, partition)] = _values(ledger, AXIS_COLUMNS[axis]).isin(ids).to_numpy()
+        masks[(axis, partition)] = (
+            _values(ledger, AXIS_COLUMNS[axis])
+            .isin(ids)
+            .to_numpy(dtype=bool, copy=True)
+        )
 
     final_mask = masks.get(("environment", "final_holdout"), np.zeros(len(ledger), dtype=bool))
     excluded = final_mask.copy()
@@ -162,10 +166,15 @@ def assign_nested_split(
             "temporal_holdout": "cycle",
             "country_holdout": "country",
         }[scenario]
-        test_mask = masks.get((axis, "outer_test"), np.zeros(len(ledger), dtype=bool))
-        val_mask = masks.get((axis, "inner_validation"), np.zeros(len(ledger), dtype=bool))
-        test_mask &= ~excluded
-        val_mask &= ~excluded & ~test_mask
+        test_mask = (
+            masks.get((axis, "outer_test"), np.zeros(len(ledger), dtype=bool)).copy()
+            & ~excluded
+        )
+        val_mask = (
+            masks.get((axis, "inner_validation"), np.zeros(len(ledger), dtype=bool)).copy()
+            & ~excluded
+            & ~test_mask
+        )
         train_mask = ~(test_mask | val_mask | excluded)
 
     train = np.flatnonzero(train_mask)

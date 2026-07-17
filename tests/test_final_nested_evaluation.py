@@ -199,6 +199,28 @@ def test_cv0_manifest_blocks_mixed_held_axes(tmp_path, monkeypatch) -> None:
     assert len(omitted) > 0
 
 
+def test_all_nested_scenarios_accept_arrow_backed_ledger(tmp_path, monkeypatch) -> None:
+    ledger, _, _, manifest = build_toy_manifests(tmp_path, monkeypatch)
+    for column in ["panel_sample_id", "env_kernel_id", "cycle", "country"]:
+        ledger[column] = ledger[column].astype("string[pyarrow]")
+    for scenario in [
+        "unseen_environments",
+        "unseen_genotypes",
+        "unseen_genotypes_and_environments",
+        "temporal_holdout",
+        "country_holdout",
+    ]:
+        train, val, test, _, qc = assign_nested_split(
+            ledger,
+            manifest,
+            scenario=scenario,
+            outer_fold=0,
+            inner_fold=0,
+        )
+        assert min(len(train), len(val), len(test)) > 0
+        assert qc["leakage_status"] == "pass"
+
+
 def test_fold_weight_statistics_ignore_validation_outlier() -> None:
     train = pd.DataFrame(
         {
