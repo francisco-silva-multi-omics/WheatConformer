@@ -4,6 +4,8 @@ set -euo pipefail
 ROOT="${1:-.}"
 cd "$ROOT"
 
+export PYTHONSAFEPATH=1
+
 PYTHON="${PYTHON:-python}"
 MODEL_DIR="${MULTITRAIT_MODEL_DIR:-model_kernels/stage1_pedigree_env}"
 MODEL_PREFIX="${MULTITRAIT_MODEL_PREFIX:-stage1_pedigree_env}"

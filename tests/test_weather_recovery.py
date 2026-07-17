@@ -431,6 +431,9 @@ def test_matched_weather_runner_freezes_and_verifies_complete_experiment() -> No
     multitrait = (
         repo / "scripts" / "run_multitrait_quantitative_baseline.sh"
     ).read_text()
+    finalizer = (
+        repo / "scripts" / "finalize_matched_weather_recovery_comparison.sh"
+    ).read_text()
 
     assert matched.index('run_weather_variant "$BASELINE_TAG"') < matched.index(
         'run_weather_variant "$CORRECTED_TAG"'
@@ -459,3 +462,7 @@ def test_matched_weather_runner_freezes_and_verifies_complete_experiment() -> No
     assert '--seeds "$SEEDS"' in pipeline
     assert '--modes "$MODES"' in pipeline
     assert '--traits "$TRAITS"' in pipeline
+    assert "PYTHONSAFEPATH=1" in matched
+    assert "certify_multitrait_training_metadata" in finalizer
+    assert "--allow-backfill-missing" in finalizer
+    assert "compare_multitrait_variants" in finalizer

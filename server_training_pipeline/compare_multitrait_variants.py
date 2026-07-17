@@ -225,7 +225,27 @@ def require_matching_contract(
     }
     failed = [name for name, passed in checks.items() if not passed]
     if failed:
-        raise ValueError(f"Comparison contract failed for mode={mode} seed={seed}: {failed}")
+        details: dict[str, object] = {}
+        if "training_configuration_match" in failed:
+            baseline_configuration = b_meta.get("training_configuration") or {}
+            corrected_configuration = c_meta.get("training_configuration") or {}
+            details["training_configuration"] = {
+                key: {
+                    "baseline": baseline_configuration.get(key, "<missing>"),
+                    "corrected": corrected_configuration.get(key, "<missing>"),
+                }
+                for key in sorted(
+                    set(baseline_configuration) | set(corrected_configuration)
+                )
+                if baseline_configuration.get(key)
+                != corrected_configuration.get(key)
+            }
+            if not baseline_configuration and not corrected_configuration:
+                details["training_configuration"] = "missing from both runs"
+        raise ValueError(
+            f"Comparison contract failed for mode={mode} seed={seed}: {failed}; "
+            f"details={json.dumps(details, sort_keys=True)}"
+        )
     return {
         "mode": mode,
         "seed": seed,

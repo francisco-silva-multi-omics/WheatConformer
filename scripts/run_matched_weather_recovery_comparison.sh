@@ -15,7 +15,22 @@ MODES="${MATCHED_WEATHER_MODES:-env,additive,full}"
 TRAITS="${MATCHED_WEATHER_TRAITS:-DAYS_TO_HEADING,DAYS_TO_MATURITY,PLANT_HEIGHT,GRAIN_YIELD,1000_GRAIN_WEIGHT,ABOVE_GROUND_BIOMASS,TEST_WEIGHT}"
 
 export PYTHONPATH="$CODE_ROOT:$ROOT${PYTHONPATH:+:$PYTHONPATH}"
+export PYTHONSAFEPATH=1
 mkdir -p "$ROOT/logs" "$ROOT/trained_models/model_comparisons"
+
+origin="$($PYTHON -P - <<'PY'
+from pathlib import Path
+import server_training_pipeline.compare_multitrait_variants as module
+print(Path(module.__file__).resolve())
+PY
+)"
+case "$origin" in
+  "$CODE_ROOT"/*) ;;
+  *)
+    echo "Refusing mixed deployment: comparator imported from $origin, expected $CODE_ROOT" >&2
+    exit 2
+    ;;
+esac
 
 timestamp() { date '+%Y-%m-%d %H:%M:%S'; }
 log() { printf '[%s] %s\n' "$(timestamp)" "$*"; }

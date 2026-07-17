@@ -150,6 +150,14 @@ is known to be stale or incomplete. The comparison contract must contain 12
 `PASS` rows and the runner must end with `DONE matched v1 versus v2 raw-date
 weather comparison`.
 
+If training completed but the final comparison reports that
+`training_configuration` is missing from both variants, do not retrain. Use
+`scripts/finalize_matched_weather_recovery_comparison.sh`. The finalizer enforces
+safe Python module resolution from the repository clone, backs up original metadata,
+fills only an absent configuration from the frozen runner contract, records the
+certifying commit and configuration hash, and runs the comparison directly. It
+refuses to overwrite any nonempty conflicting configuration.
+
 ## Primary outputs
 
 - `model_kernels/weather_recovery_audit_v2_raw_dates/final/weather_recovery_availability_summary.tsv`

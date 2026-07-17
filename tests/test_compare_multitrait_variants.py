@@ -7,6 +7,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
+from server_training_pipeline.certify_multitrait_training_metadata import certify_run
 from server_training_pipeline.compare_multitrait_variants import (
     compare_variants,
     main,
@@ -306,6 +307,68 @@ def test_retained_traits_are_recomputed_from_seed_specific_split_support() -> No
     assert retained == {"A"}
     b_support = support.set_index("trait_name_canonical").loc["B"]
     assert (b_support[["train", "val", "test"]] == 0).any()
+
+
+def test_missing_training_configuration_can_be_certified_without_retraining(
+    tmp_path: Path,
+) -> None:
+    write_run(
+        tmp_path,
+        "baseline",
+        "env",
+        1,
+        ["A"],
+        rmse_shift=0.0,
+        splits=("val", "test"),
+    )
+    run_dir = (
+        tmp_path
+        / "trained_models"
+        / "multitrait_quantitative_baseline_env_seed1"
+    )
+    metadata_path = next(run_dir.glob("*_run_metadata.json"))
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    expected = metadata.pop("training_configuration")
+    metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+
+    row = certify_run(
+        tmp_path,
+        "baseline",
+        "env",
+        1,
+        expected,
+        allow_backfill_missing=True,
+    )
+
+    certified = json.loads(metadata_path.read_text(encoding="utf-8"))
+    assert row["status"] == "PASS_BACKFILLED"
+    assert certified["training_configuration"] == expected
+    assert (
+        certified["training_configuration_certification"]["status"]
+        == "BACKFILLED_MISSING_METADATA"
+    )
+    assert next(run_dir.glob("*.pre_config_certification.json")).is_file()
+
+
+def test_nonempty_conflicting_training_configuration_is_never_overwritten(
+    tmp_path: Path,
+) -> None:
+    write_run(tmp_path, "baseline", "env", 1, ["A"], rmse_shift=0.0)
+    expected = {
+        "max_rank_genotype": 128,
+        "max_rank_environment": 64,
+        "latent_dim": 32,
+    }
+
+    with pytest.raises(ValueError, match="Nonempty training configuration conflicts"):
+        certify_run(
+            tmp_path,
+            "baseline",
+            "env",
+            1,
+            expected,
+            allow_backfill_missing=True,
+        )
 
 
 def test_load_run_rejects_metrics_missing_for_existing_predictions(
