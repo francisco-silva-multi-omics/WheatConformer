@@ -94,7 +94,8 @@ nohup env \
   WEATHER_RECOVERY_RUN_TRAINING="1" \
   WEATHER_RECOVERY_BASELINE_VARIANT="<current-corrected-variant>" \
   MULTITRAIT_WEIGHT_POWER="0" \
-  MULTITRAIT_INCLUDE_DISABLED_KERNELS="K_E_TGW_V2" \
+  MULTITRAIT_INCLUDE_DISABLED_KERNELS="K_E_TGW_V2,K_E_CLIMATOLOGY" \
+  MULTITRAIT_REQUIRE_ACTIVE_KERNELS="K_E_TGW_V2,K_E_CLIMATOLOGY" \
   bash "$CODE/scripts/run_weather_recovery_pipeline.sh" "$DATA" \
   > logs/weather_recovery_v2_raw_dates_training.nohup.log 2>&1 &
 ```
@@ -106,15 +107,25 @@ validation normalized RMSE and Pearson, at least 75% seed-level wins for each, a
 at least 60% validation seed-trait RMSE wins. Otherwise the decision remains
 `retain_current_corrected_kernel`.
 
-### Matched v1 versus v2 experiment
+### Matched three-arm experiment
 
-When the v1 model grid has not been trained, use the matched runner instead of
-running v2 alone. It builds or resumes all 12 v1 runs and all 12 v2 runs
-(three modes by four seeds), recomputes trait support from the frozen ledger using
+Use the matched runner instead of running a recovered variant alone. It preserves
+three scientifically distinct arms:
+
+1. `weather_recovery_v1_no_climatology_certified`: current corrected weather/stress components with
+   `K_E_CLIMATOLOGY` explicitly forbidden.
+2. `weather_recovery_v1_climatology`: the same inputs with the separate
+   climatology expert active. Comparing arms 1 and 2 isolates climatology.
+3. `weather_recovery_v2_raw_dates_climatology`: climatology plus accepted raw-trial
+   date recovery. Comparing arms 2 and 3 isolates raw-date recovery; comparing arms
+   1 and 3 measures the complete recovery package.
+
+It builds or resumes 12 runs per arm (three modes by four seeds), recomputes trait
+support from the frozen ledger using
 the training rule of at least 100 training rows and 20 rows in both validation and
 test, verifies that run metadata contains exactly that seed-specific retained set,
 checks that metrics exactly cover the split/trait pairs present in each prediction
-ledger, and requires v1 and v2 to have identical evaluable pairs. A trait that does
+ledger, and requires paired arms to have identical evaluable pairs. A trait that does
 not meet the per-seed support rule is reported as support-filtered rather than
 assigned a fabricated metric. The runner only then produces the validation-only
 adoption decision:
@@ -141,14 +152,24 @@ nohup env \
   WEATHER_RECOVERY_WORKERS="4" \
   MATCHED_WEATHER_FORCE="0" \
   bash "$CODE/scripts/run_matched_weather_recovery_comparison.sh" "$DATA" \
-  > logs/matched_weather_recovery_v1_vs_v2.nohup.log 2>&1 &
+  > logs/matched_weather_recovery_three_arm.nohup.log 2>&1 &
 ```
 
 The runner is sequential to avoid competing for server RAM and CPU. Existing
-complete runs are reused. Set `MATCHED_WEATHER_FORCE=1` only when an existing run
-is known to be stale or incomplete. The comparison contract must contain 12
-`PASS` rows and the runner must end with `DONE matched v1 versus v2 raw-date
-weather comparison`.
+complete runs are reused only when their active-kernel set and content identities
+for the ledger, registry, kernels, orders, and coverage masks match the freshly
+certified inputs. The no-climatology arm requires `K_E_TGW_V2` and forbids
+`K_E_CLIMATOLOGY`; both recovery arms require both experts. A stale run with the
+wrong active-kernel set is rebuilt automatically. Set `MATCHED_WEATHER_FORCE=1`
+only when an otherwise complete run is known to be invalid. Each of the three
+comparison contracts must contain 12 `PASS` rows and the runner must end with
+`DONE three-arm weather recovery and climatology comparison`.
+
+The earlier `weather_recovery_v2_raw_dates` comparison remains a valid isolated
+raw-date/API-weather result without the climatology expert. It must not be described
+as a test of the complete recovery hierarchy merely because the comparator listed
+`K_E_CLIMATOLOGY` as an allowed addition; the kernel must appear in
+`corrected_active_kernels` to have participated in training.
 
 If training completed but the final comparison reports that
 `training_configuration` is missing from both variants, do not retrain. Use

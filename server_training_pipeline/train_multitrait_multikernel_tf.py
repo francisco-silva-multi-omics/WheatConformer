@@ -14,9 +14,11 @@ import tensorflow as tf
 
 try:
     from .kernel_factorization import effective_factorization_mode, kernel_factors
+    from .kernel_registry_contract import training_input_identities
     from .split_utils import canonical_split_mode, make_split, split_group_column, split_leakage_record
 except ImportError:
     from kernel_factorization import effective_factorization_mode, kernel_factors
+    from kernel_registry_contract import training_input_identities
     from split_utils import canonical_split_mode, make_split, split_group_column, split_leakage_record
 
 
@@ -978,6 +980,9 @@ def main() -> None:
         },
         "rows": {"train": len(train), "val": len(val), "test": len(test)},
         "active_kernels": registry["kernel"].tolist(),
+        "training_input_identities": training_input_identities(
+            certification, registry["kernel"].tolist()
+        ),
         "training_configuration": {
             "max_rank_genotype": args.max_rank_genotype,
             "max_rank_environment": args.max_rank_environment,

@@ -24,6 +24,8 @@ TRAITS="${MULTITRAIT_TRAITS:-DAYS_TO_HEADING,DAYS_TO_MATURITY,PLANT_HEIGHT,GRAIN
 FORCE="${MULTITRAIT_FORCE:-0}"
 EXCLUDE_KERNELS="${MULTITRAIT_EXCLUDE_KERNELS:-}"
 INCLUDE_DISABLED_KERNELS="${MULTITRAIT_INCLUDE_DISABLED_KERNELS:-}"
+REQUIRE_ACTIVE_KERNELS="${MULTITRAIT_REQUIRE_ACTIVE_KERNELS:-}"
+FORBID_ACTIVE_KERNELS="${MULTITRAIT_FORBID_ACTIVE_KERNELS:-}"
 RANK_G="${MULTITRAIT_RANK_G:-128}"
 RANK_E="${MULTITRAIT_RANK_E:-64}"
 LATENT_DIM="${MULTITRAIT_LATENT_DIM:-16}"
@@ -51,7 +53,11 @@ run_is_complete() {
     "$ledger" "$MIN_TRAIN_ROWS_PER_TRAIT" "$MIN_EVAL_ROWS_PER_TRAIT" \
     "$RANK_G" "$RANK_E" "$LATENT_DIM" "$EPOCHS" "$BATCH_SIZE" \
     "$LEARNING_RATE" "$WEIGHT_DECAY" "$PATIENCE" \
-    "$INTRA_OP_THREADS" "$INTER_OP_THREADS" <<'PY'
+    "$INTRA_OP_THREADS" "$INTER_OP_THREADS" "$registry" \
+    "$INCLUDE_DISABLED_KERNELS" "$EXCLUDE_KERNELS" \
+    "$REQUIRE_ACTIVE_KERNELS" "$FORBID_ACTIVE_KERNELS" \
+    "$LEDGER_DIR/certification/multitrait_kernel_certification_summary.json" <<'PY'
+import json
 import sys
 from pathlib import Path
 
@@ -59,6 +65,11 @@ from server_training_pipeline.compare_multitrait_variants import (
     csv_values,
     load_run,
     retained_traits_for_split,
+)
+from server_training_pipeline.kernel_registry_contract import (
+    active_kernel_names,
+    require_active_kernel_contract,
+    training_input_identities,
 )
 
 (
@@ -80,6 +91,12 @@ from server_training_pipeline.compare_multitrait_variants import (
     patience,
     intra_op_threads,
     inter_op_threads,
+    registry_path,
+    include_disabled_kernels,
+    exclude_kernels,
+    require_active_kernels,
+    forbid_active_kernels,
+    certification_summary_path,
 ) = sys.argv[1:]
 traits = set(csv_values(traits_csv))
 expected_configuration = {
@@ -124,6 +141,22 @@ try:
         int(seed),
     )
     metadata = run["metadata"]
+    registry = pd.read_csv(registry_path, sep="\t")
+    expected_active_kernels = active_kernel_names(
+        registry,
+        include_disabled=include_disabled_kernels,
+        exclude=exclude_kernels,
+        retained_traits=expected_retained_traits,
+    )
+    require_active_kernel_contract(
+        expected_active_kernels,
+        required=require_active_kernels,
+        forbidden=forbid_active_kernels,
+    )
+    certification = json.loads(Path(certification_summary_path).read_text(encoding="utf-8"))
+    expected_input_identities = training_input_identities(
+        certification, expected_active_kernels
+    )
     checks = {
         "prediction_metric_grid": bool(run["prediction_metric_keys"]),
         "retained_traits": set(metadata.get("traits", []))
@@ -131,6 +164,10 @@ try:
         "model_label": metadata.get("model_label") == model_label,
         "training_configuration": metadata.get("training_configuration")
         == expected_configuration,
+        "active_kernels": set(metadata.get("active_kernels", []))
+        == expected_active_kernels,
+        "training_input_identities": metadata.get("training_input_identities")
+        == expected_input_identities,
     }
     failed = [name for name, passed in checks.items() if not passed]
     if failed:
@@ -201,6 +238,27 @@ log "START prepare aligned K_A, HMP/GBS K_G, and environment experts"
 log "DONE prepare kernel experts"
 
 registry="$EXPERT_DIR/multitrait_kernel_registry.tsv"
+"$PYTHON" - "$registry" "$INCLUDE_DISABLED_KERNELS" "$EXCLUDE_KERNELS" \
+  "$REQUIRE_ACTIVE_KERNELS" "$FORBID_ACTIVE_KERNELS" <<'PY'
+import sys
+
+import pandas as pd
+
+from server_training_pipeline.kernel_registry_contract import (
+    active_kernel_names,
+    require_active_kernel_contract,
+)
+
+registry_path, include_disabled, exclude, required, forbidden = sys.argv[1:]
+registry = pd.read_csv(registry_path, sep="\t")
+active = active_kernel_names(
+    registry,
+    include_disabled=include_disabled,
+    exclude=exclude,
+)
+require_active_kernel_contract(active, required=required, forbidden=forbidden)
+print("Active-kernel contract:", ";".join(sorted(active)))
+PY
 log "START certify complete kernel-expert registry"
 "$PYTHON" -m server_training_pipeline.audit_multitrait_kernels \
   --root . \

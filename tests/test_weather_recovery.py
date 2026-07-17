@@ -435,17 +435,25 @@ def test_matched_weather_runner_freezes_and_verifies_complete_experiment() -> No
         repo / "scripts" / "finalize_matched_weather_recovery_comparison.sh"
     ).read_text()
 
-    assert matched.index('run_weather_variant "$BASELINE_TAG"') < matched.index(
-        'run_weather_variant "$CORRECTED_TAG"'
+    assert matched.index('"$CURRENT_TAG" "$CURRENT_VARIANT"') < matched.index(
+        '"$CLIMATOLOGY_TAG" "$CLIMATOLOGY_VARIANT"'
+    )
+    assert matched.index('"$CLIMATOLOGY_TAG" "$CLIMATOLOGY_VARIANT"') < matched.index(
+        '"$CORRECTED_TAG" "$CORRECTED_VARIANT"'
     )
     assert 'MULTITRAIT_WEIGHT_POWER="0"' in matched
-    assert 'MULTITRAIT_INCLUDE_DISABLED_KERNELS="K_E_TGW_V2"' in matched
+    assert '"K_E_TGW_V2,K_E_CLIMATOLOGY"' in matched
+    assert 'MULTITRAIT_REQUIRE_ACTIVE_KERNELS="$require_active"' in matched
+    assert 'MULTITRAIT_FORBID_ACTIVE_KERNELS="$forbid_active"' in matched
+    assert '"K_E_CLIMATOLOGY" "K_E_CLIMATOLOGY"' in matched
     assert 'MULTITRAIT_SEEDS="$SEEDS"' in matched
     assert 'MULTITRAIT_MODES="$MODES"' in matched
     assert 'MULTITRAIT_TRAITS="$TRAITS"' in matched
     assert 'verify_variant "$variant"' in matched
     assert "run_is_complete" in multitrait
     assert "training_configuration" in multitrait
+    assert "active_kernels" in multitrait
+    assert "require_active_kernel_contract" in multitrait
     assert "expected_retained_traits" in multitrait
     assert "MIN_TRAIN_ROWS_PER_TRAIT" in multitrait
     assert "MIN_EVAL_ROWS_PER_TRAIT" in multitrait

@@ -6,10 +6,12 @@ ROOT="$(cd "$ROOT" && pwd)"
 CODE_ROOT="${WHEATCONFORMER_CODE_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 PYTHON="${PYTHON:-python}"
 TRIAL_ROOT="${WEATHER_RECOVERY_TRIAL_ROOT:-$ROOT/TRIALS_AND_NURSERIES}"
-BASELINE_TAG="${MATCHED_WEATHER_BASELINE_TAG:-v1}"
-CORRECTED_TAG="${MATCHED_WEATHER_CORRECTED_TAG:-v2_raw_dates}"
-BASELINE_VARIANT="${MATCHED_WEATHER_BASELINE_VARIANT:-weather_recovery_v1}"
-CORRECTED_VARIANT="${MATCHED_WEATHER_CORRECTED_VARIANT:-weather_recovery_v2_raw_dates}"
+CURRENT_TAG="${MATCHED_WEATHER_CURRENT_TAG:-v1_no_climatology_certified}"
+CLIMATOLOGY_TAG="${MATCHED_WEATHER_CLIMATOLOGY_TAG:-v1_climatology}"
+CORRECTED_TAG="${MATCHED_WEATHER_CORRECTED_TAG:-v2_raw_dates_climatology}"
+CURRENT_VARIANT="${MATCHED_WEATHER_CURRENT_VARIANT:-weather_recovery_v1_no_climatology_certified}"
+CLIMATOLOGY_VARIANT="${MATCHED_WEATHER_CLIMATOLOGY_VARIANT:-weather_recovery_v1_climatology}"
+CORRECTED_VARIANT="${MATCHED_WEATHER_CORRECTED_VARIANT:-weather_recovery_v2_raw_dates_climatology}"
 SEEDS="${MATCHED_WEATHER_SEEDS:-2026,2027,2028,2029}"
 MODES="${MATCHED_WEATHER_MODES:-env,additive,full}"
 TRAITS="${MATCHED_WEATHER_TRAITS:-DAYS_TO_HEADING,DAYS_TO_MATURITY,PLANT_HEIGHT,GRAIN_YIELD,1000_GRAIN_WEIGHT,ABOVE_GROUND_BIOMASS,TEST_WEIGHT}"
@@ -99,6 +101,10 @@ run_weather_variant() {
   local variant="$2"
   local discover_raw_dates="$3"
   local baseline_variant="$4"
+  local include_disabled="$5"
+  local require_active="$6"
+  local exclude_kernels="$7"
+  local forbid_active="$8"
 
   log "START matched weather variant=$variant tag=$tag"
   env \
@@ -116,7 +122,10 @@ run_weather_variant() {
     MULTITRAIT_SEEDS="$SEEDS" \
     MULTITRAIT_MODES="$MODES" \
     MULTITRAIT_WEIGHT_POWER="0" \
-    MULTITRAIT_INCLUDE_DISABLED_KERNELS="K_E_TGW_V2" \
+    MULTITRAIT_INCLUDE_DISABLED_KERNELS="$include_disabled" \
+    MULTITRAIT_REQUIRE_ACTIVE_KERNELS="$require_active" \
+    MULTITRAIT_EXCLUDE_KERNELS="$exclude_kernels" \
+    MULTITRAIT_FORBID_ACTIVE_KERNELS="$forbid_active" \
     MULTITRAIT_REQUIRE_TRAIT_ENV_MANIFEST="1" \
     MULTITRAIT_RANK_G="${MULTITRAIT_RANK_G:-128}" \
     MULTITRAIT_RANK_E="${MULTITRAIT_RANK_E:-64}" \
@@ -132,21 +141,50 @@ run_weather_variant() {
   log "DONE matched weather variant=$variant"
 }
 
-log "START matched v1 versus v2 raw-date weather comparison"
-run_weather_variant "$BASELINE_TAG" "$BASELINE_VARIANT" "0" ""
-run_weather_variant "$CORRECTED_TAG" "$CORRECTED_VARIANT" "1" "$BASELINE_VARIANT"
+log "START three-arm weather recovery and climatology comparison"
+run_weather_variant \
+  "$CURRENT_TAG" "$CURRENT_VARIANT" "0" "" \
+  "K_E_TGW_V2" "K_E_TGW_V2" "K_E_CLIMATOLOGY" "K_E_CLIMATOLOGY"
+run_weather_variant \
+  "$CLIMATOLOGY_TAG" "$CLIMATOLOGY_VARIANT" "0" "$CURRENT_VARIANT" \
+  "K_E_TGW_V2,K_E_CLIMATOLOGY" "K_E_TGW_V2,K_E_CLIMATOLOGY" "" ""
+run_weather_variant \
+  "$CORRECTED_TAG" "$CORRECTED_VARIANT" "1" "$CLIMATOLOGY_VARIANT" \
+  "K_E_TGW_V2,K_E_CLIMATOLOGY" "K_E_TGW_V2,K_E_CLIMATOLOGY" "" ""
 
-comparison="$ROOT/trained_models/model_comparisons/weather_recovery_${CORRECTED_TAG}"
-for suffix in contract paired trait_summary macro_summary trait_availability adoption_decision; do
-  path="${comparison}_${suffix}.tsv"
-  if [[ ! -s "$path" ]]; then
-    echo "Required comparison output is absent or empty: $path" >&2
-    exit 2
-  fi
+overall_tag="${CORRECTED_TAG}_vs_current"
+overall="$ROOT/trained_models/model_comparisons/weather_recovery_${overall_tag}"
+"$PYTHON" -m server_training_pipeline.compare_multitrait_variants \
+  --root "$ROOT" \
+  --baseline-variant "$CURRENT_VARIANT" \
+  --corrected-variant "$CORRECTED_VARIANT" \
+  --modes "$MODES" \
+  --seeds "$SEEDS" \
+  --traits "$TRAITS" \
+  --allow-added-kernel K_E_CLIMATOLOGY \
+  --out-prefix "$overall"
+"$PYTHON" -m server_training_pipeline.summarize_weather_recovery_adoption \
+  --root "$ROOT" \
+  --paired "${overall}_paired.tsv" \
+  --contract "${overall}_contract.tsv" \
+  --out "${overall}_adoption_decision.tsv"
+
+for comparison_tag in "$CLIMATOLOGY_TAG" "$CORRECTED_TAG" "$overall_tag"; do
+  comparison="$ROOT/trained_models/model_comparisons/weather_recovery_${comparison_tag}"
+  for suffix in contract paired trait_summary macro_summary trait_availability adoption_decision; do
+    path="${comparison}_${suffix}.tsv"
+    if [[ ! -s "$path" ]]; then
+      echo "Required comparison output is absent or empty: $path" >&2
+      exit 2
+    fi
+  done
 done
 
-log "Matched comparison contract"
-cat "${comparison}_contract.tsv"
-log "Validation-only adoption decision"
-cat "${comparison}_adoption_decision.tsv"
-log "DONE matched v1 versus v2 raw-date weather comparison"
+for comparison_tag in "$CLIMATOLOGY_TAG" "$CORRECTED_TAG" "$overall_tag"; do
+  comparison="$ROOT/trained_models/model_comparisons/weather_recovery_${comparison_tag}"
+  log "Matched comparison contract: $comparison_tag"
+  cat "${comparison}_contract.tsv"
+  log "Validation-only adoption decision: $comparison_tag"
+  cat "${comparison}_adoption_decision.tsv"
+done
+log "DONE three-arm weather recovery and climatology comparison"
