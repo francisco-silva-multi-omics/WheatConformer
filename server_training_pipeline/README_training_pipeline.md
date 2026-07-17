@@ -270,7 +270,18 @@ country_holdout
 The default runs the frozen full model. Set `FINAL_EVAL_MODES=env,additive,full`
 only for a predeclared diagnostic ablation; the outer test still cannot select
 hyperparameters. Each invocation is resumable and writes fold contracts under
-`model_kernels/final_nested_evaluation_v1/`.
+`model_kernels/final_nested_evaluation_v2/`. The final holdout is a complete
+block of recent cycle-years, accumulated without phenotype values until it
+contains at least 10% (and at least 50) of model environments, at least 20 rows,
+and at least five independent environments for every frozen trait. The builder
+refuses to freeze a block larger than 20% of environments. Inspect
+`final_holdout_preflight.json`,
+`final_holdout_cycle_support.tsv`, and `final_holdout_trait_support.tsv` before
+starting any fold.
+
+The earlier `final_nested_evaluation_v1` single-cycle manifest is retained only
+as a failed preflight record. Its one-environment 2022 holdout must not be used
+for training or final reporting.
 
 Final reports are:
 

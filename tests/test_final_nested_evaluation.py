@@ -6,12 +6,16 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from build_environment_component_kernels import (
     scale_kernel_mean_diagonal,
     standardized_kernel,
 )
-from server_training_pipeline.build_final_evaluation_manifests import main as build_manifests
+from server_training_pipeline.build_final_evaluation_manifests import (
+    choose_final_cycle_block,
+    main as build_manifests,
+)
 from server_training_pipeline.final_evaluation_contract import (
     load_protocol,
     require_non_discovery_seed,
@@ -59,6 +63,28 @@ def build_toy_manifests(tmp_path: Path, monkeypatch) -> tuple[pd.DataFrame, Path
     ledger = synthetic_ledger()
     ledger_path = tmp_path / "ledger.tsv"
     out_dir = tmp_path / "evaluation"
+    protocol_path = tmp_path / "protocol.json"
+    protocol = json.loads(
+        Path("server_training_pipeline/final_evaluation_protocol.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    protocol.update(
+        {
+            "protocol_version": "toy_multitrait_quantitative_final_v2",
+            "traits": ["DAYS_TO_HEADING", "GRAIN_YIELD"],
+            "climatology_eligible_traits": ["DAYS_TO_HEADING", "GRAIN_YIELD"],
+            "climatology_ineligible_traits": [],
+            "final_holdout_support": {
+                "minimum_environment_fraction": 0.15,
+                "minimum_environment_count": 10,
+                "maximum_environment_fraction": 0.4,
+                "minimum_rows_per_trait": 20,
+                "minimum_environments_per_trait": 5,
+            },
+        }
+    )
+    protocol_path.write_text(json.dumps(protocol), encoding="utf-8")
     ledger.to_csv(ledger_path, sep="\t", index=False)
     monkeypatch.setattr(
         sys,
@@ -69,6 +95,8 @@ def build_toy_manifests(tmp_path: Path, monkeypatch) -> tuple[pd.DataFrame, Path
             str(ledger_path),
             "--out-dir",
             str(out_dir),
+            "--protocol",
+            str(protocol_path),
         ],
     )
     build_manifests()
@@ -98,7 +126,13 @@ def test_manifest_is_hashed_and_final_holdout_is_excluded(tmp_path, monkeypatch)
     ledger, manifest_path, contract_path, manifest = build_toy_manifests(tmp_path, monkeypatch)
     contract = verify_manifest_contract(manifest_path, contract_path)
     assert contract["status"] == "frozen"
-    assert contract["final_holdout_cycle"] == "2011"
+    assert contract["final_holdout_cycle_years"] == [2011, 2010]
+    assert contract["final_holdout_environment_count"] == 10
+    assert contract["final_holdout_preflight_status"] == "pass"
+    support = pd.read_csv(
+        contract_path.parent / "final_holdout_trait_support.tsv", sep="\t"
+    )
+    assert support["support_status"].eq("PASS").all()
     final_ids = set(
         manifest.loc[manifest["partition"].eq("final_holdout"), "entity_id"]
     )
@@ -113,6 +147,37 @@ def test_manifest_is_hashed_and_final_holdout_is_excluded(tmp_path, monkeypatch)
     assert used.isdisjoint(final_ids)
     assert set(ledger.iloc[omitted]["env_kernel_id"]) >= final_ids
     assert qc["leakage_status"] == "pass"
+
+
+def test_single_recent_cycle_fails_final_holdout_preflight() -> None:
+    protocol = {
+        "traits": ["DAYS_TO_HEADING", "GRAIN_YIELD"],
+        "final_holdout_policy": "recent_cycle_block_minimum_support",
+        "final_holdout_support": {
+            "minimum_environment_fraction": 0.15,
+            "minimum_environment_count": 10,
+            "maximum_environment_fraction": 0.4,
+            "minimum_rows_per_trait": 20,
+            "minimum_environments_per_trait": 5,
+        },
+    }
+    _, environments, support, _, preflight = choose_final_cycle_block(
+        synthetic_ledger(), protocol, "2011"
+    )
+    assert len(environments) == 5
+    assert support["support_status"].eq("PASS").all()
+    assert preflight["status"] == "fail"
+    assert "below 10" in preflight["failures"][0]
+
+
+def test_manifest_contract_protects_holdout_support_artifacts(tmp_path, monkeypatch) -> None:
+    _, manifest_path, contract_path, _ = build_toy_manifests(tmp_path, monkeypatch)
+    support_path = contract_path.parent / "final_holdout_trait_support.tsv"
+    support_path.write_text(
+        support_path.read_text(encoding="utf-8") + "tampered\n", encoding="utf-8"
+    )
+    with pytest.raises(ValueError, match="trait_support hash mismatch"):
+        verify_manifest_contract(manifest_path, contract_path)
 
 
 def test_cv0_manifest_blocks_mixed_held_axes(tmp_path, monkeypatch) -> None:

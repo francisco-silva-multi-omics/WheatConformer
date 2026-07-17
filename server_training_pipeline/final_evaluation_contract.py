@@ -51,6 +51,29 @@ def load_protocol(path: Path | None = None) -> dict[str, Any]:
         raise ValueError("Frozen traits and climatology eligibility are inconsistent")
     if int(protocol.get("outer_folds", 0)) < 2 or int(protocol.get("inner_folds", 0)) < 2:
         raise ValueError("Nested evaluation requires at least two outer and inner folds")
+    support = protocol.get("final_holdout_support", {})
+    required_support = {
+        "minimum_environment_fraction",
+        "minimum_environment_count",
+        "maximum_environment_fraction",
+        "minimum_rows_per_trait",
+        "minimum_environments_per_trait",
+    }
+    if set(support) != required_support:
+        raise ValueError(
+            "Frozen final-holdout support policy is incomplete: "
+            f"expected={sorted(required_support)} observed={sorted(support)}"
+        )
+    minimum_fraction = float(support["minimum_environment_fraction"])
+    maximum_fraction = float(support["maximum_environment_fraction"])
+    if not 0 < minimum_fraction <= maximum_fraction < 1:
+        raise ValueError("Final-holdout environment fractions are invalid")
+    if int(support["minimum_environment_count"]) < 1:
+        raise ValueError("Final holdout requires at least one environment")
+    if int(support["minimum_rows_per_trait"]) < 1:
+        raise ValueError("Final holdout requires positive per-trait row support")
+    if int(support["minimum_environments_per_trait"]) < 2:
+        raise ValueError("Final holdout requires at least two environments per trait")
     protocol["traits"] = traits
     protocol["climatology_eligible_traits"] = sorted(climatology)
     protocol["protocol_path"] = str(protocol_path)

@@ -702,6 +702,18 @@ def main() -> None:
     external_split_identity: dict[str, object] = {}
     if args.split_manifest is not None:
         split_contract = verify_manifest_contract(args.split_manifest, args.split_contract)
+        if split_contract.get("protocol_sha256") != protocol["protocol_sha256"]:
+            raise SystemExit(
+                "Evaluation manifest and protocol hashes do not match: "
+                f"manifest={split_contract.get('protocol_sha256')} "
+                f"protocol={protocol['protocol_sha256']}"
+            )
+        if split_contract.get("protocol_version") != protocol["protocol_version"]:
+            raise SystemExit(
+                "Evaluation manifest and protocol versions do not match: "
+                f"manifest={split_contract.get('protocol_version')} "
+                f"protocol={protocol['protocol_version']}"
+            )
         observed_ledger_sha256 = file_sha256(args.ledger)
         if observed_ledger_sha256 != split_contract.get("ledger_sha256"):
             raise SystemExit(

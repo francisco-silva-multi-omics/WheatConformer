@@ -85,6 +85,28 @@ def verify_manifest_contract(manifest_path: Path, contract_path: Path) -> dict[s
         )
     if contract.get("status") != "frozen":
         raise ValueError("Evaluation manifest contract is not frozen")
+    protected_artifacts = (
+        "final_holdout_preflight",
+        "final_holdout_trait_support",
+        "final_holdout_cycle_support",
+        "final_holdout_environment_ids",
+    )
+    for artifact in protected_artifacts:
+        path_value = contract.get(f"{artifact}_path")
+        expected = contract.get(f"{artifact}_sha256")
+        if path_value is None and expected is None:
+            continue
+        if not path_value or not expected:
+            raise ValueError(f"Immutable {artifact} identity is incomplete")
+        artifact_path = Path(str(path_value))
+        if not artifact_path.is_file():
+            raise ValueError(f"Immutable {artifact} is absent: {artifact_path}")
+        artifact_observed = file_sha256(artifact_path)
+        if artifact_observed != expected:
+            raise ValueError(
+                f"Immutable {artifact} hash mismatch: "
+                f"expected={expected} observed={artifact_observed}"
+            )
     return contract
 
 

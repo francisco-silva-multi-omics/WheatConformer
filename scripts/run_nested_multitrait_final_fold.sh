@@ -21,7 +21,7 @@ TRAIT_ENV_MANIFEST="${FINAL_EVAL_TRAIT_ENV_MANIFEST:-model_kernels/trait_environ
 ENVIRONMENT_INPUT_DIR="${FINAL_EVAL_ENVIRONMENT_INPUT_DIR:-environment}"
 WEATHER_DIR="${FINAL_EVAL_WEATHER_DIR:?Set FINAL_EVAL_WEATHER_DIR to the frozen current-v1 weather feature directory}"
 WEATHER_AUDIT_DIR="${FINAL_EVAL_WEATHER_AUDIT_DIR:?Set FINAL_EVAL_WEATHER_AUDIT_DIR to the matching weather recovery audit directory}"
-EVALUATION_DIR="${FINAL_EVAL_DIR:-model_kernels/final_nested_evaluation_v1}"
+EVALUATION_DIR="${FINAL_EVAL_DIR:-model_kernels/final_nested_evaluation_v2}"
 MODES="${FINAL_EVAL_MODES:-full}"
 FORCE="${FINAL_EVAL_FORCE:-0}"
 
@@ -105,6 +105,29 @@ if [[ ! -s "$MANIFEST" || ! -s "$CONTRACT" ]]; then
     --protocol "$PROTOCOL" \
     --out-dir "$EVALUATION_DIR"
 fi
+
+"$PYTHON" - "$PROTOCOL" "$CONTRACT" <<'PY'
+import hashlib
+import json
+import sys
+from pathlib import Path
+
+protocol_path, contract_path = map(Path, sys.argv[1:])
+protocol = json.loads(protocol_path.read_text(encoding="utf-8"))
+contract = json.loads(contract_path.read_text(encoding="utf-8"))
+protocol_sha256 = hashlib.sha256(protocol_path.read_bytes()).hexdigest()
+checks = {
+    "protocol_version": contract.get("protocol_version") == protocol.get("protocol_version"),
+    "protocol_sha256": contract.get("protocol_sha256") == protocol_sha256,
+    "preflight": contract.get("final_holdout_preflight_status") == "pass",
+}
+failed = [name for name, passed in checks.items() if not passed]
+if failed:
+    raise SystemExit(
+        "Evaluation contract is stale or failed preflight; rebuild in a new directory: "
+        + ", ".join(failed)
+    )
+PY
 
 log "EXPORT outer-training IDs scenario=$SCENARIO outer_fold=$OUTER_FOLD"
 "$PYTHON" -m server_training_pipeline.export_final_evaluation_fold \
