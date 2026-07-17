@@ -3,7 +3,12 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from server_training_pipeline.observation_weights import effective_sample_size, stabilize_precision_weights
+from server_training_pipeline.observation_weights import (
+    apply_precision_weight_transform,
+    effective_sample_size,
+    fit_precision_weight_transform,
+    stabilize_precision_weights,
+)
 
 
 def test_trait_weights_are_finite_mean_one_and_preserve_raw_values() -> None:
@@ -84,3 +89,28 @@ def test_zero_power_produces_uniform_trait_weights() -> None:
 
     np.testing.assert_allclose(output["weight_g_e"], np.ones(100))
     assert qc.loc[0, "effective_sample_fraction"] == 1.0
+
+
+def test_fold_weight_transform_owns_arrow_backed_variance_arrays() -> None:
+    frame = pd.DataFrame(
+        {
+            "trait_name_canonical": pd.Series(
+                ["A", "A", "A", "B", "B", "B"], dtype="string[pyarrow]"
+            ),
+            "var_g_e": pd.Series(
+                [1.0, 2.0, None, 2.0, np.inf, 8.0], dtype="double[pyarrow]"
+            ),
+        }
+    )
+    parameters = fit_precision_weight_transform(
+        frame.iloc[[0, 1, 3, 5]],
+        weight_power=0.0,
+        min_effective_sample_fraction=1.0,
+        max_top_1pct_share=1.0,
+    )
+    output = apply_precision_weight_transform(frame, parameters)
+
+    assert np.isfinite(output["weight_g_e"]).all()
+    assert output["weight_g_e"].gt(0).all()
+    assert bool(output.loc[2, "weight_variance_imputed"])
+    assert bool(output.loc[4, "weight_variance_imputed"])

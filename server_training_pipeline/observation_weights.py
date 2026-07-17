@@ -4,6 +4,11 @@ import numpy as np
 import pandas as pd
 
 
+def _owned_float_array(values: pd.Series) -> np.ndarray:
+    """Materialize a writable array from NumPy- or Arrow-backed pandas data."""
+    return values.to_numpy(dtype=np.float64, copy=True)
+
+
 def _quantile(values: np.ndarray, q: float, fallback: float) -> float:
     if values.size == 0:
         return float(fallback)
@@ -128,7 +133,7 @@ def stabilize_precision_weights(
 
     for trait, index in trait_values.groupby(trait_values, sort=True).groups.items():
         index = pd.Index(index)
-        variance = raw_variance.loc[index].to_numpy(dtype=np.float64)
+        variance = _owned_float_array(raw_variance.loc[index])
         positive = variance[np.isfinite(variance) & (variance > 0)]
         fallback = float(np.median(positive)) if positive.size else 1.0
         variance_floor = _quantile(positive, floor_quantile, fallback)
@@ -210,7 +215,7 @@ def fit_precision_weight_transform(
         [np.inf, -np.inf], np.nan
     )
     for trait, index in traits.groupby(traits, sort=True).groups.items():
-        variance = variance_all.loc[index].to_numpy(dtype=np.float64)
+        variance = _owned_float_array(variance_all.loc[index])
         positive = variance[np.isfinite(variance) & (variance > 0)]
         fallback = float(np.median(positive)) if positive.size else 1.0
         variance_floor = _quantile(positive, floor_quantile, fallback)
@@ -285,7 +290,7 @@ def apply_precision_weight_transform(
         if trait not in lookup:
             raise ValueError(f"No train-fitted weight parameters for trait {trait!r}")
         params = lookup[trait]
-        local = variance.loc[index].to_numpy(dtype=np.float64)
+        local = _owned_float_array(variance.loc[index])
         missing_mask = ~np.isfinite(local) | (local <= 0)
         local[missing_mask] = float(params["missing_variance_fill"])
         floor_mask = local < float(params["variance_floor"])
