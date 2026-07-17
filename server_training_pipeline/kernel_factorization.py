@@ -26,6 +26,22 @@ def effective_factorization_mode(requested_mode: str, split_mode: str, warn: boo
     return requested_mode
 
 
+def factorization_training_support(
+    train_ids: np.ndarray,
+    factorization_mode: str,
+    center: bool,
+) -> tuple[bool, str]:
+    """Return whether a kernel expert is estimable from a fold's training entities."""
+    unique_ids = np.unique(np.asarray(train_ids, dtype=np.int32))
+    if unique_ids.size == 0:
+        return False, "no_eligible_training_kernel_ids"
+    if unique_ids.size < 2:
+        if factorization_mode == "train_nystrom" and center:
+            return False, "centered_train_nystrom_requires_at_least_two_training_ids"
+        return False, "expert_requires_at_least_two_training_ids"
+    return True, ""
+
+
 def kernel_factors(
     path: Path,
     rank: int,
@@ -72,11 +88,17 @@ def kernel_factors(
     order = np.argsort(vals)[::-1]
     vals = vals[order]
     vecs = vecs[:, order]
+    maximum_eigenvalue = float(vals[0]) if vals.size else float("nan")
     keep = vals > 1e-8
     vals = vals[keep][:rank]
     vecs = vecs[:, keep][:, :rank]
     if vals.size == 0:
-        raise ValueError(f"Kernel has no positive eigenvalues above tolerance: {path}")
+        raise ValueError(
+            f"Kernel has no positive eigenvalues above tolerance: {path}; "
+            f"factorization_mode={factorization_mode}; "
+            f"train_kernel_dimension={K_train.shape[0]}; centered={center}; "
+            f"jitter={jitter}; maximum_eigenvalue={maximum_eigenvalue:.8g}"
+        )
     if factorization_mode == "full_transductive":
         factors = vecs * np.sqrt(vals)[None, :]
     else:

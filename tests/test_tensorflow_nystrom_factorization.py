@@ -7,6 +7,7 @@ import pytest
 
 from server_training_pipeline.kernel_factorization import (
     effective_factorization_mode,
+    factorization_training_support,
     kernel_factors,
     retained_eigenvalues,
 )
@@ -49,6 +50,24 @@ def test_cv1_genotype_train_ids_define_strict_kernel_dimension(tmp_path: Path) -
     assert factors.shape[0] == 5
     assert metadata["train_kernel_dimension"] == 3
     assert metadata["rank_retained"] <= 3
+
+
+def test_centered_fold_expert_with_one_training_id_is_not_estimable() -> None:
+    supported, reason = factorization_training_support(
+        np.array([7, 7]), "train_nystrom", center=True
+    )
+
+    assert not supported
+    assert reason == "centered_train_nystrom_requires_at_least_two_training_ids"
+
+
+def test_fold_expert_with_two_training_ids_is_estimable() -> None:
+    supported, reason = factorization_training_support(
+        np.array([7, 11, 7]), "train_nystrom", center=True
+    )
+
+    assert supported
+    assert reason == ""
 
 
 def test_tensorflow_trainer_records_factorization_provenance() -> None:

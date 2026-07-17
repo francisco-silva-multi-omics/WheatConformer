@@ -14,7 +14,11 @@ import tensorflow as tf
 
 try:
     from .final_evaluation_contract import file_sha256, load_protocol, require_non_discovery_seed
-    from .kernel_factorization import effective_factorization_mode, kernel_factors
+    from .kernel_factorization import (
+        effective_factorization_mode,
+        factorization_training_support,
+        kernel_factors,
+    )
     from .kernel_registry_contract import training_input_identities
     from .nested_evaluation import (
         SCENARIO_MODES,
@@ -29,7 +33,11 @@ try:
     from .split_utils import canonical_split_mode, make_split, split_group_column, split_leakage_record
 except ImportError:
     from final_evaluation_contract import file_sha256, load_protocol, require_non_discovery_seed
-    from kernel_factorization import effective_factorization_mode, kernel_factors
+    from kernel_factorization import (
+        effective_factorization_mode,
+        factorization_training_support,
+        kernel_factors,
+    )
     from kernel_registry_contract import training_input_identities
     from nested_evaluation import (
         SCENARIO_MODES,
@@ -491,6 +499,24 @@ def add_expert_indices(
     return ledger, columns, pd.DataFrame(coverage_rows)
 
 
+def assign_active_marker_coverage(
+    frame: pd.DataFrame,
+    registry: pd.DataFrame,
+    expert_columns: list[str],
+) -> None:
+    marker_columns = [
+        column
+        for column, (_, spec) in zip(expert_columns, registry.iterrows())
+        if str(spec["kernel"]).startswith("K_G_")
+    ]
+    frame["has_marker_kernel"] = (
+        frame[marker_columns].ge(0).any(axis=1) if marker_columns else False
+    )
+    frame["genomic_coverage_group"] = np.where(
+        frame["has_marker_kernel"], "marker_available", "pedigree_only"
+    )
+
+
 def make_dataset(
     frame: pd.DataFrame,
     expert_columns: list[str],
@@ -881,15 +907,46 @@ def main() -> None:
     centered = not args.no_center_kernels
     factor_configurations = []
     train_ids_by_expert = []
+    active_expert_positions = []
+    fold_expert_support_rows = []
     for expert_index, (_, spec) in enumerate(registry.iterrows()):
         column = expert_columns[expert_index]
         eligible = trait_set(spec["eligible_traits"])
         local = train if eligible is None else train[
             train["trait_name_canonical"].str.upper().isin(eligible)
         ]
-        train_ids = local.loc[local[column].ge(0), column].unique().astype(np.int32)
-        if not len(train_ids):
-            raise SystemExit(f"{spec['kernel']} has no eligible training IDs")
+        eligible_rows = local[column].ge(0)
+        observed_train_ids = np.unique(
+            local.loc[eligible_rows, column].to_numpy(dtype=np.int32)
+        )
+        supported, inactive_reason = factorization_training_support(
+            observed_train_ids,
+            effective_mode,
+            centered,
+        )
+        fold_expert_support_rows.append(
+            {
+                "kernel": str(spec["kernel"]),
+                "axis": str(spec["axis"]),
+                "eligible_traits": str(spec["eligible_traits"]),
+                "eligible_training_rows": int(eligible_rows.sum()),
+                "unique_training_kernel_ids": int(observed_train_ids.size),
+                "effective_factorization_mode": effective_mode,
+                "kernel_centered": centered,
+                "fold_status": "ACTIVE" if supported else "DROPPED",
+                "inactive_reason": inactive_reason,
+            }
+        )
+        if not supported:
+            print(
+                f"DROPPED fold-local kernel expert {spec['kernel']}: {inactive_reason}; "
+                f"eligible_training_rows={int(eligible_rows.sum())}; "
+                f"unique_training_kernel_ids={observed_train_ids.size}",
+                flush=True,
+            )
+            continue
+        active_expert_positions.append(expert_index)
+        train_ids = observed_train_ids
         if effective_mode != "train_nystrom":
             train_ids = None
         train_ids_by_expert.append(train_ids)
@@ -905,6 +962,40 @@ def main() -> None:
                 "train_index_digest": index_digest(train_ids),
             }
         )
+    fold_expert_support = pd.DataFrame(fold_expert_support_rows)
+    fold_expert_support_path = args.out_dir / f"{args.prefix}_fold_expert_support.tsv"
+    fold_expert_support.to_csv(fold_expert_support_path, sep="\t", index=False)
+    if not active_expert_positions:
+        raise SystemExit(
+            "No kernel experts have at least two eligible training IDs; "
+            f"see {fold_expert_support_path}"
+        )
+    registry = registry.iloc[active_expert_positions].copy().reset_index(drop=True)
+    expert_columns = [expert_columns[index] for index in active_expert_positions]
+    required_axes = set()
+    if not args.no_genotype_main or not args.no_interaction:
+        required_axes.add("genotype")
+    if not args.no_environment_main or not args.no_interaction:
+        required_axes.add("environment")
+    active_axes = set(registry["axis"].astype(str))
+    missing_axes = sorted(required_axes.difference(active_axes))
+    if missing_axes:
+        raise SystemExit(
+            f"Fold-local expert filtering removed required model axes {missing_axes}; "
+            f"see {fold_expert_support_path}"
+        )
+    for frame in (ledger, train, val, test):
+        assign_active_marker_coverage(frame, registry, expert_columns)
+    support_columns = [
+        "kernel",
+        "eligible_training_rows",
+        "unique_training_kernel_ids",
+        "fold_status",
+        "inactive_reason",
+    ]
+    coverage = coverage.merge(
+        fold_expert_support[support_columns], on="kernel", how="left", validate="many_to_one"
+    )
     cache_configuration = {
         "experts": factor_configurations,
         "effective_factorization_mode": effective_mode,
@@ -1151,6 +1242,10 @@ def main() -> None:
         },
         "rows": {"train": len(train), "val": len(val), "test": len(test)},
         "active_kernels": registry["kernel"].tolist(),
+        "fold_dropped_kernels": fold_expert_support.loc[
+            fold_expert_support["fold_status"].eq("DROPPED"), "kernel"
+        ].tolist(),
+        "fold_expert_support": file_identity(fold_expert_support_path),
         "training_input_identities": training_input_identities(
             certification, registry["kernel"].tolist()
         ),
