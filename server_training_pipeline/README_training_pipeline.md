@@ -362,7 +362,10 @@ python -m server_training_pipeline.audit_nested_factorization_provenance \
   --out-dir audit/final_nested_factorization_provenance
 ```
 
-The JSON status must be `PASS` before the aggregate reports are used. A
+The JSON `reporting_status` must be `PASS` before the aggregate reports are
+used. `run_inventory_status` can remain `FAIL` only for explicitly unreferenced
+historical directories listed by the audit; referenced decisions, ensembles,
+and summaries must all be valid. A
 temporal or country run that records `full_transductive` is invalid and must be
 rebuilt. The audit narrowly preserves historical unseen-environment,
 unseen-genotype, and combined-CV0 runs whose metadata proves that every active

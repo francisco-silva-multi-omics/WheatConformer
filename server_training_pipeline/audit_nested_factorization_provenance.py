@@ -343,7 +343,8 @@ def main() -> None:
         derived["status"].eq("EXCLUDE_AND_REBUILD").sum()
     )
     summary = {
-        "status": "PASS" if invalid_runs == 0 and invalid_artifacts == 0 else "FAIL",
+        "reporting_status": "PASS" if invalid_artifacts == 0 else "FAIL",
+        "run_inventory_status": "PASS" if invalid_runs == 0 else "FAIL",
         "current_trainer_sha256": trainer_sha256,
         "current_factorization_sha256": factorization_sha256,
         "run_directories": int(len(runs)),
