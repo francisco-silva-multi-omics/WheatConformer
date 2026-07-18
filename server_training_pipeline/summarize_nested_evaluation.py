@@ -8,6 +8,12 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from .audit_nested_factorization_provenance import (
+    VALID_STATUSES,
+    classify_metadata,
+)
+from .final_evaluation_contract import file_sha256
+
 
 FAMILY_BY_SCENARIO = {
     "unseen_environments": "unseen_environments",
@@ -72,7 +78,46 @@ def aggregate_metric(values: pd.Series) -> dict[str, float | int]:
     }
 
 
-def run_record(run_dir: Path) -> tuple[pd.DataFrame, dict[str, object]] | None:
+def normalize_ensemble_support_columns(
+    predictions: pd.DataFrame, metadata: dict[str, object]
+) -> pd.DataFrame:
+    predictions = predictions.copy()
+    ensemble = metadata.get("ensemble", {})
+    if not isinstance(ensemble, dict):
+        raise ValueError("Outer summary inputs must be completed ensemble runs")
+    expected_members = int(ensemble.get("member_count", 0))
+    if expected_members < 1:
+        raise ValueError("Outer ensemble metadata has no positive member count")
+    is_test = predictions["split"].astype(str).eq("test")
+    default_count = pd.Series(
+        np.where(is_test, expected_members, 1), index=predictions.index, dtype=float
+    )
+    for column in ["ensemble_member_count", "ensemble_expected_member_count"]:
+        observed = (
+            pd.to_numeric(predictions[column], errors="coerce")
+            if column in predictions
+            else pd.Series(np.nan, index=predictions.index, dtype=float)
+        )
+        predictions[column] = observed.fillna(default_count)
+    test_count = predictions.loc[is_test, "ensemble_member_count"]
+    test_expected = predictions.loc[is_test, "ensemble_expected_member_count"]
+    valid = bool(
+        np.isfinite(test_count).all()
+        and np.isfinite(test_expected).all()
+        and test_count.ge(1).all()
+        and test_expected.eq(expected_members).all()
+        and test_count.le(test_expected).all()
+    )
+    if not valid:
+        raise ValueError("Outer ensemble member-count columns are invalid")
+    return predictions
+
+
+def run_record(
+    run_dir: Path,
+    current_trainer_sha256: str,
+    current_factorization_sha256: str,
+) -> tuple[pd.DataFrame, dict[str, object], dict[str, object]] | None:
     metadata_paths = list(run_dir.glob("*_run_metadata.json"))
     prediction_paths = list(run_dir.glob("*_predictions.parquet"))
     if not prediction_paths:
@@ -82,14 +127,41 @@ def run_record(run_dir: Path) -> tuple[pd.DataFrame, dict[str, object]] | None:
     metadata = json.loads(metadata_paths[0].read_text(encoding="utf-8"))
     if metadata.get("evaluation_stage") != "outer_evaluation":
         return None
+    provenance_status, provenance_detail = classify_metadata(
+        metadata, current_trainer_sha256, current_factorization_sha256
+    )
+    if provenance_status not in VALID_STATUSES:
+        raise ValueError(
+            f"Refusing non-inductive or stale outer ensemble {run_dir}: "
+            f"{provenance_status}; {provenance_detail}"
+        )
     external = metadata.get("external_split", {})
-    predictions = read_table(prediction_paths[0])
+    predictions = normalize_ensemble_support_columns(
+        read_table(prediction_paths[0]), metadata
+    )
     predictions["run_dir"] = str(run_dir)
     predictions["scenario"] = external.get("scenario")
     predictions["outer_fold"] = external.get("outer_fold")
     predictions["inner_fold"] = external.get("inner_fold")
     predictions["model_label"] = metadata.get("model_label")
-    return predictions, metadata
+    predictions["factorization_provenance_status"] = provenance_status
+    lineage = {
+        "run_dir": str(run_dir),
+        "metadata_path": str(metadata_paths[0]),
+        "metadata_sha256": file_sha256(metadata_paths[0]),
+        "prediction_path": str(prediction_paths[0]),
+        "prediction_sha256": file_sha256(prediction_paths[0]),
+        "scenario": external.get("scenario"),
+        "outer_fold": external.get("outer_fold"),
+        "model_label": metadata.get("model_label"),
+        "factorization_provenance_status": provenance_status,
+        "factorization_provenance_detail": provenance_detail,
+        "trainer_sha256": metadata.get("trainer_sha256", ""),
+        "kernel_factorization_sha256": metadata.get(
+            "kernel_factorization_sha256", ""
+        ),
+    }
+    return predictions, metadata, lineage
 
 
 def main() -> None:
@@ -99,14 +171,28 @@ def main() -> None:
     parser.add_argument("--models-root", type=Path, default=Path("trained_models"))
     parser.add_argument("--run-glob", default="final_nested_*")
     parser.add_argument("--out-dir", type=Path, required=True)
+    parser.add_argument(
+        "--trainer",
+        type=Path,
+        default=Path(__file__).with_name("train_multitrait_multikernel_tf.py"),
+    )
+    parser.add_argument(
+        "--factorization-implementation",
+        type=Path,
+        default=Path(__file__).with_name("kernel_factorization.py"),
+    )
     args = parser.parse_args()
     args.out_dir.mkdir(parents=True, exist_ok=True)
 
     prediction_frames = []
+    lineage_rows = []
+    trainer_sha256 = file_sha256(args.trainer)
+    factorization_sha256 = file_sha256(args.factorization_implementation)
     for run_dir in sorted(args.models_root.glob(args.run_glob)):
-        record = run_record(run_dir)
+        record = run_record(run_dir, trainer_sha256, factorization_sha256)
         if record is not None:
             prediction_frames.append(record[0])
+            lineage_rows.append(record[2])
     if not prediction_frames:
         raise SystemExit("No completed outer-evaluation prediction files were found")
     predictions = pd.concat(prediction_frames, ignore_index=True)
@@ -114,7 +200,14 @@ def main() -> None:
         raise SystemExit("Locked final-holdout predictions must not enter nested summaries")
 
     fold_rows = []
-    group_columns = ["run_dir", "scenario", "outer_fold", "model_label", "trait_name_canonical"]
+    group_columns = [
+        "run_dir",
+        "scenario",
+        "outer_fold",
+        "model_label",
+        "trait_name_canonical",
+        "factorization_provenance_status",
+    ]
     for key, group in predictions.groupby(group_columns, dropna=False, sort=True):
         val = group[group["split"].eq("val")]
         test = group[group["split"].eq("test")]
@@ -164,6 +257,9 @@ def main() -> None:
     folds = pd.DataFrame(fold_rows)
     folds.insert(1, "generalization_family", folds["scenario"].map(FAMILY_BY_SCENARIO))
     folds.to_csv(args.out_dir / "nested_outer_fold_metrics.tsv", sep="\t", index=False)
+    pd.DataFrame(lineage_rows).to_csv(
+        args.out_dir / "nested_summary_input_provenance.tsv", sep="\t", index=False
+    )
 
     metrics = [
         "test_rmse",
@@ -177,7 +273,13 @@ def main() -> None:
         "calibration_slope_from_validation",
     ]
     summary_rows = []
-    keys = ["generalization_family", "scenario", "model_label", "trait_name_canonical"]
+    keys = [
+        "generalization_family",
+        "scenario",
+        "model_label",
+        "trait_name_canonical",
+        "factorization_provenance_status",
+    ]
     for key, group in folds.groupby(keys, dropna=False, sort=True):
         for metric in metrics:
             summary_rows.append(
