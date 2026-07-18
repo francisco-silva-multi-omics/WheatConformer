@@ -350,6 +350,24 @@ trained_models/final_nested_evaluation_v5_fixed_summary/nested_outer_fold_metric
 trained_models/final_nested_evaluation_v5_fixed_summary/nested_outer_fold_summary.tsv
 ```
 
+Before using those reports, audit every contributing run and derived artifact:
+
+```bash
+python -m server_training_pipeline.audit_nested_factorization_provenance \
+  --models-root trained_models/final_nested_evaluation_v5_fixed_runs \
+  --evaluation-dir model_kernels/final_nested_evaluation_v5_fixed \
+  --summary-dir trained_models/final_nested_evaluation_v5_fixed_summary \
+  --trainer "$WHEATCONFORMER_CODE_ROOT/server_training_pipeline/train_multitrait_multikernel_tf.py" \
+  --factorization-implementation "$WHEATCONFORMER_CODE_ROOT/server_training_pipeline/kernel_factorization.py" \
+  --out-dir audit/final_nested_factorization_provenance
+```
+
+The JSON status must be `PASS` before the aggregate reports are used. A
+temporal or country run that records `full_transductive` is invalid and must be
+rebuilt. The audit narrowly preserves historical unseen-environment,
+unseen-genotype, and combined-CV0 runs whose metadata proves that every active
+expert used train-only Nystrom factorization.
+
 They include fold means, standard deviations, 95% t confidence intervals,
 validation-fitted calibration, and improvement over the train mean. There is
 deliberately no final-holdout evaluation command in this runner. That holdout

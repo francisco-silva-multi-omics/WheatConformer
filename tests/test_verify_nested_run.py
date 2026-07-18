@@ -48,6 +48,29 @@ def test_current_implementation_identity_requires_both_hashes() -> None:
     )
 
 
+def test_current_implementation_still_requires_inductive_semantics() -> None:
+    run = metadata(
+        trainer=CURRENT_TRAINER,
+        factorization=CURRENT_FACTORIZATION,
+        scenario="temporal_holdout",
+        split_mode="gho_cycle",
+        effective_mode="full_transductive",
+    )
+    assert not implementation_identity_is_current(
+        run, CURRENT_TRAINER, CURRENT_FACTORIZATION
+    )
+
+    run = metadata(
+        trainer=CURRENT_TRAINER,
+        factorization=CURRENT_FACTORIZATION,
+        scenario="temporal_holdout",
+        split_mode="gho_cycle",
+    )
+    assert implementation_identity_is_current(
+        run, CURRENT_TRAINER, CURRENT_FACTORIZATION
+    )
+
+
 def test_certified_legacy_inductive_run_is_reusable() -> None:
     assert implementation_identity_is_current(
         metadata(), CURRENT_TRAINER, CURRENT_FACTORIZATION
