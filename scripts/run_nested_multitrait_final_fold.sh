@@ -11,6 +11,7 @@ CODE_ROOT="${WHEATCONFORMER_CODE_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." 
 export PYTHONPATH="$CODE_ROOT${PYTHONPATH:+:$PYTHONPATH}"
 export PYTHONSAFEPATH=1
 PROTOCOL="${FINAL_EVAL_PROTOCOL:-$CODE_ROOT/server_training_pipeline/final_evaluation_protocol.json}"
+ENSEMBLE_POLICY="${FINAL_EVAL_ENSEMBLE_POLICY:-$CODE_ROOT/server_training_pipeline/outer_ensemble_support_policy.json}"
 LEDGER="${FINAL_EVAL_LEDGER:-model_kernels/multitrait_pedigree_env_uniform_tgw_certified/multitrait_pedigree_uniform_tgw_certified_observations.parquet}"
 TRAIT_ORDER="${FINAL_EVAL_TRAIT_ORDER:-model_kernels/multitrait_pedigree_env_uniform_tgw_certified/multitrait_pedigree_uniform_tgw_certified_trait_order.tsv}"
 BASE_MODEL_DIR="${FINAL_EVAL_BASE_MODEL_DIR:-model_kernels/stage1_pedigree_env}"
@@ -92,6 +93,7 @@ nested_run_is_current() {
 
 for required in \
   "$PROTOCOL" \
+  "$ENSEMBLE_POLICY" \
   "$LEDGER" \
   "$TRAIT_ORDER" \
   "$ENVIRONMENT_INPUT_DIR/envdata.tsv" \
@@ -383,6 +385,7 @@ PY
     --models-root "$MODELS_DIR" \
     --run-glob "nested_outer_member_${SCENARIO}_outer${OUTER_FOLD}_${mode}_${candidate}_inner*" \
     --expected-inner-folds "$INNER_FOLDS" \
+    --support-policy "$ENSEMBLE_POLICY" \
     --out-dir "$ensemble_dir" \
     --prefix "$ensemble_prefix"
 done

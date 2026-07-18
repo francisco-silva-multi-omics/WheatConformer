@@ -125,6 +125,18 @@ def main() -> None:
         prediction = test["y_pred"].to_numpy(dtype=float)
         calibrated = intercept + slope * prediction
         baseline = test["y_pred_train_mean"].to_numpy(dtype=float)
+        ensemble_member_count = (
+            pd.to_numeric(test["ensemble_member_count"], errors="coerce")
+            if "ensemble_member_count" in test
+            else pd.Series(1, index=test.index, dtype=float)
+        )
+        ensemble_expected_member_count = (
+            pd.to_numeric(
+                test["ensemble_expected_member_count"], errors="coerce"
+            )
+            if "ensemble_expected_member_count" in test
+            else pd.Series(1, index=test.index, dtype=float)
+        )
         fold_rows.append(
             {
                 **dict(zip(group_columns, key)),
@@ -135,6 +147,11 @@ def main() -> None:
                 "test_prediction_sd_ratio": float(np.std(prediction) / np.std(y))
                 if np.std(y) > 0
                 else float("nan"),
+                "ensemble_member_count_min": int(ensemble_member_count.min()),
+                "ensemble_member_count_mean": float(ensemble_member_count.mean()),
+                "ensemble_complete_member_fraction": float(
+                    (ensemble_member_count == ensemble_expected_member_count).mean()
+                ),
                 "train_mean_rmse": rmse(y, baseline),
                 "train_mean_improvement": rmse(y, baseline) - rmse(y, prediction),
                 "calibration_intercept_from_validation": intercept,

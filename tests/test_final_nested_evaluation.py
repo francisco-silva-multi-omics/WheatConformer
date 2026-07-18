@@ -533,5 +533,152 @@ def test_outer_ensemble_averages_test_and_keeps_oof_validation(tmp_path, monkeyp
     )
     assert len(combined[combined["split"].eq("val")]) == 3
     assert combined.loc[combined["split"].eq("test"), "y_pred"].iloc[0] == 2.0
+    assert combined.loc[combined["split"].eq("test"), "ensemble_member_count"].iloc[0] == 3
     metadata = json.loads((out / "combined_run_metadata.json").read_text(encoding="utf-8"))
     assert metadata["ensemble"]["outer_test_used_for_selection"] is False
+
+
+def test_outer_ensemble_support_policy_averages_available_members(
+    tmp_path, monkeypatch
+) -> None:
+    models = tmp_path / "models"
+    for inner in range(3):
+        run = models / f"member_{inner}"
+        run.mkdir(parents=True)
+        metadata = {
+            "evaluation_stage": "outer_evaluation",
+            "model_label": "model",
+            "requested_traits": ["COMMON", "SPARSE"],
+            "support_filtered_traits": ["SPARSE"] if inner == 0 else [],
+            "external_split": {
+                "scenario": "temporal_holdout",
+                "outer_fold": 0,
+                "inner_fold": inner,
+            },
+        }
+        (run / "run_run_metadata.json").write_text(
+            json.dumps(metadata), encoding="utf-8"
+        )
+        rows = [
+            {
+                "canonical_observation_id": f"val{inner}",
+                "split": "val",
+                "phenotype_value": 1.0,
+                "trait_name_canonical": "COMMON",
+                "panel_sample_id": f"g{inner}",
+                "env_kernel_id": f"v{inner}",
+                "y_pred": 1.0,
+                "y_pred_scaled": 0.0,
+                "y_pred_train_mean": 0.5,
+            },
+            {
+                "canonical_observation_id": "common_test",
+                "split": "test",
+                "phenotype_value": 4.0,
+                "trait_name_canonical": "COMMON",
+                "panel_sample_id": "gtest",
+                "env_kernel_id": "etest",
+                "y_pred": float(inner + 1),
+                "y_pred_scaled": float(inner),
+                "y_pred_train_mean": 0.5,
+            },
+        ]
+        if inner > 0:
+            rows.append(
+                {
+                    "canonical_observation_id": "sparse_test",
+                    "split": "test",
+                    "phenotype_value": 8.0,
+                    "trait_name_canonical": "SPARSE",
+                    "panel_sample_id": "gtest",
+                    "env_kernel_id": "etest",
+                    "y_pred": float(inner * 2),
+                    "y_pred_scaled": float(inner),
+                    "y_pred_train_mean": 1.0,
+                }
+            )
+        pd.DataFrame(rows).to_csv(
+            run / "run_predictions.tsv.gz", sep="\t", index=False
+        )
+
+    policy = tmp_path / "policy.json"
+    policy.write_text(
+        json.dumps(
+            {
+                "policy_version": "test",
+                "status": "frozen",
+                "expected_member_count": 3,
+                "minimum_test_members": 2,
+                "outer_test_outcomes_used_to_define_policy": False,
+            }
+        ),
+        encoding="utf-8",
+    )
+    out = tmp_path / "ensemble"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "ensemble_nested_outer_predictions",
+            "--models-root",
+            str(models),
+            "--run-glob",
+            "member_*",
+            "--expected-inner-folds",
+            "3",
+            "--support-policy",
+            str(policy),
+            "--out-dir",
+            str(out),
+            "--prefix",
+            "combined",
+        ],
+    )
+    ensemble_outer()
+    parquet = out / "combined_predictions.parquet"
+    combined = (
+        pd.read_parquet(parquet)
+        if parquet.exists()
+        else pd.read_csv(out / "combined_predictions.tsv.gz", sep="\t")
+    )
+    test = combined[combined["split"].eq("test")].set_index(
+        "canonical_observation_id"
+    )
+    assert test.loc["common_test", "ensemble_member_count"] == 3
+    assert test.loc["sparse_test", "ensemble_member_count"] == 2
+    assert test.loc["sparse_test", "y_pred"] == 3.0
+    support = pd.read_csv(out / "combined_ensemble_support.tsv", sep="\t")
+    sparse = support.set_index("trait_name_canonical").loc["SPARSE"]
+    assert sparse["minimum_member_count"] == 2
+    metadata = json.loads(
+        (out / "combined_run_metadata.json").read_text(encoding="utf-8")
+    )
+    assert metadata["ensemble"]["partial_member_test_observations"] == 1
+    assert metadata["ensemble"]["structurally_unavailable_traits"] == []
+
+    member_two_path = models / "member_2" / "run_predictions.tsv.gz"
+    member_two = pd.read_csv(member_two_path, sep="\t")
+    member_two = pd.concat(
+        [
+            member_two,
+            pd.DataFrame(
+                [
+                    {
+                        "canonical_observation_id": "single_member_test",
+                        "split": "test",
+                        "phenotype_value": 9.0,
+                        "trait_name_canonical": "SPARSE",
+                        "panel_sample_id": "gtest",
+                        "env_kernel_id": "etest",
+                        "y_pred": 9.0,
+                        "y_pred_scaled": 1.0,
+                        "y_pred_train_mean": 1.0,
+                    }
+                ]
+            ),
+        ],
+        ignore_index=True,
+    )
+    member_two.to_csv(member_two_path, sep="\t", index=False)
+    with pytest.raises(ValueError, match="insufficient structurally eligible members"):
+        ensemble_outer()

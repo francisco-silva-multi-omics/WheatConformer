@@ -309,6 +309,15 @@ environments; otherwise that branch is deterministically dropped and recorded
 in the run's `fold_expert_support.tsv` rather than being estimated from
 insufficient support.
 
+Outer ensembles use the frozen `outer_ensemble_support_policy.json`. Test
+observations must have predictions from at least two structurally eligible
+inner members. Available predictions are averaged by canonical observation ID;
+identity columns must agree exactly, single-member predictions remain fatal,
+and member counts are written per observation and trait. This accommodates a
+trait that is legitimately support-filtered from one inner member without
+weakening split or ledger-alignment checks. The policy was frozen from support
+metadata without inspecting or using temporal outer-test outcome metrics.
+
 The earlier `final_nested_evaluation_v1` single-cycle manifest is retained only
 as a failed preflight record. Its one-environment 2022 holdout must not be used
 for training or final reporting. `final_nested_evaluation_v2` is also retained
