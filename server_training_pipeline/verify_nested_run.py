@@ -45,6 +45,7 @@ def main() -> None:
     parser.add_argument("--protocol", type=Path, required=True)
     parser.add_argument("--certification-summary", type=Path, required=True)
     parser.add_argument("--trainer", type=Path, required=True)
+    parser.add_argument("--factorization-implementation", type=Path, required=True)
     args = parser.parse_args()
 
     metadata_path = args.run_dir / f"{args.prefix}_run_metadata.json"
@@ -82,6 +83,8 @@ def main() -> None:
         "certification_sha256": metadata.get("certification_summary_sha256")
         == file_sha256(args.certification_summary),
         "trainer_sha256": metadata.get("trainer_sha256") == file_sha256(args.trainer),
+        "kernel_factorization_sha256": metadata.get("kernel_factorization_sha256")
+        == file_sha256(args.factorization_implementation),
         "candidate": metadata.get("hyperparameter_label") == args.candidate,
         "seed": int(metadata.get("seed", -1)) == args.seed,
         "model_label": metadata.get("model_label") == args.model_label,

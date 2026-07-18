@@ -8,6 +8,10 @@ import numpy as np
 
 STRICT_INDUCTIVE_SPLIT_MODES = {
     "gho_environment",
+    "gho_cycle",
+    "gho_trial",
+    "gho_country",
+    "gho_family",
     "cv1_genotype",
     "cv1_environment",
     "cv0_genotype_environment",
@@ -18,7 +22,7 @@ def effective_factorization_mode(requested_mode: str, split_mode: str, warn: boo
     if requested_mode == "train_nystrom" and split_mode not in STRICT_INDUCTIVE_SPLIT_MODES:
         if warn:
             warnings.warn(
-                f"train_nystrom is restricted to held-out genotype/environment benchmarking; "
+                f"train_nystrom is restricted to grouped entity holdout benchmarking; "
                 f"using full_transductive for {split_mode!r}.",
                 stacklevel=2,
             )

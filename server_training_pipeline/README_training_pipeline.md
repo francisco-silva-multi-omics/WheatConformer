@@ -318,6 +318,13 @@ trait that is legitimately support-filtered from one inner member without
 weakening split or ledger-alignment checks. The policy was frozen from support
 metadata without inspecting or using temporal outer-test outcome metrics.
 
+All grouped holdout scenarios, including cycle and country holdouts, use
+train-only Nyström kernel factorization. Held-out entities are projected from
+training factors and never participate in the eigendecomposition. Run metadata
+and resume verification include the factorization implementation hash, so
+results produced by an earlier transductive allowlist cannot be reused as final
+temporal or country evaluations.
+
 The earlier `final_nested_evaluation_v1` single-cycle manifest is retained only
 as a failed preflight record. Its one-environment 2022 holdout must not be used
 for training or final reporting. `final_nested_evaluation_v2` is also retained

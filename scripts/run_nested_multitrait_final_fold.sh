@@ -88,6 +88,7 @@ nested_run_is_current() {
     --manifest "$MANIFEST" --protocol "$PROTOCOL" \
     --certification-summary "$CERTIFICATION" \
     --trainer "$CODE_ROOT/server_training_pipeline/train_multitrait_multikernel_tf.py" \
+    --factorization-implementation "$CODE_ROOT/server_training_pipeline/kernel_factorization.py" \
     >/dev/null 2>&1
 }
 

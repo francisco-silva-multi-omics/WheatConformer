@@ -1212,6 +1212,9 @@ def main() -> None:
     run_metadata = {
         "tensorflow_version": tf.__version__,
         "trainer_sha256": file_sha256(Path(__file__)),
+        "kernel_factorization_sha256": file_sha256(
+            Path(effective_factorization_mode.__code__.co_filename).resolve()
+        ),
         "certification_summary_sha256": file_sha256(args.certification_summary),
         "seed": args.seed,
         "evaluation_stage": args.evaluation_stage,
