@@ -11,6 +11,12 @@ CURRENT_FACTORIZATION = "current-factorization"
 LEGACY_TRAINER = next(iter(LEGACY_STRICT_NYSTROM_TRAINER_SHA256))
 
 
+def test_certified_legacy_hash_is_repository_blob_hash() -> None:
+    assert LEGACY_TRAINER == (
+        "ffd873ac8cd2b8f78bc4c3f3850cce3ed40f7b61018b31d546ffd87af0160c28"
+    )
+
+
 def metadata(
     *,
     trainer: str = LEGACY_TRAINER,

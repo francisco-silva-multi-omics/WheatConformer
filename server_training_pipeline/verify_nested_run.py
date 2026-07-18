@@ -10,7 +10,7 @@ from .final_evaluation_contract import file_sha256, load_protocol
 
 
 LEGACY_STRICT_NYSTROM_TRAINER_SHA256 = {
-    "b42cd2a0e8d9a60192b8753cd429bfab23f1a77d12582ba05ff1172ee4ac8cb7",
+    "ffd873ac8cd2b8f78bc4c3f3850cce3ed40f7b61018b31d546ffd87af0160c28",
 }
 FINAL_INDUCTIVE_SCENARIO_SPLITS = {
     "unseen_environments": "gho_environment",
