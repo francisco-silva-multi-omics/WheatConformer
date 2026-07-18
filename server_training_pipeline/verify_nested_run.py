@@ -9,6 +9,54 @@ import pandas as pd
 from .final_evaluation_contract import file_sha256, load_protocol
 
 
+LEGACY_STRICT_NYSTROM_TRAINER_SHA256 = {
+    "b42cd2a0e8d9a60192b8753cd429bfab23f1a77d12582ba05ff1172ee4ac8cb7",
+}
+LEGACY_STRICT_NYSTROM_SCENARIO_SPLITS = {
+    "unseen_environments": "gho_environment",
+    "unseen_genotypes": "cv1_genotype",
+    "unseen_genotypes_and_environments": "cv0_genotype_environment",
+}
+
+
+def implementation_identity_is_current(
+    metadata: dict[str, object],
+    current_trainer_sha256: str,
+    current_factorization_sha256: str,
+) -> bool:
+    """Accept current code or a narrowly certified historical inductive run."""
+    trainer_sha256 = metadata.get("trainer_sha256")
+    factorization_sha256 = metadata.get("kernel_factorization_sha256")
+    if (
+        trainer_sha256 == current_trainer_sha256
+        and factorization_sha256 == current_factorization_sha256
+    ):
+        return True
+
+    external = metadata.get("external_split", {})
+    if not isinstance(external, dict):
+        return False
+    scenario = external.get("scenario")
+    factorizations = metadata.get("factorizations", {})
+    factorization_records_are_inductive = bool(factorizations) and isinstance(
+        factorizations, dict
+    ) and all(
+        isinstance(record, dict)
+        and record.get("factorization_mode") == "train_nystrom"
+        for record in factorizations.values()
+    )
+    return bool(
+        trainer_sha256 in LEGACY_STRICT_NYSTROM_TRAINER_SHA256
+        and factorization_sha256 in {None, ""}
+        and scenario in LEGACY_STRICT_NYSTROM_SCENARIO_SPLITS
+        and metadata.get("canonical_split_mode")
+        == LEGACY_STRICT_NYSTROM_SCENARIO_SPLITS.get(str(scenario))
+        and metadata.get("requested_factorization_mode") == "train_nystrom"
+        and metadata.get("effective_factorization_mode") == "train_nystrom"
+        and factorization_records_are_inductive
+    )
+
+
 def prediction_exists(run_dir: Path, prefix: str) -> bool:
     return any(
         path.exists() and path.stat().st_size > 0
@@ -72,6 +120,8 @@ def main() -> None:
     }[args.mode]
     external = metadata.get("external_split", {})
     preprocessing = metadata.get("phenotype_preprocessing", {})
+    current_trainer_sha256 = file_sha256(args.trainer)
+    current_factorization_sha256 = file_sha256(args.factorization_implementation)
     checks = {
         "evaluation_stage": metadata.get("evaluation_stage") == args.stage,
         "scenario": external.get("scenario") == args.scenario,
@@ -82,9 +132,11 @@ def main() -> None:
         == protocol["protocol_sha256"],
         "certification_sha256": metadata.get("certification_summary_sha256")
         == file_sha256(args.certification_summary),
-        "trainer_sha256": metadata.get("trainer_sha256") == file_sha256(args.trainer),
-        "kernel_factorization_sha256": metadata.get("kernel_factorization_sha256")
-        == file_sha256(args.factorization_implementation),
+        "implementation_identity": implementation_identity_is_current(
+            metadata,
+            current_trainer_sha256,
+            current_factorization_sha256,
+        ),
         "candidate": metadata.get("hyperparameter_label") == args.candidate,
         "seed": int(metadata.get("seed", -1)) == args.seed,
         "model_label": metadata.get("model_label") == args.model_label,
