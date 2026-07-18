@@ -123,6 +123,26 @@ if (( OUTER_FOLD < 0 || OUTER_FOLD >= EXPECTED_OUTER_FOLDS )); then
   exit 2
 fi
 
+"$PYTHON" - "$SCENARIO" <<'PY'
+import sys
+
+from server_training_pipeline.kernel_factorization import effective_factorization_mode
+from server_training_pipeline.nested_evaluation import SCENARIO_MODES
+
+scenario = sys.argv[1]
+split_mode = SCENARIO_MODES[scenario]
+effective = effective_factorization_mode("train_nystrom", split_mode, warn=False)
+if effective != "train_nystrom":
+    raise SystemExit(
+        "Final nested evaluation requires train-only Nystrom factorization; "
+        f"scenario={scenario}; split_mode={split_mode}; effective_mode={effective}"
+    )
+print(
+    "PASS inductive factorization preflight: "
+    f"scenario={scenario}; split_mode={split_mode}; effective_mode={effective}"
+)
+PY
+
 if [[ ! -s "$MANIFEST" || ! -s "$CONTRACT" ]]; then
   log "FREEZE immutable nested folds and final holdout"
   "$PYTHON" -m server_training_pipeline.build_final_evaluation_manifests \
@@ -394,5 +414,7 @@ done
 "$PYTHON" -m server_training_pipeline.summarize_nested_evaluation \
   --models-root "$MODELS_DIR" \
   --run-glob 'final_nested_*' \
+  --trainer "$CODE_ROOT/server_training_pipeline/train_multitrait_multikernel_tf.py" \
+  --factorization-implementation "$CODE_ROOT/server_training_pipeline/kernel_factorization.py" \
   --out-dir "$SUMMARY_DIR"
 log "DONE scenario=$SCENARIO outer_fold=$OUTER_FOLD"

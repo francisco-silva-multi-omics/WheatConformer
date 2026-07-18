@@ -133,3 +133,14 @@ def test_tensorflow_trainer_records_factorization_provenance() -> None:
         "rank_e_retained",
     ]:
         assert field in source
+
+
+def test_final_runner_has_fatal_inductive_factorization_preflight() -> None:
+    source = (
+        Path(__file__).resolve().parents[1]
+        / "scripts"
+        / "run_nested_multitrait_final_fold.sh"
+    ).read_text(encoding="utf-8")
+    assert "PASS inductive factorization preflight" in source
+    assert 'effective != "train_nystrom"' in source
+    assert "Final nested evaluation requires train-only Nystrom factorization" in source
