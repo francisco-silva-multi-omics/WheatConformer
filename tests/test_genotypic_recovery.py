@@ -27,6 +27,7 @@ from server_genotype_recovery.build_platform_kernel import (
 from server_genotype_recovery.build_haplotype_kernel import (
     build_categorical_haplotype_kernel,
 )
+from server_genotype_recovery.prepare_canonical_catalog import prepare_catalog
 from server_genotype_recovery.audit_candidate_support import main as audit_candidate_support
 from server_training_pipeline.prepare_multitrait_kernel_registry import (
     load_recovered_genotype_candidates,
@@ -40,6 +41,88 @@ def test_gid_and_iupac_call_normalization() -> None:
     assert genotype_call_to_dosage("R", "A", "G") == 1
     assert genotype_call_to_dosage("G/G", "A", "G") == 2
     assert genotype_call_to_dosage("-", "A", "G") == -1
+
+
+def test_canonical_recovery_catalog_is_rebuilt_from_trial_manifest(tmp_path: Path) -> None:
+    manifest_path = tmp_path / "metadata_outputs/all_trials_genotype_manifest_resolved.tsv"
+    observations_path = (
+        tmp_path / "integrated_database/canonical_trial_genotype_environment_plot_table.parquet"
+    )
+    hmp_path = tmp_path / "genotype_panels/hmp/hmp_K_sample_order.QCfiltered.tsv"
+    output_path = tmp_path / "audit/genotypic_recovery/canonical_genotype_catalog.csv"
+    manifest_path.parent.mkdir(parents=True)
+    observations_path.parent.mkdir(parents=True)
+    hmp_path.parent.mkdir(parents=True)
+    pd.DataFrame(
+        {
+            "CID": ["C1", "C2", "C1"],
+            "SID": ["S1", "S2", "S1"],
+            "fieldbook_gid": ["101", "102", "101"],
+            "resolved_gid": ["101", "102", "101"],
+            "panel_sample_id_expected": ["GID101", "GID102", "GID101"],
+            "cross_name": ["A/B", "", "A/B"],
+            "gid_source": ["fieldbook", "fieldbook", "fieldbook"],
+            "fieldbook_glis_gid_conflict": [False, False, False],
+            "pheno_gid_conflict": [False, False, False],
+        }
+    ).to_csv(manifest_path, sep="\t", index=False)
+    pd.DataFrame(
+        {"canonical_germplasm_key": ["GID101", "GID101", "GID102"]}
+    ).to_parquet(observations_path, index=False)
+    pd.DataFrame({"sample_id": ["GID101"]}).to_csv(hmp_path, sep="\t", index=False)
+
+    provenance = prepare_catalog(
+        root=tmp_path,
+        manifest_path=manifest_path,
+        canonical_observations_path=observations_path,
+        hmp_order_path=hmp_path,
+        output_path=output_path,
+    )
+
+    catalog = pd.read_csv(output_path)
+    assert catalog["canonical_gid"].tolist() == ["GID101", "GID102"]
+    assert catalog["canonical_observation_rows"].tolist() == [2, 1]
+    assert catalog["marker_available_hmp_qc"].tolist() == [True, False]
+    assert catalog["audit_genotypic_match"].isna().all()
+    assert provenance["prior_audit_comparison_available"] is False
+
+
+def test_canonical_recovery_catalog_imports_only_compatible_prior_flags(
+    tmp_path: Path,
+) -> None:
+    manifest_path = tmp_path / "metadata_outputs/all_trials_genotype_manifest_resolved.tsv"
+    prior_path = tmp_path / "audit/old/canonical_genotype_mapping_audited.csv"
+    output_path = tmp_path / "audit/genotypic_recovery/canonical_genotype_catalog.csv"
+    manifest_path.parent.mkdir(parents=True)
+    prior_path.parent.mkdir(parents=True)
+    pd.DataFrame(
+        {
+            "resolved_gid": ["101", "102"],
+            "panel_sample_id_expected": ["GID101", "GID102"],
+            "gid_source": ["fieldbook", "fieldbook"],
+        }
+    ).to_csv(manifest_path, sep="\t", index=False)
+    pd.DataFrame(
+        {
+            "canonical_gid": ["GID101", "GID102"],
+            "raw_identifiers": ["{}", "{}"],
+            "audit_genotypic_match": [True, False],
+        }
+    ).to_csv(prior_path, index=False)
+
+    provenance = prepare_catalog(
+        root=tmp_path,
+        manifest_path=manifest_path,
+        canonical_observations_path=None,
+        hmp_order_path=None,
+        output_path=output_path,
+        explicit_prior_audit_catalog=prior_path,
+    )
+
+    catalog = pd.read_csv(output_path)
+    assert catalog["audit_genotypic_match"].tolist() == [True, False]
+    assert provenance["prior_audit_comparison_available"] is True
+    assert provenance["prior_audit_catalog_path"] == str(prior_path)
 
 
 def test_sample_by_marker_parser_reads_only_resolved_samples(tmp_path: Path) -> None:

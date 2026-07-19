@@ -411,6 +411,10 @@ def main() -> None:
             ["dataset", "file_path", "sample_identifier", "canonical_gid"]
         )
     flags = catalog.set_index("canonical_gid")
+    preview_audit_available = (
+        "audit_genotypic_match" in flags.columns
+        and flags["audit_genotypic_match"].notna().any()
+    )
     candidates = (
         match_frame.groupby(["dataset", "canonical_gid"], as_index=False)
         .agg(
@@ -445,7 +449,9 @@ def main() -> None:
                 "matrix_axis_identifiers": int(matrix_axis["dataset"].eq(dataset).sum()),
                 "matched_unique_canonical_gids": int(subset["canonical_gid"].nunique()) if len(subset) else 0,
                 "additional_to_hmp_qc": int((~hmp).sum()) if len(subset) else 0,
-                "missed_by_preview_audit": int((~preview).sum()) if len(subset) else 0,
+                "missed_by_preview_audit": (
+                    int((~preview).sum()) if preview_audit_available and len(subset) else pd.NA
+                ),
                 "ambiguous_identifiers": int(ambiguous_frame["dataset"].eq(dataset).sum()) if len(ambiguous_frame) else 0,
                 "unmatched_identifiers": int(unmatched_frame["dataset"].eq(dataset).sum()) if len(unmatched_frame) else 0,
             }
@@ -477,8 +483,15 @@ def main() -> None:
             {"metric": "parser_errors_or_unrecognized_containers", "value": int(file_status["parser_status"].str.contains(r"read_error|unrecognized|requires_xlrd", regex=True).sum())},
             {"metric": "matrix_backed_unique_canonical_gids", "value": len(union)},
             {"metric": "matrix_backed_additional_to_hmp_qc", "value": int((~marker_flag).sum())},
-            {"metric": "matrix_backed_missed_by_preview_audit", "value": int((~preview_flag).sum())},
-            {"metric": "matrix_backed_missed_by_preview_and_hmp", "value": int((~preview_flag & ~marker_flag).sum())},
+            {"metric": "prior_preview_audit_comparison_available", "value": preview_audit_available},
+            {
+                "metric": "matrix_backed_missed_by_preview_audit",
+                "value": int((~preview_flag).sum()) if preview_audit_available else pd.NA,
+            },
+            {
+                "metric": "matrix_backed_missed_by_preview_and_hmp",
+                "value": int((~preview_flag & ~marker_flag).sum()) if preview_audit_available else pd.NA,
+            },
             {"metric": "potential_canonical_observation_rows_additional_to_hmp_qc", "value": int(observation_rows[~marker_flag].sum())},
             {"metric": "ambiguous_matrix_identifiers", "value": len(ambiguous_frame)},
             {"metric": "files_without_recognized_matrix_axis", "value": int(file_status["matrix_axis_identifiers"].astype(int).eq(0).sum())},

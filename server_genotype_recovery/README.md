@@ -50,6 +50,18 @@ QC, linear VanRaden and Gaussian/RBF kernels, retained marker/sample orders,
 kernel certification, and
 `genotype_panels/recovered/recovered_genotype_kernel_manifest.tsv`.
 
+Before scanning platforms, the runner rebuilds its canonical trial-GID catalog
+from `metadata_outputs/all_trials_genotype_manifest_resolved.tsv`. It therefore
+does not depend on a generated forensic CSV being present at a fixed path. If a
+compatible `canonical_genotype_mapping_audited.csv` exists anywhere below
+`audit/`, the latest compatible copy contributes only the historical "missed by
+preview audit" flag. Selected source paths and hashes are recorded in
+`audit/genotypic_recovery/canonical_genotype_catalog_provenance.json`.
+
+Set `CANONICAL_GENOTYPE_CATALOG` to require a specific prepared catalog, or
+`PRIOR_GENOTYPE_AUDIT_CATALOG` to require a specific compatible forensic
+catalog for the historical comparison.
+
 Recovered kernels are `enabled_default=False`. They must pass ledger alignment
 certification and multi-seed validation ablation before being admitted to the
 quantitative baseline.

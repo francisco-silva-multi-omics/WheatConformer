@@ -7,19 +7,35 @@ PLATFORMS="${PLATFORMS:-80k_hexaploid seeds_dartseq iwyp35k dartag}"
 SAVE_DOSAGE="${SAVE_DOSAGE:-1}"
 BUILD_HAPLOTYPE="${BUILD_HAPLOTYPE:-1}"
 RUN_CANDIDATE_SUPPORT_AUDIT="${RUN_CANDIDATE_SUPPORT_AUDIT:-1}"
+CANONICAL_CATALOG="${CANONICAL_GENOTYPE_CATALOG:-audit/genotypic_recovery/canonical_genotype_catalog.csv}"
+PRIOR_AUDIT_CATALOG="${PRIOR_GENOTYPE_AUDIT_CATALOG:-}"
 cd "$ROOT"
 
 mkdir -p logs audit/genotypic_recovery genotype_panels/recovered
 
+if [[ -z "${CANONICAL_GENOTYPE_CATALOG:-}" ]]; then
+  echo "[$(date '+%F %T')] START prepare canonical trial-GID catalog"
+  catalog_args=(--root . --out "$CANONICAL_CATALOG")
+  if [[ -n "$PRIOR_AUDIT_CATALOG" ]]; then
+    catalog_args+=(--prior-audit-catalog "$PRIOR_AUDIT_CATALOG")
+  fi
+  "$PYTHON" -m server_genotype_recovery.prepare_canonical_catalog "${catalog_args[@]}"
+  echo "[$(date '+%F %T')] DONE prepare canonical trial-GID catalog"
+elif [[ ! -s "$CANONICAL_CATALOG" ]]; then
+  echo "ERROR: CANONICAL_GENOTYPE_CATALOG is missing or empty: $CANONICAL_CATALOG" >&2
+  exit 1
+fi
+
 echo "[$(date '+%F %T')] START exhaustive GID recovery"
 "$PYTHON" -m audit.recover_genotypic_gid_matches \
   --root . \
+  --canonical-catalog "$CANONICAL_CATALOG" \
   --out-dir audit/genotypic_recovery
 echo "[$(date '+%F %T')] DONE exhaustive GID recovery"
 
 for platform in $PLATFORMS; do
   echo "[$(date '+%F %T')] START $platform kernel"
-  args=(--root . --platform "$platform")
+  args=(--root . --platform "$platform" --canonical-catalog "$CANONICAL_CATALOG")
   if [[ "$SAVE_DOSAGE" == "1" ]]; then
     args+=(--save-dosage)
   fi
@@ -29,7 +45,9 @@ done
 
 if [[ "$BUILD_HAPLOTYPE" == "1" ]]; then
   echo "[$(date '+%F %T')] START haplotype-block kernel"
-  "$PYTHON" -m server_genotype_recovery.build_haplotype_kernel --root .
+  "$PYTHON" -m server_genotype_recovery.build_haplotype_kernel \
+    --root . \
+    --canonical-catalog "$CANONICAL_CATALOG"
   echo "[$(date '+%F %T')] DONE haplotype-block kernel"
 fi
 
@@ -51,5 +69,6 @@ fi
 echo "[$(date '+%F %T')] Recovery outputs"
 echo "  audit/genotypic_recovery/matrix_backed_gid_dataset_summary.tsv"
 echo "  audit/genotypic_recovery/matrix_backed_gid_union_summary.tsv"
+echo "  audit/genotypic_recovery/canonical_genotype_catalog_provenance.json"
 echo "  genotype_panels/recovered/recovered_genotype_kernel_manifest.tsv"
 echo "  model_kernels/genomic_candidate_screen_v1/"
