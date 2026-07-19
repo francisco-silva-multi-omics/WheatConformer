@@ -3,12 +3,15 @@ set -euo pipefail
 
 ROOT="${1:-.}"
 PYTHON="${PYTHON:-python}"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+CODE_ROOT="${WHEATCONFORMER_CODE_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 PLATFORMS="${PLATFORMS:-80k_hexaploid seeds_dartseq iwyp35k dartag}"
 SAVE_DOSAGE="${SAVE_DOSAGE:-1}"
 BUILD_HAPLOTYPE="${BUILD_HAPLOTYPE:-1}"
 RUN_CANDIDATE_SUPPORT_AUDIT="${RUN_CANDIDATE_SUPPORT_AUDIT:-1}"
 CANONICAL_CATALOG="${CANONICAL_GENOTYPE_CATALOG:-audit/genotypic_recovery/canonical_genotype_catalog.csv}"
 PRIOR_AUDIT_CATALOG="${PRIOR_GENOTYPE_AUDIT_CATALOG:-}"
+export PYTHONPATH="$CODE_ROOT${PYTHONPATH:+:$PYTHONPATH}"
 cd "$ROOT"
 
 mkdir -p logs audit/genotypic_recovery genotype_panels/recovered
@@ -19,7 +22,7 @@ if [[ -z "${CANONICAL_GENOTYPE_CATALOG:-}" ]]; then
   if [[ -n "$PRIOR_AUDIT_CATALOG" ]]; then
     catalog_args+=(--prior-audit-catalog "$PRIOR_AUDIT_CATALOG")
   fi
-  "$PYTHON" -m server_genotype_recovery.prepare_canonical_catalog "${catalog_args[@]}"
+  "$PYTHON" -P -m server_genotype_recovery.prepare_canonical_catalog "${catalog_args[@]}"
   echo "[$(date '+%F %T')] DONE prepare canonical trial-GID catalog"
 elif [[ ! -s "$CANONICAL_CATALOG" ]]; then
   echo "ERROR: CANONICAL_GENOTYPE_CATALOG is missing or empty: $CANONICAL_CATALOG" >&2
@@ -27,7 +30,7 @@ elif [[ ! -s "$CANONICAL_CATALOG" ]]; then
 fi
 
 echo "[$(date '+%F %T')] START exhaustive GID recovery"
-"$PYTHON" -m audit.recover_genotypic_gid_matches \
+"$PYTHON" -P -m audit.recover_genotypic_gid_matches \
   --root . \
   --canonical-catalog "$CANONICAL_CATALOG" \
   --out-dir audit/genotypic_recovery
@@ -39,25 +42,25 @@ for platform in $PLATFORMS; do
   if [[ "$SAVE_DOSAGE" == "1" ]]; then
     args+=(--save-dosage)
   fi
-  "$PYTHON" -m server_genotype_recovery.build_platform_kernel "${args[@]}"
+  "$PYTHON" -P -m server_genotype_recovery.build_platform_kernel "${args[@]}"
   echo "[$(date '+%F %T')] DONE $platform kernel"
 done
 
 if [[ "$BUILD_HAPLOTYPE" == "1" ]]; then
   echo "[$(date '+%F %T')] START haplotype-block kernel"
-  "$PYTHON" -m server_genotype_recovery.build_haplotype_kernel \
+  "$PYTHON" -P -m server_genotype_recovery.build_haplotype_kernel \
     --root . \
     --canonical-catalog "$CANONICAL_CATALOG"
   echo "[$(date '+%F %T')] DONE haplotype-block kernel"
 fi
 
-"$PYTHON" -m server_genotype_recovery.combine_registry_fragments --root .
+"$PYTHON" -P -m server_genotype_recovery.combine_registry_fragments --root .
 
 LEDGER="${GENOMIC_SCREEN_LEDGER:-model_kernels/multitrait_pedigree_env_uniform_tgw_certified/multitrait_pedigree_uniform_tgw_certified_observations.parquet}"
 ENTITIES="${GENOMIC_SCREEN_ENTITIES:-model_kernels/final_nested_evaluation_v5_fixed/nested_evaluation_entities.tsv}"
 if [[ "$RUN_CANDIDATE_SUPPORT_AUDIT" == "1" && -s "$LEDGER" && -s "$ENTITIES" ]]; then
   echo "[$(date '+%F %T')] START development-only candidate support audit"
-  "$PYTHON" -m server_genotype_recovery.audit_candidate_support \
+  "$PYTHON" -P -m server_genotype_recovery.audit_candidate_support \
     --root . \
     --ledger "$LEDGER" \
     --entity-manifest "$ENTITIES"

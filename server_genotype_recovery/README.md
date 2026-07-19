@@ -28,10 +28,15 @@ the exhaustive audit records the containers in its file inventory.
 ```bash
 cd /DATA2/estancias/tesis_javier/model_DATA/genotipoXambiente
 export PYTHON="$HOME/tools/tf_wheat_cpu/bin/python"
+export WHEATCONFORMER_CODE_ROOT="$HOME/tools/WheatConformer"
 
 nohup bash scripts/run_genotypic_panel_recovery.sh . \
   > logs/genotypic_panel_recovery.nohup.log 2>&1 &
 ```
+
+The runner prepends `WHEATCONFORMER_CODE_ROOT` and invokes Python in safe-path
+mode. This prevents older Python packages copied into the data directory from
+shadowing the selected Git checkout.
 
 Run or retry selected panels without repeating the others:
 
