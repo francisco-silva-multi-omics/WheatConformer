@@ -90,6 +90,14 @@ holdout outcomes. Outputs under `model_kernels/genomic_candidate_screen_v1`
 include development coverage, fold-level support, kernel QC, and pairwise
 kernel correlations.
 
+Phase one compares each supported linear candidate separately against the two
+reference architectures. It never fits the generated "all supported linear"
+arm. Candidate pairs with at least 30 shared genotypes and absolute sampled
+kernel correlation of at least 0.90 are recorded in
+`genomic_candidate_high_redundancy_pairs.tsv`; such candidates must compete
+individually before any combination is considered. Combination and RBF arms are
+deferred to later inner-validation phases.
+
 ## Default QC
 
 - sample missingness at most `0.20`;

@@ -145,10 +145,17 @@ def pairwise_kernel_correlations(
     records = candidates.to_dict("records")
     for left_index, left in enumerate(records[:-1]):
         for right in records[left_index + 1 :]:
-            common = sorted(set(orders[left["kernel"]]).intersection(orders[right["kernel"]]))
-            if len(common) > sample_max:
+            common_all = sorted(
+                set(orders[left["kernel"]]).intersection(orders[right["kernel"]])
+            )
+            common = common_all
+            if len(common_all) > sample_max:
                 rng = np.random.default_rng(20260718)
-                common = sorted(rng.choice(np.asarray(common, dtype=object), size=sample_max, replace=False))
+                common = sorted(
+                    rng.choice(
+                        np.asarray(common_all, dtype=object), size=sample_max, replace=False
+                    )
+                )
             correlation = np.nan
             if len(common) >= 3:
                 left_lookup = {value: index for index, value in enumerate(orders[left["kernel"]])}
@@ -169,7 +176,8 @@ def pairwise_kernel_correlations(
                 {
                     "kernel_a": left["kernel"],
                     "kernel_b": right["kernel"],
-                    "shared_genotypes": len(common),
+                    "shared_genotypes": len(common_all),
+                    "sampled_shared_genotypes": len(common),
                     "sampled_upper_triangle_correlation": correlation,
                 }
             )
@@ -203,6 +211,8 @@ def main() -> None:
         "--out-dir", type=Path, default=Path("model_kernels/genomic_candidate_screen_v1")
     )
     parser.add_argument("--minimum-training-ids", type=int, default=5)
+    parser.add_argument("--redundancy-correlation-threshold", type=float, default=0.90)
+    parser.add_argument("--redundancy-min-shared-genotypes", type=int, default=30)
     args = parser.parse_args()
 
     root = args.root.resolve()
@@ -338,6 +348,20 @@ def main() -> None:
     linear_candidates = [
         name for name in recovered_names if name in eligible and not name.endswith("_RBF")
     ]
+    linear_candidate_set = set(linear_candidates)
+    high_redundancy = correlations[
+        correlations["kernel_a"].isin(linear_candidate_set)
+        & correlations["kernel_b"].isin(linear_candidate_set)
+        & correlations["shared_genotypes"].ge(args.redundancy_min_shared_genotypes)
+        & correlations["sampled_upper_triangle_correlation"]
+        .abs()
+        .ge(args.redundancy_correlation_threshold)
+    ].copy()
+    high_redundancy["decision"] = "compare_individually_before_combination"
+    redundant_peers: dict[str, list[str]] = {name: [] for name in linear_candidates}
+    for row in high_redundancy.itertuples(index=False):
+        redundant_peers[str(row.kernel_a)].append(str(row.kernel_b))
+        redundant_peers[str(row.kernel_b)].append(str(row.kernel_a))
     ablation_rows: list[dict[str, object]] = [
         {
             "architecture": "pedigree_environment_only",
@@ -345,6 +369,7 @@ def main() -> None:
             "exclude_kernels": "K_G_HMP_LINEAR,K_G_HMP_RBF,K_G_GBS_LINEAR,K_G_GBS_RBF",
             "screen_phase": "phase_1_inner_validation",
             "status": "ready",
+            "decision_note": "reference_without_marker_experts",
         },
         {
             "architecture": "frozen_existing_HMP_GBS",
@@ -352,6 +377,7 @@ def main() -> None:
             "exclude_kernels": "",
             "screen_phase": "phase_1_inner_validation",
             "status": "ready",
+            "decision_note": "frozen_existing_marker_reference",
         },
     ]
     for name in recovered_names:
@@ -374,6 +400,12 @@ def main() -> None:
                         else "blocked_by_kernel_or_fold_support"
                     )
                 ),
+                "decision_note": (
+                    "compare_individually;high_redundancy_with="
+                    + ",".join(sorted(redundant_peers.get(name, [])))
+                    if redundant_peers.get(name)
+                    else "compare_individually_before_any_combination"
+                ),
             }
         )
     ablation_rows.extend(
@@ -382,8 +414,13 @@ def main() -> None:
                 "architecture": "existing_plus_all_supported_linear_candidates",
                 "include_disabled_kernels": ",".join(linear_candidates),
                 "exclude_kernels": "",
-                "screen_phase": "phase_1_inner_validation",
-                "status": "ready" if linear_candidates else "blocked_no_supported_candidates",
+                "screen_phase": "phase_2_combination_after_individual",
+                "status": (
+                    "deferred_until_individual_candidates_selected"
+                    if linear_candidates
+                    else "blocked_no_supported_candidates"
+                ),
+                "decision_note": "combine_only_inner_validation_winners;do_not_fit_redundant_candidates_together",
             },
             {
                 "architecture": "single_step_H",
@@ -391,6 +428,7 @@ def main() -> None:
                 "exclude_kernels": "",
                 "screen_phase": "future_after_cross_platform_concordance",
                 "status": "deferred_not_constructed",
+                "decision_note": "requires_separate_single_step_construction",
             },
         ]
     )
@@ -425,6 +463,9 @@ def main() -> None:
         out_dir / "genomic_candidate_nested_fold_support_summary.tsv", sep="\t", index=False
     )
     correlations.to_csv(out_dir / "genomic_candidate_kernel_correlations.tsv", sep="\t", index=False)
+    high_redundancy.to_csv(
+        out_dir / "genomic_candidate_high_redundancy_pairs.tsv", sep="\t", index=False
+    )
     ablation.to_csv(out_dir / "genomic_candidate_ablation_plan.tsv", sep="\t", index=False)
     expected_status.to_csv(
         out_dir / "genomic_candidate_expected_panel_status.tsv", sep="\t", index=False
@@ -458,6 +499,9 @@ def main() -> None:
         "ledger": str(ledger_path),
         "entity_manifest": str(entity_manifest_path),
         "candidate_count": len(candidates),
+        "redundancy_correlation_threshold": args.redundancy_correlation_threshold,
+        "redundancy_min_shared_genotypes": args.redundancy_min_shared_genotypes,
+        "high_redundancy_pair_count": len(high_redundancy),
         "development_rows": len(development),
         "final_holdout_environment_count": len(final_environment_ids),
     }

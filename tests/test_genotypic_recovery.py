@@ -440,3 +440,8 @@ def test_candidate_support_audit_reads_ids_and_inner_support_only(
     plan = pd.read_csv(out_dir / "genomic_candidate_ablation_plan.tsv", sep="\t")
     dartag = plan[plan["architecture"].eq("existing_plus_K_G_DARTAG_LINEAR")].iloc[0]
     assert dartag["status"] == "ready"
+    combined = plan[
+        plan["architecture"].eq("existing_plus_all_supported_linear_candidates")
+    ].iloc[0]
+    assert combined["screen_phase"] == "phase_2_combination_after_individual"
+    assert combined["status"] == "deferred_until_individual_candidates_selected"
