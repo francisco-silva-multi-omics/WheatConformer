@@ -437,6 +437,22 @@ def test_candidate_support_audit_reads_ids_and_inner_support_only(
     assert provenance["status"] == "PASS"
     assert provenance["phenotype_values_read"] is False
     assert provenance["outer_test_metrics_read"] is False
+    interpretation = provenance["interpretation_contract"]
+    assert interpretation["quantitative_screen_scope"] == (
+        "standalone_K_G_baseline_inclusion_only"
+    )
+    assert interpretation["retain_certified_panels_for_regulatory_projection"] is True
+    assert interpretation["pedigree_propagated_embedding_status"] == "imputed_pedigree"
+    assert interpretation["pedigree_propagation_requires_confidence_gate"] is True
+    assert interpretation["pedigree_propagation_equivalent_to_observed_sequence"] is False
+    policy = pd.read_csv(
+        out_dir / "genomic_candidate_regulatory_retention_policy.tsv", sep="\t", dtype=str
+    )
+    policy_values = dict(zip(policy["policy"], policy["value"]))
+    assert policy_values["direct_regulatory_embedding_status"] == (
+        "observed_marker_supported_sequence"
+    )
+    assert policy_values["pedigree_propagated_embedding_status"] == "imputed_pedigree"
     plan = pd.read_csv(out_dir / "genomic_candidate_ablation_plan.tsv", sep="\t")
     dartag = plan[plan["architecture"].eq("existing_plus_K_G_DARTAG_LINEAR")].iloc[0]
     assert dartag["status"] == "ready"

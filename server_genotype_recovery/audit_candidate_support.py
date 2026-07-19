@@ -504,7 +504,47 @@ def main() -> None:
         "high_redundancy_pair_count": len(high_redundancy),
         "development_rows": len(development),
         "final_holdout_environment_count": len(final_environment_ids),
+        "interpretation_contract": {
+            "quantitative_screen_scope": "standalone_K_G_baseline_inclusion_only",
+            "retain_certified_panels_for_regulatory_projection": True,
+            "direct_regulatory_embedding_status": "observed_marker_supported_sequence",
+            "pedigree_propagated_embedding_status": "imputed_pedigree",
+            "pedigree_propagation_requires_confidence_gate": True,
+            "pedigree_propagation_equivalent_to_observed_sequence": False,
+        },
     }
+    pd.DataFrame(
+        [
+            {
+                "policy": "quantitative_screen_scope",
+                "value": "standalone_K_G_baseline_inclusion_only",
+            },
+            {
+                "policy": "retain_certified_panels_for_regulatory_projection",
+                "value": True,
+            },
+            {
+                "policy": "direct_regulatory_embedding_status",
+                "value": "observed_marker_supported_sequence",
+            },
+            {
+                "policy": "pedigree_propagated_embedding_status",
+                "value": "imputed_pedigree",
+            },
+            {
+                "policy": "pedigree_propagation_requires_confidence_gate",
+                "value": True,
+            },
+            {
+                "policy": "pedigree_propagation_equivalent_to_observed_sequence",
+                "value": False,
+            },
+        ]
+    ).to_csv(
+        out_dir / "genomic_candidate_regulatory_retention_policy.tsv",
+        sep="\t",
+        index=False,
+    )
     (out_dir / "genomic_candidate_screen_provenance.json").write_text(
         json.dumps(provenance, indent=2) + "\n", encoding="utf-8"
     )

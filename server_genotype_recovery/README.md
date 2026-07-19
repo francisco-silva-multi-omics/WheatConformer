@@ -98,6 +98,22 @@ kernel correlation of at least 0.90 are recorded in
 individually before any combination is considered. Combination and RBF arms are
 deferred to later inner-validation phases.
 
+The quantitative screen governs only whether a recovered relationship kernel
+is admitted as a standalone `K_G` expert. A negative result does not discard a
+certified marker panel. Certified panels remain available for marker-to-graph
+projection and may expand the set of genotypes with directly supported
+regulatory embeddings and `K_z` membership. The support audit records this
+independent retention rule in
+`genomic_candidate_regulatory_retention_policy.tsv` and in its provenance
+JSON.
+
+Direct marker/path-derived embeddings must be labeled
+`observed_marker_supported_sequence`. If pedigree `K_A` is later used to
+propagate embeddings to ungenotyped entries, those values must be labeled
+`imputed_pedigree`, carry a confidence score and gating decision, and remain
+distinguishable from observed genotype-specific sequence. Pedigree propagation
+must never create nominal marker calls or graph paths.
+
 ## Default QC
 
 - sample missingness at most `0.20`;
