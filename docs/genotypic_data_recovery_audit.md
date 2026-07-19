@@ -44,6 +44,27 @@ keeps provenance and platform identity explicit.
   not merged or treated as marker-equivalent.
 - Haplotype and gene-marker sources require their own feature semantics before
   model admission even though the identifier audit finds canonical matches.
+- The CIMMYT bread-wheat line matrix is the source of the existing HMP experts;
+  its 4,723 matched GIDs are not a new independent platform. The 59 absent from
+  HMP QC remain excluded unless their recorded QC failures are resolved.
+- The aggregate GBS identifier count includes matrix axes from gene-marker/MAS
+  workbooks. It must not be interpreted as 594 dense GBS genotypes. The
+  existing SAWYT GBS kernel remains the certified dense GBS expert.
+
+## Platform Kernel Status
+
+The recovery workflow now builds separate opt-in kernels for 80K hexaploid,
+Seeds DArTseq, IWYP35K, DArTAG, and EYT haplotype blocks. DArTAG numeric batches
+are unioned only within the same platform and cross-batch duplicate calls are
+audited. Haplotype strings use a categorical block-state relationship kernel,
+not SNP dosage encoding.
+
+Every candidate must pass the development-only support audit before training.
+The audit reports ledger overlap, nested-fold training IDs, PSD/normalization,
+and pairwise kernel correlations. It does not read phenotype values, outer-test
+metrics, or final-holdout outcomes. RBF candidates are deferred until their
+linear platform counterpart shows inner-validation value. Single-step `H`
+remains deferred until platform concordance and connectedness are established.
 
 ## Reproducible Verification
 

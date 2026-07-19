@@ -18,6 +18,7 @@ HMP_MODEL_DIR="${MULTITRAIT_HMP_MODEL_DIR:-model_kernels/stage1_hmp_env_ke_diag_
 GBS_MODEL_DIR="${MULTITRAIT_GBS_MODEL_DIR:-model_kernels/stage1_gbs_sawyt_env_ke_diag_norm}"
 DTH_MODEL_DIR="${MULTITRAIT_DTH_MODEL_DIR:-model_kernels/stage1_pedigree_env_dth_v2}"
 TRAIT_ENV_MANIFEST="${MULTITRAIT_TRAIT_ENV_MANIFEST:-model_kernels/trait_environment_v2/trait_environment_kernel_manifest.tsv}"
+RECOVERED_GENOTYPE_MANIFEST="${MULTITRAIT_RECOVERED_GENOTYPE_MANIFEST:-genotype_panels/recovered/recovered_genotype_kernel_manifest.tsv}"
 SEEDS="${MULTITRAIT_SEEDS:-2026,2027,2028,2029}"
 MODES="${MULTITRAIT_MODES:-env,additive,full}"
 TRAITS="${MULTITRAIT_TRAITS:-DAYS_TO_HEADING,DAYS_TO_MATURITY,PLANT_HEIGHT,GRAIN_YIELD,1000_GRAIN_WEIGHT,ABOVE_GROUND_BIOMASS,TEST_WEIGHT}"
@@ -223,6 +224,9 @@ fi
 if [[ "${MULTITRAIT_REQUIRE_TRAIT_ENV_MANIFEST:-0}" == "1" ]]; then
   prepare_args+=(--require-trait-environment-manifest)
 fi
+if [[ "${MULTITRAIT_REQUIRE_RECOVERED_GENOTYPE_MANIFEST:-0}" == "1" ]]; then
+  prepare_args+=(--require-recovered-genotype-manifest)
+fi
 log "START prepare aligned K_A, HMP/GBS K_G, and environment experts"
 "$PYTHON" -m server_training_pipeline.prepare_multitrait_kernel_registry \
   --root . \
@@ -232,6 +236,7 @@ log "START prepare aligned K_A, HMP/GBS K_G, and environment experts"
   --gbs-model-dir "$GBS_MODEL_DIR" \
   --dth-model-dir "$DTH_MODEL_DIR" \
   --trait-environment-manifest "$TRAIT_ENV_MANIFEST" \
+  --recovered-genotype-manifest "$RECOVERED_GENOTYPE_MANIFEST" \
   --environment-dir "$ENVIRONMENT_DIR" \
   --out-dir "$EXPERT_DIR" \
   "${prepare_args[@]}"

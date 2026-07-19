@@ -44,7 +44,28 @@ PLATFORM_DEFAULTS = {
         "role": "IWYP_HiBAP_35k_marker",
         "format": "iwyp",
     },
+    "dartag": {
+        "matrix": Path(
+            "GENOTYPIC_DATA/Genotypic_data_(DArTAG_panel_2)_for_the_IBWSN_and_SAWSN/DArTAG_numeric.csv"
+        ),
+        "matrix_extra": [
+            Path(
+                "GENOTYPIC_DATA/Genotypic_data_(DArTAG_panel_2)_for_the_IBWSN_and_SAWSN/DArTAG_2moreOrders_numeric.csv"
+            )
+        ],
+        "prefix": "K_G_DARTAG",
+        "role": "DArTAG_IBWSN_SAWSN_marker",
+        "format": "dartag_numeric",
+        "sample_heterozygosity_max": 1.0,
+    },
 }
+
+
+def portable_output_path(path: Path, root: Path) -> str:
+    try:
+        return str(path.relative_to(root))
+    except ValueError:
+        return str(path)
 
 
 def heterozygous_code(ref: str, alt: str) -> int:
@@ -314,6 +335,142 @@ def parse_iwyp(
     return matrix, [item[1] for item in selected], [item[2] for item in selected], marker_ids, marker_allele_values
 
 
+def parse_dartag_numeric(
+    paths: list[Path],
+    canonical_ids: set[str],
+) -> tuple[np.ndarray, list[str], list[str], list[str], list[str]]:
+    """Read the two DArTAG numeric exports without assuming identical sample batches."""
+    batches: list[tuple[np.ndarray, list[str], list[str], list[str]]] = []
+    marker_union: list[str] = []
+    marker_seen: set[str] = set()
+
+    for path in paths:
+        with path.open("r", encoding="utf-8-sig", errors="replace", newline="") as handle:
+            reader = csv.reader(handle)
+            first = next(reader, [])
+            if not first:
+                raise SystemExit(f"Empty DArTAG matrix: {path}")
+            if normalize_identifier(first[0]).upper() == "SUBJECT_ID":
+                gid_row = next(reader, [])
+                if not gid_row or normalize_identifier(gid_row[0]).upper() != "GID":
+                    raise SystemExit(f"DArTAG Subject_ID header is not followed by a GID row: {path}")
+                source_ids = [normalize_identifier(value) for value in first[1:]]
+                raw_gids = gid_row[1:]
+            elif normalize_identifier(first[0]).upper() == "GID":
+                raw_gids = first[1:]
+                source_ids = [normalize_identifier(value) for value in raw_gids]
+            else:
+                raise SystemExit(f"Unrecognized DArTAG numeric header in {path}: {first[0]!r}")
+
+            selected: list[tuple[int, str, str]] = []
+            for index, raw_gid in enumerate(raw_gids, start=1):
+                gid = canonical_gid(raw_gid)
+                if gid and gid in canonical_ids:
+                    selected.append((index, gid, source_ids[index - 1]))
+            if not selected:
+                print(f"[{path.name}] no canonical DArTAG samples; batch skipped", flush=True)
+                continue
+
+            selected_fields = np.asarray([item[0] for item in selected], dtype=np.int64)
+            markers: list[str] = []
+            marker_vectors: list[np.ndarray] = []
+            for row_number, values in enumerate(reader, start=2):
+                if not values:
+                    continue
+                marker = normalize_identifier(values[0])
+                if not marker:
+                    continue
+                dosage = np.full(len(selected), -1, dtype=np.int8)
+                for target_index, field_index in enumerate(selected_fields):
+                    raw = normalize_identifier(values[field_index] if field_index < len(values) else "")
+                    if raw in {"0", "1", "2"}:
+                        dosage[target_index] = int(raw)
+                markers.append(marker)
+                marker_vectors.append(dosage)
+                if marker not in marker_seen:
+                    marker_seen.add(marker)
+                    marker_union.append(marker)
+                if row_number % 1000 == 0:
+                    print(
+                        f"[{path.name}] marker_rows={row_number - 1} selected_samples={len(selected)}",
+                        flush=True,
+                    )
+            if not marker_vectors:
+                raise SystemExit(f"No DArTAG marker rows were parsed from {path}")
+            if len(markers) != len(set(markers)):
+                raise SystemExit(f"DArTAG matrix contains duplicate marker IDs: {path}")
+            batches.append(
+                (
+                    np.vstack(marker_vectors).T,
+                    [item[1] for item in selected],
+                    [f"{path.name}:{item[2]}" for item in selected],
+                    markers,
+                )
+            )
+
+    if not batches:
+        raise SystemExit("No canonical DArTAG samples were found in any numeric export")
+    marker_index = {marker: index for index, marker in enumerate(marker_union)}
+    matrices: list[np.ndarray] = []
+    gids: list[str] = []
+    source_samples: list[str] = []
+    for local, local_gids, local_sources, local_markers in batches:
+        expanded = np.full((len(local), len(marker_union)), -1, dtype=np.int8)
+        target = np.fromiter((marker_index[marker] for marker in local_markers), dtype=np.int64)
+        expanded[:, target] = local
+        matrices.append(expanded)
+        gids.extend(local_gids)
+        source_samples.extend(local_sources)
+    return (
+        np.vstack(matrices),
+        gids,
+        source_samples,
+        marker_union,
+        ["numeric_0_1_2"] * len(marker_union),
+    )
+
+
+def duplicate_call_concordance(
+    matrix: np.ndarray,
+    gids: list[str],
+    source_samples: list[str],
+) -> pd.DataFrame:
+    rows: list[dict[str, object]] = []
+    by_gid: dict[str, list[int]] = defaultdict(list)
+    for index, gid in enumerate(gids):
+        by_gid[gid].append(index)
+    for gid, indices in sorted(by_gid.items()):
+        if len(indices) < 2:
+            continue
+        for left_pos, left in enumerate(indices[:-1]):
+            for right in indices[left_pos + 1 :]:
+                observed = (matrix[left] >= 0) & (matrix[right] >= 0)
+                overlap = int(observed.sum())
+                rows.append(
+                    {
+                        "sample_id": gid,
+                        "source_sample_left": source_samples[left],
+                        "source_sample_right": source_samples[right],
+                        "overlapping_observed_markers": overlap,
+                        "call_concordance": (
+                            float(np.mean(matrix[left, observed] == matrix[right, observed]))
+                            if overlap
+                            else np.nan
+                        ),
+                    }
+                )
+    return pd.DataFrame(
+        rows,
+        columns=[
+            "sample_id",
+            "source_sample_left",
+            "source_sample_right",
+            "overlapping_observed_markers",
+            "call_concordance",
+        ],
+    )
+
+
 def qc_samples(
     matrix: np.ndarray,
     gids: list[str],
@@ -447,11 +604,12 @@ def main() -> None:
     parser.add_argument("--root", type=Path, default=Path("."))
     parser.add_argument("--platform", choices=sorted(PLATFORM_DEFAULTS), required=True)
     parser.add_argument("--matrix", type=Path)
+    parser.add_argument("--matrix-extra", type=Path, action="append", default=[])
     parser.add_argument("--canonical-catalog", type=Path, default=Path("audit/canonical_genotype_mapping_audited.csv"))
     parser.add_argument("--out-dir", type=Path)
     parser.add_argument("--prefix")
     parser.add_argument("--sample-missing-max", type=float, default=0.20)
-    parser.add_argument("--sample-heterozygosity-max", type=float, default=0.20)
+    parser.add_argument("--sample-heterozygosity-max", type=float)
     parser.add_argument("--marker-missing-max", type=float, default=0.20)
     parser.add_argument("--marker-heterozygosity-max", type=float, default=0.20)
     parser.add_argument("--maf-min", type=float, default=0.01)
@@ -461,30 +619,47 @@ def main() -> None:
 
     root = args.root.resolve()
     defaults = PLATFORM_DEFAULTS[args.platform]
-    matrix_path = (root / (args.matrix or defaults["matrix"])).resolve()
+    sample_heterozygosity_max = (
+        args.sample_heterozygosity_max
+        if args.sample_heterozygosity_max is not None
+        else float(defaults.get("sample_heterozygosity_max", 0.20))
+    )
+    matrix_inputs = (
+        [args.matrix]
+        if args.matrix
+        else [defaults["matrix"], *defaults.get("matrix_extra", [])]
+    )
+    matrix_inputs.extend(args.matrix_extra)
+    matrix_paths = [(root / path).resolve() for path in matrix_inputs]
     prefix = args.prefix or str(defaults["prefix"])
     out_dir = (root / (args.out_dir or Path("genotype_panels/recovered") / args.platform)).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
     canonical_catalog_path = (root / args.canonical_catalog).resolve()
-    if not matrix_path.is_file() or matrix_path.stat().st_size == 0:
-        raise SystemExit(f"Genotype matrix is missing or empty: {matrix_path}")
+    for matrix_path in matrix_paths:
+        if not matrix_path.is_file() or matrix_path.stat().st_size == 0:
+            raise SystemExit(f"Genotype matrix is missing or empty: {matrix_path}")
     if not canonical_catalog_path.is_file() or canonical_catalog_path.stat().st_size == 0:
         raise SystemExit(f"Canonical genotype catalog is missing or empty: {canonical_catalog_path}")
     canonical_ids, lookup = target_sample_lookup(root=root, canonical_catalog_path=canonical_catalog_path)
 
     if defaults["format"] == "sample_by_marker":
-        matrix, gids, source_samples, marker_ids, allele_values = parse_sample_by_marker(matrix_path, lookup)
+        matrix, gids, source_samples, marker_ids, allele_values = parse_sample_by_marker(matrix_paths[0], lookup)
     elif defaults["format"] == "marker_by_sample":
-        matrix, gids, source_samples, marker_ids, allele_values = parse_marker_by_sample(matrix_path, lookup)
+        matrix, gids, source_samples, marker_ids, allele_values = parse_marker_by_sample(matrix_paths[0], lookup)
+    elif defaults["format"] == "iwyp":
+        matrix, gids, source_samples, marker_ids, allele_values = parse_iwyp(matrix_paths[0], canonical_ids)
     else:
-        matrix, gids, source_samples, marker_ids, allele_values = parse_iwyp(matrix_path, canonical_ids)
+        matrix, gids, source_samples, marker_ids, allele_values = parse_dartag_numeric(
+            matrix_paths, canonical_ids
+        )
     raw_shape = matrix.shape
+    duplicate_concordance = duplicate_call_concordance(matrix, gids, source_samples)
     matrix, gids, source_samples, sample_qc, duplicates = qc_samples(
         matrix,
         gids,
         source_samples,
         missing_max=args.sample_missing_max,
-        heterozygosity_max=args.sample_heterozygosity_max,
+        heterozygosity_max=sample_heterozygosity_max,
     )
     matrix, marker_qc, frequency = qc_markers(
         matrix,
@@ -515,6 +690,9 @@ def main() -> None:
     ).to_csv(order_path, sep="\t", index=False)
     sample_qc.to_csv(out_dir / f"{prefix}_sample_qc.tsv", sep="\t", index=False)
     duplicates.to_csv(out_dir / f"{prefix}_duplicate_gid_resolution.tsv", sep="\t", index=False)
+    duplicate_concordance.to_csv(
+        out_dir / f"{prefix}_duplicate_call_concordance.tsv", sep="\t", index=False
+    )
     marker_qc.to_csv(out_dir / f"{prefix}_marker_qc.tsv.gz", sep="\t", index=False, compression="gzip")
     pd.DataFrame({"marker_id": retained_marker_ids}).to_csv(
         out_dir / f"{prefix}_retained_marker_order.tsv.gz", sep="\t", index=False, compression="gzip"
@@ -528,14 +706,22 @@ def main() -> None:
         [
             {"metric": "platform", "value": args.platform},
             {"metric": "matrix_format", "value": defaults["format"]},
-            {"metric": "matrix_path", "value": str(matrix_path)},
-            {"metric": "matrix_bytes", "value": matrix_path.stat().st_size},
+            {"metric": "matrix_path", "value": ";".join(map(str, matrix_paths))},
+            {"metric": "matrix_bytes", "value": sum(path.stat().st_size for path in matrix_paths)},
             {"metric": "raw_matched_sample_rows", "value": raw_shape[0]},
             {"metric": "raw_biallelic_markers", "value": raw_shape[1]},
             {"metric": "samples_after_qc_and_gid_deduplication", "value": len(gids)},
             {"metric": "markers_after_qc", "value": matrix.shape[1]},
             {"metric": "sample_missing_max", "value": args.sample_missing_max},
-            {"metric": "sample_heterozygosity_max", "value": args.sample_heterozygosity_max},
+            {"metric": "sample_heterozygosity_max", "value": sample_heterozygosity_max},
+            {
+                "metric": "sample_heterozygosity_qc_note",
+                "value": (
+                    "audited_not_excluded_for_polyploid_targeted_calls"
+                    if args.platform == "dartag"
+                    else "threshold_applied"
+                ),
+            },
             {"metric": "marker_missing_max", "value": args.marker_missing_max},
             {"metric": "marker_heterozygosity_max", "value": args.marker_heterozygosity_max},
             {"metric": "maf_min", "value": args.maf_min},
@@ -549,8 +735,8 @@ def main() -> None:
             {
                 "kernel": f"{prefix}_LINEAR",
                 "biological_role": f"{defaults['role']}_linear_genomic_relationship",
-                "kernel_path": str(linear_path),
-                "order_path": str(order_path),
+                "kernel_path": portable_output_path(linear_path, root),
+                "order_path": portable_output_path(order_path, root),
                 "source_id_col": "sample_id",
                 "eligible_traits": "*",
                 "enabled_default": False,
@@ -561,8 +747,8 @@ def main() -> None:
             {
                 "kernel": f"{prefix}_RBF",
                 "biological_role": f"{defaults['role']}_gaussian_RBF",
-                "kernel_path": str(rbf_path),
-                "order_path": str(order_path),
+                "kernel_path": portable_output_path(rbf_path, root),
+                "order_path": portable_output_path(order_path, root),
                 "source_id_col": "sample_id",
                 "eligible_traits": "*",
                 "enabled_default": False,

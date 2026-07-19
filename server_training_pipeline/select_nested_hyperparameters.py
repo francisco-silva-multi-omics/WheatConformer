@@ -14,8 +14,15 @@ def main() -> None:
     parser.add_argument("--models-root", type=Path, required=True)
     parser.add_argument("--run-glob", required=True)
     parser.add_argument("--expected-inner-folds", type=int, required=True)
+    parser.add_argument(
+        "--candidate",
+        action="append",
+        default=[],
+        help="Restrict selection to the named candidate; repeat for multiple candidates.",
+    )
     parser.add_argument("--out", type=Path, required=True)
     args = parser.parse_args()
+    candidate_filter = set(args.candidate)
 
     rows = []
     for run_dir in sorted(args.models_root.glob(args.run_glob)):
@@ -25,6 +32,8 @@ def main() -> None:
             continue
         metadata = json.loads(metadata_paths[0].read_text(encoding="utf-8"))
         if metadata.get("evaluation_stage") != "inner_selection":
+            continue
+        if candidate_filter and metadata.get("hyperparameter_label", "") not in candidate_filter:
             continue
         macro = pd.read_csv(macro_paths[0], sep="\t")
         model_label = metadata["model_label"]

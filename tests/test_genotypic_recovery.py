@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from pathlib import Path
+import json
+import sys
 
 import numpy as np
 import pandas as pd
@@ -13,6 +15,8 @@ from genotype_recovery import (
     validate_kernel,
 )
 from server_genotype_recovery.build_platform_kernel import (
+    duplicate_call_concordance,
+    parse_dartag_numeric,
     parse_iwyp,
     parse_marker_by_sample,
     parse_sample_by_marker,
@@ -20,6 +24,10 @@ from server_genotype_recovery.build_platform_kernel import (
     qc_samples,
     vanraden_chunked,
 )
+from server_genotype_recovery.build_haplotype_kernel import (
+    build_categorical_haplotype_kernel,
+)
+from server_genotype_recovery.audit_candidate_support import main as audit_candidate_support
 from server_training_pipeline.prepare_multitrait_kernel_registry import (
     load_recovered_genotype_candidates,
 )
@@ -102,6 +110,64 @@ def test_iwyp_parser_uses_gid_preamble_and_marker_alleles(tmp_path: Path) -> Non
     np.testing.assert_array_equal(matrix, np.array([[0, 1], [2, 2]], dtype=np.int8))
 
 
+def test_dartag_parser_unions_batches_and_records_duplicate_concordance(tmp_path: Path) -> None:
+    first = tmp_path / "first.csv"
+    second = tmp_path / "second.csv"
+    first.write_text(
+        "GID,101,102\n"
+        "m1,0,2\n"
+        "m2,1,-\n",
+        encoding="utf-8",
+    )
+    second.write_text(
+        "Subject_ID,S101,S103\n"
+        "GID,101,103\n"
+        "m2,1,2\n"
+        "m3,2,0\n",
+        encoding="utf-8",
+    )
+
+    matrix, gids, sources, markers, alleles = parse_dartag_numeric(
+        [first, second], {"GID101", "GID102", "GID103"}
+    )
+
+    assert gids == ["GID101", "GID102", "GID101", "GID103"]
+    assert markers == ["m1", "m2", "m3"]
+    assert alleles == ["numeric_0_1_2"] * 3
+    np.testing.assert_array_equal(
+        matrix,
+        np.array([[0, 1, -1], [2, -1, -1], [-1, 1, 2], [-1, 2, 0]], dtype=np.int8),
+    )
+    concordance = duplicate_call_concordance(matrix, gids, sources)
+    assert concordance.loc[0, "overlapping_observed_markers"] == 1
+    assert concordance.loc[0, "call_concordance"] == 1.0
+
+
+def test_categorical_haplotype_kernel_is_psd_and_not_dosage_coerced() -> None:
+    frame = pd.DataFrame(
+        {
+            "GID": ["101", "102", "103", "104"],
+            "EYT": ["A", "A", "B", "B"],
+            "1A.1": ["ACT", "ACT", "GGA", "GGA"],
+            "1A.2": ["CC", "TT", "CC", "TT"],
+            "1B.1": ["NA", "AA", "GG", "AA"],
+        }
+    )
+
+    kernel, gids, sample_qc, _, block_qc = build_categorical_haplotype_kernel(
+        frame,
+        sample_missing_max=0.5,
+        block_missing_max=0.5,
+        state_frequency_min=0.20,
+    )
+
+    assert gids == ["GID101", "GID102", "GID103", "GID104"]
+    assert sample_qc["selected_for_kernel"].all()
+    assert block_qc["retained"].all()
+    assert validate_kernel(kernel, name="haplotype")["finite"] == "true"
+    np.testing.assert_allclose(np.diag(kernel).mean(), 1.0, atol=1e-6)
+
+
 def test_qc_vanraden_and_rbf_produce_certified_kernels() -> None:
     matrix = np.array(
         [
@@ -166,3 +232,103 @@ def test_recovered_genotype_manifest_is_loaded_as_partial_expert(tmp_path: Path)
     assert candidates[0]["axis"] == "genotype"
     assert candidates[0]["enabled_default"] is True
     assert candidates[0]["target_order"]["sample_id"].tolist() == ["GID1", "GID2", "GID3"]
+
+
+def test_candidate_support_audit_reads_ids_and_inner_support_only(
+    tmp_path: Path, monkeypatch
+) -> None:
+    hmp_dir = tmp_path / "genotype_panels/hmp"
+    gbs_dir = tmp_path / "genotype_panels/gbs_sawyt"
+    recovered_dir = tmp_path / "genotype_panels/recovered/dartag"
+    hmp_dir.mkdir(parents=True)
+    gbs_dir.mkdir(parents=True)
+    recovered_dir.mkdir(parents=True)
+    np.save(hmp_dir / "K_HMP.QCfiltered.meanDiag1.npy", np.eye(3, dtype=np.float32))
+    pd.DataFrame({"sample_id": ["GID1", "GID2", "GID3"]}).to_csv(
+        hmp_dir / "hmp_K_sample_order.QCfiltered.tsv", sep="\t", index=False
+    )
+    np.save(gbs_dir / "K_GBS_SAWYT.QCfiltered.npy", np.eye(2, dtype=np.float32))
+    pd.DataFrame({"sample_id": ["GID4", "GID5"]}).to_csv(
+        gbs_dir / "gbs_sawyt_K_sample_order.QCfiltered.tsv", sep="\t", index=False
+    )
+    np.save(recovered_dir / "K_G_DARTAG_LINEAR.npy", np.eye(3, dtype=np.float32))
+    pd.DataFrame({"sample_id": ["GID1", "GID4", "GID6"]}).to_csv(
+        recovered_dir / "K_G_DARTAG_sample_order.tsv", sep="\t", index=False
+    )
+    recovered_manifest = tmp_path / "genotype_panels/recovered/recovered_genotype_kernel_manifest.tsv"
+    pd.DataFrame(
+        [
+            {
+                "kernel": "K_G_DARTAG_LINEAR",
+                "biological_role": "dartag_linear",
+                "kernel_path": "genotype_panels/recovered/dartag/K_G_DARTAG_LINEAR.npy",
+                "order_path": "genotype_panels/recovered/dartag/K_G_DARTAG_sample_order.tsv",
+                "source_id_col": "sample_id",
+            }
+        ]
+    ).to_csv(recovered_manifest, sep="\t", index=False)
+    ledger = pd.DataFrame(
+        {
+            "panel_sample_id": ["GID1", "GID4", "GID2", "GID5", "GID3", "GID6"],
+            "env_kernel_id": ["E1", "E1", "E2", "E2", "E3", "E3"],
+            "trait_name_canonical": ["T"] * 6,
+            "cycle": ["2020"] * 6,
+            "country": ["X"] * 6,
+        }
+    )
+    ledger_path = tmp_path / "ledger.parquet"
+    ledger.to_parquet(ledger_path, index=False)
+    entity_manifest = pd.DataFrame(
+        [
+            {
+                "scenario": "unseen_environments",
+                "outer_fold": 0,
+                "inner_fold": 0,
+                "axis": "environment",
+                "partition": "outer_test",
+                "entity_id": "E3",
+            },
+            {
+                "scenario": "unseen_environments",
+                "outer_fold": 0,
+                "inner_fold": 0,
+                "axis": "environment",
+                "partition": "inner_validation",
+                "entity_id": "E2",
+            },
+        ]
+    )
+    entity_path = tmp_path / "entities.tsv"
+    entity_manifest.to_csv(entity_path, sep="\t", index=False)
+    out_dir = tmp_path / "screen"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "audit_candidate_support",
+            "--root",
+            str(tmp_path),
+            "--ledger",
+            str(ledger_path),
+            "--entity-manifest",
+            str(entity_path),
+            "--recovered-manifest",
+            str(recovered_manifest),
+            "--out-dir",
+            str(out_dir),
+            "--minimum-training-ids",
+            "1",
+        ],
+    )
+
+    audit_candidate_support()
+
+    provenance = json.loads(
+        (out_dir / "genomic_candidate_screen_provenance.json").read_text(encoding="utf-8")
+    )
+    assert provenance["status"] == "PASS"
+    assert provenance["phenotype_values_read"] is False
+    assert provenance["outer_test_metrics_read"] is False
+    plan = pd.read_csv(out_dir / "genomic_candidate_ablation_plan.tsv", sep="\t")
+    dartag = plan[plan["architecture"].eq("existing_plus_K_G_DARTAG_LINEAR")].iloc[0]
+    assert dartag["status"] == "ready"

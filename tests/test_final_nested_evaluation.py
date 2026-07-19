@@ -463,6 +463,28 @@ def test_inner_selection_reads_validation_only(tmp_path, monkeypatch) -> None:
     assert decision["selected_candidate"] == "regularized"
     assert decision["outer_test_metrics_read"] is False
 
+    filtered_output = tmp_path / "filtered_decision.json"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "select_nested_hyperparameters",
+            "--models-root",
+            str(models),
+            "--run-glob",
+            "inner_*",
+            "--expected-inner-folds",
+            "3",
+            "--candidate",
+            "base",
+            "--out",
+            str(filtered_output),
+        ],
+    )
+    select_hyperparameters()
+    filtered = json.loads(filtered_output.read_text(encoding="utf-8"))
+    assert filtered["selected_candidate"] == "base"
+
 
 def test_outer_ensemble_averages_test_and_keeps_oof_validation(tmp_path, monkeypatch) -> None:
     models = tmp_path / "models"
