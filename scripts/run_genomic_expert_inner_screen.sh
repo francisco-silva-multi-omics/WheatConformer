@@ -195,7 +195,9 @@ PY
   selection_candidate_args+=(--candidate "$candidate_label")
 
   for ((inner=0; inner<INNER_FOLDS; inner++)); do
-    seed=$((61001 + architecture_index * 1000 + OUTER_FOLD * 100 + inner * 10))
+    # Match initialization and data-shuffle seeds across architectures so that
+    # inner-fold differences reflect kernel content rather than random starts.
+    seed=$((${GENOMIC_SCREEN_SEED_BASE:-61001} + OUTER_FOLD * 100 + inner * 10))
     run_name="genomic_inner_${SCENARIO}_outer${OUTER_FOLD}_${candidate_label}_inner${inner}"
     run_dir="$MODELS_DIR/$run_name"
     if [[ "$FORCE" != "1" ]] && run_is_current \

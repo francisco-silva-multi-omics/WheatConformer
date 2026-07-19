@@ -445,3 +445,10 @@ def test_candidate_support_audit_reads_ids_and_inner_support_only(
     ].iloc[0]
     assert combined["screen_phase"] == "phase_2_combination_after_individual"
     assert combined["status"] == "deferred_until_individual_candidates_selected"
+
+
+def test_genomic_inner_screen_uses_matched_candidate_seeds() -> None:
+    script = Path("scripts/run_genomic_expert_inner_screen.sh").read_text(encoding="utf-8")
+
+    assert "GENOMIC_SCREEN_SEED_BASE:-61001" in script
+    assert "architecture_index * 1000" not in script
