@@ -38,6 +38,12 @@ The runner prepends `WHEATCONFORMER_CODE_ROOT` and invokes Python in safe-path
 mode. This prevents older Python packages copied into the data directory from
 shadowing the selected Git checkout.
 
+All requested platform inputs are preflighted before exhaustive scanning or
+kernel construction. Default inputs may be relocated below `GENOTYPIC_DATA`
+only when an exact basename resolves uniquely. DArTAG numeric CSVs may remain
+gzip-compressed; the parser reads `.csv.gz` directly. Missing or ambiguous
+sources remain hard failures and are never silently skipped.
+
 Run or retry selected panels without repeating the others:
 
 ```bash

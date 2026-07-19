@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import argparse
 import csv
+import gzip
 from collections import defaultdict
+from contextlib import contextmanager
 from pathlib import Path
+from typing import Iterator, TextIO
 
 import numpy as np
 import pandas as pd
@@ -59,6 +62,53 @@ PLATFORM_DEFAULTS = {
         "sample_heterozygosity_max": 1.0,
     },
 }
+
+
+def resolve_matrix_path(
+    root: Path,
+    configured_path: Path,
+    *,
+    discover_by_basename: bool,
+    allow_gzip: bool,
+) -> Path:
+    requested = configured_path.resolve() if configured_path.is_absolute() else (root / configured_path).resolve()
+    if requested.is_file() and requested.stat().st_size > 0:
+        return requested
+    if not discover_by_basename:
+        raise SystemExit(f"Genotype matrix is missing or empty: {requested}")
+
+    genotypic_root = root / "GENOTYPIC_DATA"
+    names = {configured_path.name}
+    if allow_gzip:
+        names.add(f"{configured_path.name}.gz")
+    matches = sorted(
+        path.resolve()
+        for path in genotypic_root.rglob("*")
+        if path.is_file() and path.name in names and path.stat().st_size > 0
+    ) if genotypic_root.is_dir() else []
+    if len(matches) == 1:
+        print(f"Resolved moved/compressed genotype matrix: {requested} -> {matches[0]}", flush=True)
+        return matches[0]
+    if len(matches) > 1:
+        joined = "\n  ".join(str(path) for path in matches)
+        raise SystemExit(
+            f"Genotype matrix is absent at {requested} and basename discovery is ambiguous:\n  {joined}"
+        )
+    accepted = ", ".join(sorted(names))
+    raise SystemExit(
+        f"Genotype matrix is missing or empty: {requested}. "
+        f"No unique fallback named [{accepted}] exists below {genotypic_root}"
+    )
+
+
+@contextmanager
+def open_text_matrix(path: Path) -> Iterator[TextIO]:
+    if path.suffix.lower() == ".gz":
+        with gzip.open(path, "rt", encoding="utf-8-sig", errors="replace", newline="") as handle:
+            yield handle
+    else:
+        with path.open("r", encoding="utf-8-sig", errors="replace", newline="") as handle:
+            yield handle
 
 
 def portable_output_path(path: Path, root: Path) -> str:
@@ -345,7 +395,7 @@ def parse_dartag_numeric(
     marker_seen: set[str] = set()
 
     for path in paths:
-        with path.open("r", encoding="utf-8-sig", errors="replace", newline="") as handle:
+        with open_text_matrix(path) as handle:
             reader = csv.reader(handle)
             first = next(reader, [])
             if not first:
@@ -615,6 +665,7 @@ def main() -> None:
     parser.add_argument("--maf-min", type=float, default=0.01)
     parser.add_argument("--chunk-size", type=int, default=1024)
     parser.add_argument("--save-dosage", action="store_true")
+    parser.add_argument("--preflight-only", action="store_true")
     args = parser.parse_args()
 
     root = args.root.resolve()
@@ -630,14 +681,23 @@ def main() -> None:
         else [defaults["matrix"], *defaults.get("matrix_extra", [])]
     )
     matrix_inputs.extend(args.matrix_extra)
-    matrix_paths = [(root / path).resolve() for path in matrix_inputs]
+    matrix_paths = [
+        resolve_matrix_path(
+            root,
+            path,
+            discover_by_basename=args.matrix is None,
+            allow_gzip=defaults["format"] == "dartag_numeric",
+        )
+        for path in matrix_inputs
+    ]
+    if args.preflight_only:
+        for matrix_path in matrix_paths:
+            print(f"PASS platform={args.platform} matrix={matrix_path} bytes={matrix_path.stat().st_size}")
+        return
     prefix = args.prefix or str(defaults["prefix"])
     out_dir = (root / (args.out_dir or Path("genotype_panels/recovered") / args.platform)).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
     canonical_catalog_path = (root / args.canonical_catalog).resolve()
-    for matrix_path in matrix_paths:
-        if not matrix_path.is_file() or matrix_path.stat().st_size == 0:
-            raise SystemExit(f"Genotype matrix is missing or empty: {matrix_path}")
     if not canonical_catalog_path.is_file() or canonical_catalog_path.stat().st_size == 0:
         raise SystemExit(f"Canonical genotype catalog is missing or empty: {canonical_catalog_path}")
     canonical_ids, lookup = target_sample_lookup(root=root, canonical_catalog_path=canonical_catalog_path)

@@ -16,6 +16,20 @@ cd "$ROOT"
 
 mkdir -p logs audit/genotypic_recovery genotype_panels/recovered
 
+echo "[$(date '+%F %T')] START genotype source preflight"
+for platform in $PLATFORMS; do
+  "$PYTHON" -P -m server_genotype_recovery.build_platform_kernel \
+    --root . \
+    --platform "$platform" \
+    --preflight-only
+done
+if [[ "$BUILD_HAPLOTYPE" == "1" ]]; then
+  "$PYTHON" -P -m server_genotype_recovery.build_haplotype_kernel \
+    --root . \
+    --preflight-only
+fi
+echo "[$(date '+%F %T')] DONE genotype source preflight"
+
 if [[ -z "${CANONICAL_GENOTYPE_CATALOG:-}" ]]; then
   echo "[$(date '+%F %T')] START prepare canonical trial-GID catalog"
   catalog_args=(--root . --out "$CANONICAL_CATALOG")

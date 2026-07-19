@@ -161,6 +161,7 @@ def main() -> None:
     parser.add_argument("--sample-missing-max", type=float, default=0.30)
     parser.add_argument("--block-missing-max", type=float, default=0.30)
     parser.add_argument("--state-frequency-min", type=float, default=0.01)
+    parser.add_argument("--preflight-only", action="store_true")
     args = parser.parse_args()
 
     root = args.root.resolve()
@@ -169,6 +170,9 @@ def main() -> None:
     out_dir = (root / args.out_dir).resolve()
     if not matrix_path.is_file() or matrix_path.stat().st_size == 0:
         raise SystemExit(f"Haplotype matrix is missing or empty: {matrix_path}")
+    if args.preflight_only:
+        print(f"PASS platform=haplotype_blocks matrix={matrix_path} bytes={matrix_path.stat().st_size}")
+        return
     catalog, _ = load_canonical_catalog(catalog_path)
     canonical_ids = set(catalog["canonical_gid"])
     frame = pd.read_csv(matrix_path, dtype=str, low_memory=False)

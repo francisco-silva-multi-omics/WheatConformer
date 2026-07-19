@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import gzip
 import json
 import sys
 
@@ -22,6 +23,7 @@ from server_genotype_recovery.build_platform_kernel import (
     parse_sample_by_marker,
     qc_markers,
     qc_samples,
+    resolve_matrix_path,
     vanraden_chunked,
 )
 from server_genotype_recovery.build_haplotype_kernel import (
@@ -224,6 +226,29 @@ def test_dartag_parser_unions_batches_and_records_duplicate_concordance(tmp_path
     concordance = duplicate_call_concordance(matrix, gids, sources)
     assert concordance.loc[0, "overlapping_observed_markers"] == 1
     assert concordance.loc[0, "call_concordance"] == 1.0
+
+
+def test_dartag_parser_reads_gzip_and_default_path_discovery_is_unique(tmp_path: Path) -> None:
+    expected = Path("GENOTYPIC_DATA/expected/DArTAG_numeric.csv")
+    actual = tmp_path / "GENOTYPIC_DATA/relocated/DArTAG_numeric.csv.gz"
+    actual.parent.mkdir(parents=True)
+    with gzip.open(actual, "wt", encoding="utf-8") as handle:
+        handle.write("GID,101,102\nm1,0,2\nm2,1,1\n")
+
+    resolved = resolve_matrix_path(
+        tmp_path,
+        expected,
+        discover_by_basename=True,
+        allow_gzip=True,
+    )
+    matrix, gids, _, markers, _ = parse_dartag_numeric(
+        [resolved], {"GID101", "GID102"}
+    )
+
+    assert resolved == actual.resolve()
+    assert gids == ["GID101", "GID102"]
+    assert markers == ["m1", "m2"]
+    np.testing.assert_array_equal(matrix, np.array([[0, 1], [2, 1]], dtype=np.int8))
 
 
 def test_categorical_haplotype_kernel_is_psd_and_not_dosage_coerced() -> None:
