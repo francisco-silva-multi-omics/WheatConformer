@@ -230,3 +230,43 @@ catalog, pedigree order, panel orders, retained markers, available dosage
 matrices, coordinate sources, graph inputs and embedding orders. It writes a
 certification JSON, a check table and an `audit/regulatory_eligibility_*.sha256`
 manifest only when every check passes.
+
+## BrAPI Pedigree And Marker Recovery
+
+The legacy `query_germplasm_api_aliases.py` workflow searched aliases and
+passport metadata only; it did not request samples, callsets or genotype calls.
+Use the bounded recovery runner to query both ancestry and genotyping modules:
+
+```bash
+PYTHON="$HOME/tools/tf_wheat_cpu/bin/python" \
+WHEATCONFORMER_CODE_ROOT="$HOME/tools/WheatConformer" \
+BRAPI_RECOVERY_LIMIT=10 \
+BRAPI_RECOVERY_OFFSET=0 \
+BRAPI_FETCH_CALLS=1 \
+bash "$HOME/tools/WheatConformer/scripts/run_brapi_pedigree_marker_recovery.sh" \
+  /DATA2/estancias/tesis_javier/model_DATA/genotipoXambiente
+```
+
+The public defaults are T3/Wheat and the CIMMYT GIGWA BrAPI-v2 candidate URL.
+Override them with semicolon-separated `NAME=URL` entries in `BRAPI_SERVERS`.
+Private bearer tokens are read only from environment variable names configured
+through `T3_BRAPI_TOKEN_ENV` or `CIMMYT_BRAPI_TOKEN_ENV`; token values are never
+written to request logs.
+
+Start with a small batch. Larger runs are resumable by assigning each batch a
+new `BRAPI_RECOVERY_OUT_DIR` and advancing `BRAPI_RECOVERY_OFFSET`; cached API
+responses are local to that output directory. GIGWA genotype recovery tries
+both callset calls and BrAPI allele-matrix search.
+
+Selection histories are decomposed into a BCID and developmental-stage tokens.
+The BCID, GID, cross and named parents are germplasm queries, but only the GID
+and BCID are used as direct sample/callset names. Stage suffixes such as `0Y`
+and `32Y` are not interpreted as parents.
+
+Outputs under `genotype_panels/brapi_recovery_v1` distinguish advertised API
+capabilities, attempted requests, exact germplasm matches, review-only
+candidates, pedigree edges, samples, callsets and actual marker calls. Response
+caching, failures, timeouts, parameters and file hashes are retained. A server
+advertising genotyping calls is not counted as marker recovery unless a callset
+and call rows were actually returned. These outputs are evidence only and are
+never merged into production dosage matrices automatically.
