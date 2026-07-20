@@ -5,6 +5,8 @@ import pandas as pd
 from server_genotype_recovery.audit_dataverse_two_hop_marker_bridges import (
     bridge_confidence,
     build_bridges,
+    infer_mapping_headers,
+    infer_marker_sample_header_row,
     marker_axis_candidate,
     plausible_external_alias,
 )
@@ -12,6 +14,9 @@ from server_genotype_recovery.audit_dataverse_two_hop_marker_bridges import (
 
 def test_external_alias_requires_informative_alphanumeric_value() -> None:
     assert plausible_external_alias("WEEXCIM56-17")
+    assert plausible_external_alias("6175067", "GID")
+    assert plausible_external_alias("135", "ENT")
+    assert not plausible_external_alias("6175067", "Cross Name")
     assert not plausible_external_alias("AA")
     assert not plausible_external_alias("12345")
     assert not plausible_external_alias("germplasm")
@@ -21,12 +26,38 @@ def test_axis_and_confidence_require_unique_edge() -> None:
     assert marker_axis_candidate(0, 4) == "header_column_sample_candidate"
     assert marker_axis_candidate(4, 0) == "first_column_sample_candidate"
     assert marker_axis_candidate(4, 4) == "interior_cell_not_sample_axis"
+    assert marker_axis_candidate(
+        2, 14, "GID (CIMMYT general identifier)"
+    ) == "gid_metadata_row_sample_candidate"
     assert bridge_confidence(1, 1, 1, "first_column_sample_candidate") == (
         "high_candidate_requires_call_concordance"
     )
     assert bridge_confidence(2, 1, 1, "first_column_sample_candidate") == (
         "ambiguous_or_non_axis"
     )
+
+
+def test_multiline_hibap_headers_are_inferred() -> None:
+    mapping = pd.DataFrame(
+        [
+            ["HiBAP Y16", "", ""],
+            ["ENT", "GID", "Selection History"],
+            ["135", "6175067", "SEL-1"],
+        ]
+    )
+    header_row, headers = infer_mapping_headers(mapping)
+    assert header_row == 1
+    assert headers[1] == "GID"
+
+    marker = pd.DataFrame(
+        [
+            ["information", "", ""],
+            ["Entry number", "135", "3"],
+            ["GID (CIMMYT general identifier)", "6175067", "775"],
+            ["", "rs#", "alleles"],
+        ]
+    )
+    assert infer_marker_sample_header_row(marker) == 3
 
 
 def test_two_hop_bridge_is_never_directly_ready() -> None:

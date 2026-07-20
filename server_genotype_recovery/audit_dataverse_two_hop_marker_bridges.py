@@ -34,6 +34,7 @@ BRIDGE_COLUMNS = [
     "mapping_source_row",
     "mapping_source_column",
     "mapping_column_header",
+    "mapping_header_row",
     "marker_filename",
     "marker_source_part",
     "marker_source_row",
@@ -45,9 +46,15 @@ BRIDGE_COLUMNS = [
 ]
 
 
-def plausible_external_alias(value: object) -> bool:
+def plausible_external_alias(value: object, column_header: object = "") -> bool:
     text = clean(value)
     normalized = normalized_identifier(text)
+    header = normalized_identifier(column_header)
+    numeric_identifier_header = any(
+        token in header for token in ("GID", "ENT", "ENTRY", "SID", "SAMPLE")
+    )
+    if normalized.isdigit():
+        return numeric_identifier_header and int(normalized) > 0
     if not 4 <= len(normalized) <= 100:
         return False
     if normalized in {"TRUE", "FALSE", "NULL", "NONE", "MISSING", "SAMPLE", "GERMPLASM"}:
@@ -59,7 +66,14 @@ def plausible_external_alias(value: object) -> bool:
     return True
 
 
-def marker_axis_candidate(row: int, column: int) -> str:
+def marker_axis_candidate(row: int, column: int, row_descriptor: object = "") -> str:
+    descriptor = normalized_identifier(row_descriptor)
+    if "GID" in descriptor and "IDENTIFIER" in descriptor:
+        return "gid_metadata_row_sample_candidate"
+    if "ENTRYNUMBER" in descriptor:
+        return "entry_metadata_row_sample_candidate"
+    if any(token in descriptor for token in ("RSALLELES", "SNPID", "MARKERID")):
+        return "sample_label_header_row_candidate"
     if row == 0 and column == 0:
         return "corner_header_ambiguous"
     if row == 0:
@@ -78,6 +92,9 @@ def bridge_confidence(
     axis_supported = axis_candidate in {
         "header_column_sample_candidate",
         "first_column_sample_candidate",
+        "gid_metadata_row_sample_candidate",
+        "entry_metadata_row_sample_candidate",
+        "sample_label_header_row_candidate",
     }
     if (
         trial_gid_count == 1
@@ -89,6 +106,44 @@ def bridge_confidence(
     if trial_gid_count == 1 and marker_location_count <= 5 and axis_supported:
         return "moderate_candidate_requires_disambiguation"
     return "ambiguous_or_non_axis"
+
+
+def infer_mapping_headers(frame: pd.DataFrame) -> tuple[int | None, dict[int, str]]:
+    expected = {
+        "ENT",
+        "ENTRY",
+        "GID",
+        "CID",
+        "SID",
+        "CROSSNAME",
+        "SELECTIONHISTORY",
+        "ORIGIN",
+        "SAMPLE35K",
+    }
+    best_row: int | None = None
+    best_score = 0
+    for row_number in range(min(30, len(frame))):
+        values = frame.iloc[row_number].tolist()
+        score = sum(normalized_identifier(value) in expected for value in values)
+        if score > best_score:
+            best_row, best_score = row_number, score
+    if best_row is None or best_score < 2:
+        return None, {}
+    return best_row, {
+        column: clean(value) for column, value in enumerate(frame.iloc[best_row].tolist())
+    }
+
+
+def infer_marker_sample_header_row(frame: pd.DataFrame) -> int | None:
+    best_row: int | None = None
+    best_score = 0
+    expected = {"RS", "ALLELES", "CHROM", "POS", "STRAND", "SNPID", "MARKERID"}
+    for row_number in range(min(30, len(frame))):
+        normalized = [normalized_identifier(value) for value in frame.iloc[row_number].tolist()]
+        score = sum(value in expected for value in normalized)
+        if score > best_score:
+            best_row, best_score = row_number, score
+    return best_row if best_score >= 2 else None
 
 
 def load_frames(downloads: pd.DataFrame) -> tuple[dict[tuple[str, str], pd.DataFrame], list[dict[str, object]]]:
@@ -148,12 +203,13 @@ def collect_mapping_aliases(
         if frame is None or row_number >= len(frame):
             continue
         row_values = frame.iloc[row_number].tolist()
+        header_row, headers = infer_mapping_headers(frame)
         matched_norms = {normalized_identifier(value) for value in group["query_text"]}
         for column, value in enumerate(row_values):
             normalized = normalized_identifier(value)
-            if normalized in matched_norms or not plausible_external_alias(value):
+            header = headers.get(column, "")
+            if normalized in matched_norms or not plausible_external_alias(value, header):
                 continue
-            header = clean(frame.iloc[0, column]) if len(frame) else ""
             rows.append(
                 {
                     "query_id": record["query_id"],
@@ -166,6 +222,7 @@ def collect_mapping_aliases(
                     "mapping_source_row": row_number,
                     "mapping_source_column": column,
                     "mapping_column_header": header,
+                    "mapping_header_row": header_row,
                 }
             )
     if not rows:
@@ -173,6 +230,7 @@ def collect_mapping_aliases(
             "query_id", "query_text", "dataset_persistent_id", "external_alias",
             "normalized_external_alias", "mapping_filename", "mapping_source_part",
             "mapping_source_row", "mapping_source_column", "mapping_column_header",
+            "mapping_header_row",
         ])
     return pd.DataFrame(rows).drop_duplicates()
 
@@ -195,7 +253,9 @@ def collect_marker_locations(
         source = by_path.get(path)
         if source is None:
             continue
+        sample_header_row = infer_marker_sample_header_row(frame)
         for row_number, values in enumerate(frame.itertuples(index=False, name=None)):
+            descriptor = " ".join(clean(value) for value in values[:12] if clean(value))
             for column, value in enumerate(values):
                 normalized = normalized_identifier(value)
                 if normalized not in aliases:
@@ -208,8 +268,14 @@ def collect_marker_locations(
                         "marker_source_part": part,
                         "marker_source_row": row_number,
                         "marker_source_column": column,
-                        "marker_column_header": clean(frame.iloc[0, column]) if len(frame) else "",
-                        "marker_axis_candidate": marker_axis_candidate(row_number, column),
+                        "marker_column_header": (
+                            clean(frame.iloc[sample_header_row, column])
+                            if sample_header_row is not None
+                            else ""
+                        ),
+                        "marker_axis_candidate": marker_axis_candidate(
+                            row_number, column, descriptor
+                        ),
                     }
                 )
     return pd.DataFrame(rows)
