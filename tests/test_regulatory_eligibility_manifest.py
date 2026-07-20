@@ -16,6 +16,7 @@ from server_genotype_recovery.build_regulatory_eligibility_manifest import (
     summary_tables,
 )
 from server_genotype_recovery.validate_regulatory_eligibility_manifest import (
+    evidence_file_identity,
     validate_artifacts,
 )
 
@@ -351,3 +352,13 @@ def test_projection_queue_sorts_serialized_counts_numerically() -> None:
     queue = projection_work_queue(evidence)
     assert queue["panel_id"].tolist() == ["LARGE", "MEDIUM", "SMALL"]
     assert queue["priority"].tolist() == [1, 2, 3]
+
+
+def test_absent_optional_matrix_accepts_nan_hash(tmp_path: Path) -> None:
+    matched, detail = evidence_file_identity(
+        tmp_path / "expected_but_not_materialized.npy",
+        float("nan"),
+        required=False,
+    )
+    assert matched
+    assert detail == "optional_input_absent"

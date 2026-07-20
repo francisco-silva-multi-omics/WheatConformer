@@ -46,6 +46,24 @@ def bool_series(values: pd.Series) -> pd.Series:
     )
 
 
+def evidence_file_identity(
+    path_value: object, hash_value: object, *, required: bool
+) -> tuple[bool, str]:
+    path_text = "" if pd.isna(path_value) else str(path_value).strip()
+    expected = "" if pd.isna(hash_value) else str(hash_value).strip()
+    if not path_text:
+        return (not required, "path_absent")
+    path = Path(path_text)
+    exists = path.is_file() and path.stat().st_size > 0
+    if not required and not expected and not exists:
+        return True, "optional_input_absent"
+    observed = sha256_file(path) if exists else ""
+    return (
+        exists and bool(expected) and observed == expected,
+        f"expected={expected or 'MISSING'}; observed={observed or 'MISSING'}",
+    )
+
+
 def file_identity_check(
     checks: list[dict[str, object]],
     *,
@@ -260,18 +278,12 @@ def validate_artifacts(
             ("retained_marker_path", "retained_marker_sha256", False),
             ("genotype_matrix_path", "genotype_matrix_sha256", False),
         ]:
-            path_text = str(row.get(path_column, "") or "").strip()
-            expected = str(row.get(hash_column, "") or "").strip()
-            if not path_text or path_text.lower() == "nan":
-                if required:
-                    panel_input_failures.append(f"{panel_id}:{path_column}:missing")
-                continue
-            path = Path(path_text)
-            exists = path.is_file() and path.stat().st_size > 0
-            observed = sha256_file(path) if exists else ""
-            if not required and not expected and not exists:
-                continue
-            if not exists or not expected or observed != expected:
+            matched, _ = evidence_file_identity(
+                row.get(path_column, ""),
+                row.get(hash_column, ""),
+                required=required,
+            )
+            if not matched:
                 panel_input_failures.append(f"{panel_id}:{path_column}")
     add_check(
         checks,
