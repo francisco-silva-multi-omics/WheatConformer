@@ -266,6 +266,10 @@ threshold with `BRAPI_MAX_CONSECUTIVE_FAILURES`.
 Synchronous exact-name collection endpoints are tried before asynchronous
 search jobs; this avoids treating a successfully queued search as successful
 data retrieval when the result handle later times out.
+Returned samples and callsets are independently checked against the requested
+GID, BCID, germplasm ID or sample ID. Servers that ignore a filter may produce
+`review_candidate` rows for audit, but only `exact` rows can trigger callset or
+marker-call retrieval.
 
 Selection histories are decomposed into a BCID and developmental-stage tokens.
 The BCID, GID, cross and named parents are germplasm queries, but only the GID

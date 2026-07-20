@@ -152,8 +152,47 @@ def test_marker_discovery_distinguishes_samples_callsets_and_calls(tmp_path: Pat
     callsets = find_callsets(client, samples, terms, 20)
     calls = find_calls(client, callsets, 100)
     assert samples[0]["sampleDbId"] == "s1"
+    assert samples[0]["match_status"] == "exact"
     assert callsets[0]["callSetDbId"] == "c1"
+    assert callsets[0]["match_status"] == "exact"
     assert calls[0]["genotype"] == "0/1"
+
+
+def test_ignored_sample_filter_is_review_only_and_cannot_trigger_callsets(tmp_path: Path) -> None:
+    def transport(method, url, payload, headers, timeout):
+        if "/samples?" in url:
+            return {
+                "result": {
+                    "data": [
+                        {
+                            "sampleDbId": "1372998",
+                            "sampleName": "1",
+                            "germplasmDbId": "228481",
+                        }
+                    ]
+                }
+            }
+        raise AssertionError(f"Callset endpoint must not be queried for a review-only sample: {url}")
+
+    client = BrAPIClient(
+        ServerSpec("fake", "https://example.test/brapi/v2"),
+        tmp_path,
+        [],
+        [],
+        transport=transport,
+    )
+    terms = [
+        {
+            "query_id": "GID8231407",
+            "query_kind": "sample_id",
+            "query_text": "GID8231407",
+            "marker_probe_eligible": True,
+        }
+    ]
+    samples = find_samples(client, [], terms, 20)
+    assert len(samples) == 1
+    assert samples[0]["match_status"] == "review_candidate"
+    assert find_callsets(client, samples, [], 20) == []
 
 
 def test_gigwa_allele_matrix_is_converted_to_marker_calls(tmp_path: Path) -> None:
@@ -173,7 +212,15 @@ def test_gigwa_allele_matrix_is_converted_to_marker_calls(tmp_path: Path) -> Non
         }
 
     client = BrAPIClient(ServerSpec("fake", "https://example.test/brapi/v2"), tmp_path, [], [], transport=transport)
-    callsets = [{"query_id": "GID1", "sampleDbId": "s1", "callSetDbId": "c1", "callSetName": "GID1"}]
+    callsets = [
+        {
+            "query_id": "GID1",
+            "sampleDbId": "s1",
+            "callSetDbId": "c1",
+            "callSetName": "GID1",
+            "match_status": "exact",
+        }
+    ]
     calls = find_allele_matrix_calls(client, callsets, 100)
     assert [row["variantDbId"] for row in calls] == ["v1", "v2"]
     assert [row["genotype"] for row in calls] == ["0/1", "1/1"]

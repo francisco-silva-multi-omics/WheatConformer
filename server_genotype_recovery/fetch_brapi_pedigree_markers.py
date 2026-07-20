@@ -653,10 +653,41 @@ def search_crosses(client: BrAPIClient, terms: list[dict[str, object]], page_siz
     return output
 
 
-def sample_row(server: str, query_id: str, germplasm_dbid: str, record: dict) -> dict[str, object]:
+def external_reference_values(record: dict) -> list[str]:
+    values: list[str] = []
+    for external in record.get("externalReferences") or []:
+        if not isinstance(external, dict):
+            continue
+        value = clean(external.get("referenceID") or external.get("referenceId"))
+        if value:
+            values.append(value)
+    return values
+
+
+def record_identifier_match(query: str, record: dict, fields: tuple[str, ...]) -> bool:
+    target = normalized_identifier(query)
+    values = [clean(record.get(field)) for field in fields]
+    values.extend(external_reference_values(record))
+    return bool(target) and target in {normalized_identifier(value) for value in values if value}
+
+
+def sample_row(
+    server: str,
+    query_id: str,
+    query_kind: str,
+    query_text: str,
+    germplasm_dbid: str,
+    retrieval_basis: str,
+    match_status: str,
+    record: dict,
+) -> dict[str, object]:
     return {
         "server": server,
         "query_id": query_id,
+        "query_kind": query_kind,
+        "query_text": query_text,
+        "retrieval_basis": retrieval_basis,
+        "match_status": match_status,
         "germplasmDbId": clean(record.get("germplasmDbId")) or germplasm_dbid,
         "sampleDbId": clean(record.get("sampleDbId")),
         "sampleName": clean(record.get("sampleName")),
@@ -673,16 +704,39 @@ def find_samples(
     marker_terms: list[dict[str, object]],
     page_size: int,
 ) -> list[dict[str, object]]:
-    output: list[dict[str, object]] = []
-    seen: set[tuple[str, str, str]] = set()
+    output: dict[tuple[str, str, str], dict[str, object]] = {}
 
-    def add(query_id: str, germplasm_dbid: str, rows: list[dict]) -> None:
+    def add(
+        query_id: str,
+        query_kind: str,
+        query_text: str,
+        germplasm_dbid: str,
+        retrieval_basis: str,
+        rows: list[dict],
+    ) -> None:
         for record in rows:
-            row = sample_row(client.spec.name, query_id, germplasm_dbid, record)
+            if retrieval_basis == "germplasmDbId":
+                exact = normalized_identifier(record.get("germplasmDbId")) == normalized_identifier(germplasm_dbid)
+            else:
+                exact = record_identifier_match(
+                    query_text, record, ("sampleName", "sampleDbId", "samplePUI")
+                )
+            row = sample_row(
+                client.spec.name,
+                query_id,
+                query_kind,
+                query_text,
+                germplasm_dbid,
+                retrieval_basis,
+                "exact" if exact else "review_candidate",
+                record,
+            )
             key = (str(row["query_id"]), str(row["sampleDbId"]), str(row["sampleName"]))
-            if key not in seen:
-                seen.add(key)
-                output.append(row)
+            previous = output.get(key)
+            if previous is None or (
+                previous["match_status"] != "exact" and row["match_status"] == "exact"
+            ):
+                output[key] = row
 
     for match in exact_matches:
         dbid = str(match["germplasmDbId"])
@@ -700,7 +754,7 @@ def find_samples(
                 {"germplasmDbIds": [dbid], "pageSize": page_size},
                 f"samples:germplasm:{query_id}:{dbid}",
             )
-        add(query_id, dbid, rows)
+        add(query_id, "germplasmDbId", dbid, dbid, "germplasmDbId", rows)
     for term in marker_terms:
         text = str(term["query_text"])
         rows, direct_supported = client.get_collection_with_status(
@@ -714,14 +768,34 @@ def find_samples(
                 {"sampleNames": [text], "pageSize": page_size},
                 f"samples:name:{term['query_id']}:{text}",
             )
-        add(str(term["query_id"]), "", rows)
-    return output
+        add(
+            str(term["query_id"]),
+            str(term.get("query_kind", "")),
+            text,
+            "",
+            "sampleName",
+            rows,
+        )
+    return list(output.values())
 
 
-def callset_row(server: str, query_id: str, sample_dbid: str, record: dict) -> dict[str, object]:
+def callset_row(
+    server: str,
+    query_id: str,
+    query_kind: str,
+    query_text: str,
+    sample_dbid: str,
+    retrieval_basis: str,
+    match_status: str,
+    record: dict,
+) -> dict[str, object]:
     return {
         "server": server,
         "query_id": query_id,
+        "query_kind": query_kind,
+        "query_text": query_text,
+        "retrieval_basis": retrieval_basis,
+        "match_status": match_status,
         "sampleDbId": clean(record.get("sampleDbId")) or sample_dbid,
         "callSetDbId": clean(record.get("callSetDbId")),
         "callSetName": clean(record.get("callSetName")),
@@ -738,18 +812,43 @@ def find_callsets(
     marker_terms: list[dict[str, object]],
     page_size: int,
 ) -> list[dict[str, object]]:
-    output: list[dict[str, object]] = []
-    seen: set[tuple[str, str]] = set()
+    output: dict[tuple[str, str, str], dict[str, object]] = {}
 
-    def add(query_id: str, sample_dbid: str, rows: list[dict]) -> None:
+    def add(
+        query_id: str,
+        query_kind: str,
+        query_text: str,
+        sample_dbid: str,
+        retrieval_basis: str,
+        rows: list[dict],
+    ) -> None:
         for record in rows:
-            row = callset_row(client.spec.name, query_id, sample_dbid, record)
-            key = (str(row["callSetDbId"]), str(row["callSetName"]))
-            if key not in seen:
-                seen.add(key)
-                output.append(row)
+            if retrieval_basis == "sampleDbId":
+                exact = normalized_identifier(record.get("sampleDbId")) == normalized_identifier(sample_dbid)
+            else:
+                exact = record_identifier_match(
+                    query_text, record, ("callSetName", "callSetDbId")
+                )
+            row = callset_row(
+                client.spec.name,
+                query_id,
+                query_kind,
+                query_text,
+                sample_dbid,
+                retrieval_basis,
+                "exact" if exact else "review_candidate",
+                record,
+            )
+            key = (str(row["query_id"]), str(row["callSetDbId"]), str(row["callSetName"]))
+            previous = output.get(key)
+            if previous is None or (
+                previous["match_status"] != "exact" and row["match_status"] == "exact"
+            ):
+                output[key] = row
 
     for sample in samples:
+        if sample.get("match_status") != "exact":
+            continue
         sample_dbid = str(sample["sampleDbId"])
         if not sample_dbid:
             continue
@@ -764,7 +863,14 @@ def find_callsets(
                 {"sampleDbIds": [sample_dbid], "pageSize": page_size},
                 f"callsets:sample:{sample['query_id']}:{sample_dbid}",
             )
-        add(str(sample["query_id"]), sample_dbid, rows)
+        add(
+            str(sample["query_id"]),
+            str(sample.get("query_kind", "")),
+            str(sample.get("query_text", "")),
+            sample_dbid,
+            "sampleDbId",
+            rows,
+        )
     for term in marker_terms:
         text = str(term["query_text"])
         rows, direct_supported = client.get_collection_with_status(
@@ -778,8 +884,15 @@ def find_callsets(
                 {"callSetNames": [text], "pageSize": page_size},
                 f"callsets:name:{term['query_id']}:{text}",
             )
-        add(str(term["query_id"]), "", rows)
-    return output
+        add(
+            str(term["query_id"]),
+            str(term.get("query_kind", "")),
+            text,
+            "",
+            "callSetName",
+            rows,
+        )
+    return list(output.values())
 
 
 def find_calls(
@@ -789,6 +902,8 @@ def find_calls(
 ) -> list[dict[str, object]]:
     output: list[dict[str, object]] = []
     for callset in callsets:
+        if callset.get("match_status") != "exact":
+            continue
         callset_dbid = str(callset["callSetDbId"])
         if not callset_dbid:
             continue
@@ -827,6 +942,8 @@ def find_allele_matrix_calls(
 ) -> list[dict[str, object]]:
     output: list[dict[str, object]] = []
     for callset in callsets:
+        if callset.get("match_status") != "exact":
+            continue
         callset_dbid = str(callset["callSetDbId"])
         if not callset_dbid:
             continue
@@ -1106,12 +1223,14 @@ def main() -> None:
         "parent_name", "parent_relation", "child_depth", "parent_depth",
     ])
     write_tsv(samples, out_dir / "brapi_samples.tsv", [
-        "server", "query_id", "germplasmDbId", "sampleDbId", "sampleName", "studyDbId",
+        "server", "query_id", "query_kind", "query_text", "retrieval_basis",
+        "match_status", "germplasmDbId", "sampleDbId", "sampleName", "studyDbId",
         "observationUnitDbId", "plateDbId", "raw_json",
     ])
     write_tsv(callsets, out_dir / "brapi_callsets.tsv", [
-        "server", "query_id", "sampleDbId", "callSetDbId", "callSetName",
-        "variantSetDbIds", "created", "updated", "raw_json",
+        "server", "query_id", "query_kind", "query_text", "retrieval_basis",
+        "match_status", "sampleDbId", "callSetDbId", "callSetName", "variantSetDbIds",
+        "created", "updated", "raw_json",
     ])
     write_tsv_gz(calls, out_dir / "brapi_marker_calls.tsv.gz", [
         "server", "query_id", "sampleDbId", "callSetDbId", "callSetName", "call_source",
@@ -1133,7 +1252,9 @@ def main() -> None:
     metric(qc, "pedigree_node_rows", len(pedigree_nodes))
     metric(qc, "pedigree_edge_rows", len(pedigree_edges))
     metric(qc, "sample_rows", len(samples))
+    metric(qc, "sample_exact_match_rows", sum(row["match_status"] == "exact" for row in samples))
     metric(qc, "callset_rows", len(callsets))
+    metric(qc, "callset_exact_match_rows", sum(row["match_status"] == "exact" for row in callsets))
     metric(qc, "marker_call_rows", len(calls))
     metric(qc, "marker_discovery_attempted", True)
     metric(qc, "marker_call_fetch_requested", bool(args.fetch_calls))
