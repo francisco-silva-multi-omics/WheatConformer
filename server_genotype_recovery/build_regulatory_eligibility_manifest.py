@@ -629,6 +629,9 @@ def projection_work_queue(panel_evidence: pd.DataFrame) -> pd.DataFrame:
     work_queue = panel_evidence[
         ["panel_id", "certified_gid_count", "next_required_action"]
     ].copy()
+    work_queue["certified_gid_count"] = pd.to_numeric(
+        work_queue["certified_gid_count"], errors="raise"
+    ).astype(int)
     work_queue = work_queue.sort_values(
         ["certified_gid_count", "panel_id"], ascending=[False, True], kind="stable"
     ).reset_index(drop=True)

@@ -269,6 +269,8 @@ def validate_artifacts(
             path = Path(path_text)
             exists = path.is_file() and path.stat().st_size > 0
             observed = sha256_file(path) if exists else ""
+            if not required and not expected and not exists:
+                continue
             if not exists or not expected or observed != expected:
                 panel_input_failures.append(f"{panel_id}:{path_column}")
     add_check(

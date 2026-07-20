@@ -338,3 +338,16 @@ def test_regulatory_artifact_freeze_recomputes_entire_contract(tmp_path: Path) -
     assert {"input_identity_canonical_catalog", "canonical_observation_row_conservation"}.issubset(
         failed
     )
+
+
+def test_projection_queue_sorts_serialized_counts_numerically() -> None:
+    evidence = pd.DataFrame(
+        {
+            "panel_id": ["SMALL", "LARGE", "MEDIUM"],
+            "certified_gid_count": ["91", "4664", "1344"],
+            "next_required_action": ["a", "b", "c"],
+        }
+    )
+    queue = projection_work_queue(evidence)
+    assert queue["panel_id"].tolist() == ["LARGE", "MEDIUM", "SMALL"]
+    assert queue["priority"].tolist() == [1, 2, 3]
