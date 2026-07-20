@@ -12,6 +12,7 @@ TIMEOUT="${CIMMYT_DATAVERSE_TIMEOUT:-60}"
 DOWNLOAD="${CIMMYT_DATAVERSE_DOWNLOAD_CANDIDATES:-1}"
 INCLUDE_RESTRICTED="${CIMMYT_DATAVERSE_INCLUDE_RESTRICTED:-0}"
 SCAN_ALL_RESOLVER_TERMS="${CIMMYT_DATAVERSE_SCAN_ALL_RESOLVER_TERMS:-1}"
+TARGET_DATAFILE_IDS="${CIMMYT_DATAVERSE_TARGET_DATAFILE_IDS:-}"
 MAX_FILES="${CIMMYT_DATAVERSE_MAX_DOWNLOAD_FILES:-10}"
 MAX_FILE_BYTES="${CIMMYT_DATAVERSE_MAX_FILE_BYTES:-26214400}"
 MAX_TOTAL_BYTES="${CIMMYT_DATAVERSE_MAX_TOTAL_BYTES:-104857600}"
@@ -43,6 +44,12 @@ if [[ "$INCLUDE_RESTRICTED" == "1" ]]; then
 fi
 if [[ "$SCAN_ALL_RESOLVER_TERMS" == "1" ]]; then
   args+=(--scan-all-resolver-terms)
+fi
+if [[ -n "$TARGET_DATAFILE_IDS" ]]; then
+  IFS=',' read -r -a target_ids <<< "$TARGET_DATAFILE_IDS"
+  for datafile_id in "${target_ids[@]}"; do
+    [[ -n "$datafile_id" ]] && args+=(--target-datafile-id "$datafile_id")
+  done
 fi
 
 echo "[$(date '+%F %T')] START authenticated CIMMYT Dataverse recovery"

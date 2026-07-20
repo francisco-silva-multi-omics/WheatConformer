@@ -312,6 +312,10 @@ downloaded files are indexed against every resolver GID, BCID, parent and cross.
 This separates API request volume from local evidence recovery. Large resolver
 sets use an indexed exact-cell/GID scanner rather than a term-by-line nested
 loop, and existing downloads are reused when a run is resumed in place.
+Set `CIMMYT_DATAVERSE_TARGET_DATAFILE_IDS` to a comma-separated list of audited
+Dataverse file IDs when a supported dataset has a specific untested marker
+file. Targeted files are placed ahead of generic candidates but retain the same
+authorization, file-size and total-download safety limits.
 
 Run `scripts/audit_cimmyt_dataverse_structured_evidence.sh` after recovery to
 reopen downloaded TSV/CSV/TXT/XLSX files and certify matches at the source-row

@@ -5,6 +5,7 @@ from pathlib import Path
 
 from server_genotype_recovery.fetch_cimmyt_dataverse_recovery import (
     DataverseClient,
+    candidate_download_sort_key,
     candidate_priority,
     classify_candidate_file,
     dataset_file_rows,
@@ -158,3 +159,24 @@ def test_candidate_priority_penalizes_non_wheat_pedigree() -> None:
         "content_type": "application/octet-stream",
     }
     assert candidate_priority(wheat)[0] > candidate_priority(maize)[0]
+
+
+def test_targeted_datafile_sorts_before_higher_generic_priority() -> None:
+    targeted = {
+        "datafile_id": "13113",
+        "priority_score": 10,
+        "restricted": False,
+        "filesize": 100,
+        "filename": "HiBAP_snps_35karray.txt",
+    }
+    generic = {
+        "datafile_id": "other",
+        "priority_score": 100,
+        "restricted": False,
+        "filesize": 10,
+        "filename": "other.txt",
+    }
+    target_ids = {"13113"}
+    assert candidate_download_sort_key(targeted, target_ids, False) < (
+        candidate_download_sort_key(generic, target_ids, False)
+    )
