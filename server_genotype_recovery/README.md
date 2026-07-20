@@ -247,8 +247,8 @@ bash "$HOME/tools/WheatConformer/scripts/run_brapi_pedigree_marker_recovery.sh" 
   /DATA2/estancias/tesis_javier/model_DATA/genotipoXambiente
 ```
 
-The public defaults are T3/Wheat and the CIMMYT GIGWA BrAPI-v2 candidate URL.
-Override them with semicolon-separated `NAME=URL` entries in `BRAPI_SERVERS`.
+The public default is T3/Wheat. Override it with semicolon-separated
+`NAME=URL` entries in `BRAPI_SERVERS`.
 Private bearer tokens are read only from environment variable names configured
 through `T3_BRAPI_TOKEN_ENV` or `CIMMYT_BRAPI_TOKEN_ENV`; token values are never
 written to request logs.
@@ -270,6 +270,12 @@ Returned samples and callsets are independently checked against the requested
 GID, BCID, germplasm ID or sample ID. Servers that ignore a filter may produce
 `review_candidate` rows for audit, but only `exact` rows can trigger callset or
 marker-call retrieval.
+
+The former CIMMYT DCP GIGWA host `gdata.cimmyt.org` is intentionally not a
+default: authoritative public DNS returned `NXDOMAIN` during the July 2026
+audit. CIMMYT's current Germinate Wheat API requires authentication and is not
+a drop-in public BrAPI-v2 replacement. Add a new CIMMYT endpoint through
+`BRAPI_SERVERS` only after its base URL and credentials are validated.
 
 Selection histories are decomposed into a BCID and developmental-stage tokens.
 The BCID, GID, cross and named parents are germplasm queries, but only the GID

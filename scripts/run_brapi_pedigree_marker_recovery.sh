@@ -13,7 +13,7 @@ MAX_DEPTH="${BRAPI_PEDIGREE_MAX_DEPTH:-3}"
 MAX_CALLS="${BRAPI_MAX_CALLS_PER_CALLSET:-1000}"
 MAX_FAILURES="${BRAPI_MAX_CONSECUTIVE_FAILURES:-3}"
 FETCH_CALLS="${BRAPI_FETCH_CALLS:-1}"
-SERVERS="${BRAPI_SERVERS:-t3=https://wheat.triticeaetoolbox.org/brapi/v2;cimmyt_gigwa=https://gdata.cimmyt.org/gigwa2/rest/brapi/v2}"
+SERVERS="${BRAPI_SERVERS:-t3=https://wheat.triticeaetoolbox.org/brapi/v2}"
 
 export PYTHONPATH="$CODE_ROOT${PYTHONPATH:+:$PYTHONPATH}"
 cd "$ROOT"
