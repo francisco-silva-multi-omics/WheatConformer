@@ -258,6 +258,12 @@ new `BRAPI_RECOVERY_OUT_DIR` and advancing `BRAPI_RECOVERY_OFFSET`; cached API
 responses are local to that output directory. GIGWA genotype recovery tries
 both callset calls and BrAPI allele-matrix search.
 
+The runner writes `brapi_run_status.json`, `brapi_request_log.tsv`,
+`brapi_failures.tsv` and a running QC table immediately. It prints each active
+query to the nohup log and opens a server circuit breaker after three
+consecutive timeout, authentication, DNS or server failures. Configure the
+threshold with `BRAPI_MAX_CONSECUTIVE_FAILURES`.
+
 Selection histories are decomposed into a BCID and developmental-stage tokens.
 The BCID, GID, cross and named parents are germplasm queries, but only the GID
 and BCID are used as direct sample/callset names. Stage suffixes such as `0Y`

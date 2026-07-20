@@ -29,6 +29,25 @@ QUERY_FIELDS = (
     "parent1",
     "parent2",
 )
+REQUEST_LOG_COLUMNS = [
+    "server",
+    "context",
+    "method",
+    "url",
+    "status",
+    "elapsed_seconds",
+    "response_bytes",
+    "cache_path",
+]
+FAILURE_COLUMNS = [
+    "server",
+    "context",
+    "method",
+    "url",
+    "status",
+    "error_type",
+    "error",
+]
 
 
 def utc_now() -> str:
@@ -80,13 +99,24 @@ def read_table(path: Path) -> pd.DataFrame:
 
 def write_tsv(rows: list[dict[str, object]], path: Path, columns: list[str]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    pd.DataFrame(rows, columns=columns).to_csv(path, sep="\t", index=False)
+    temporary = path.with_name(f".{path.name}.tmp")
+    pd.DataFrame(rows, columns=columns).to_csv(temporary, sep="\t", index=False)
+    temporary.replace(path)
 
 
 def write_tsv_gz(rows: list[dict[str, object]], path: Path, columns: list[str]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with gzip.open(path, "wt", encoding="utf-8", newline="") as handle:
         pd.DataFrame(rows, columns=columns).to_csv(handle, sep="\t", index=False)
+
+
+def write_json_atomic(payload: dict[str, object], path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.tmp")
+    temporary.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    temporary.replace(path)
 
 
 def response_result(payload: dict) -> object:
@@ -207,6 +237,8 @@ class BrAPIClient:
         timeout: int = 30,
         poll_attempts: int = 3,
         poll_sleep: float = 0.5,
+        max_consecutive_failures: int = 3,
+        checkpoint: Callable[[], None] | None = None,
         transport: Transport = urllib_transport,
     ) -> None:
         self.spec = spec
@@ -218,7 +250,22 @@ class BrAPIClient:
         self.timeout = timeout
         self.poll_attempts = poll_attempts
         self.poll_sleep = poll_sleep
+        self.max_consecutive_failures = max_consecutive_failures
+        self.checkpoint = checkpoint
         self.transport = transport
+        self.consecutive_transport_failures = 0
+        self.circuit_open = False
+
+    def _record(
+        self,
+        request_row: dict[str, object],
+        failure_row: dict[str, object] | None = None,
+    ) -> None:
+        self.request_log.append(request_row)
+        if failure_row is not None:
+            self.failures.append(failure_row)
+        if self.checkpoint is not None:
+            self.checkpoint()
 
     def _cache_path(self, method: str, url: str, payload: dict | None) -> Path:
         identity = json.dumps(
@@ -239,9 +286,24 @@ class BrAPIClient:
         url = path if path.startswith("http") else f"{self.base}/{path.lstrip('/')}"
         cache_path = self._cache_path(method, url, payload)
         started = time.monotonic()
+        if self.circuit_open:
+            self._record(
+                {
+                    "server": self.spec.name,
+                    "context": context,
+                    "method": method,
+                    "url": url,
+                    "status": "SKIPPED_CIRCUIT_OPEN",
+                    "elapsed_seconds": 0.0,
+                    "response_bytes": 0,
+                    "cache_path": str(cache_path),
+                }
+            )
+            return None
         if use_cache and cache_path.is_file():
             result = json.loads(cache_path.read_text(encoding="utf-8"))
-            self.request_log.append(
+            self.consecutive_transport_failures = 0
+            self._record(
                 {
                     "server": self.spec.name,
                     "context": context,
@@ -263,7 +325,8 @@ class BrAPIClient:
             result = self.transport(method, url, payload, headers, self.timeout)
             encoded = json.dumps(result, sort_keys=True)
             cache_path.write_text(encoded, encoding="utf-8")
-            self.request_log.append(
+            self.consecutive_transport_failures = 0
+            self._record(
                 {
                     "server": self.spec.name,
                     "context": context,
@@ -281,9 +344,22 @@ class BrAPIClient:
             code = getattr(exc, "code", None)
             if code in (401, 403):
                 status = "AUTH_REQUIRED"
+            elif code is not None:
+                status = f"HTTP_{code}"
             elif isinstance(exc, TimeoutError) or "timed out" in str(exc).lower():
                 status = "TIMEOUT"
-            self.request_log.append(
+            transport_failure = (
+                status in {"TIMEOUT", "AUTH_REQUIRED"}
+                or isinstance(exc, urllib.error.URLError)
+                or (isinstance(code, int) and code >= 500)
+            )
+            if transport_failure:
+                self.consecutive_transport_failures += 1
+                if self.consecutive_transport_failures >= self.max_consecutive_failures:
+                    self.circuit_open = True
+            else:
+                self.consecutive_transport_failures = 0
+            self._record(
                 {
                     "server": self.spec.name,
                     "context": context,
@@ -293,9 +369,7 @@ class BrAPIClient:
                     "elapsed_seconds": time.monotonic() - started,
                     "response_bytes": 0,
                     "cache_path": str(cache_path),
-                }
-            )
-            self.failures.append(
+                },
                 {
                     "server": self.spec.name,
                     "context": context,
@@ -304,7 +378,7 @@ class BrAPIClient:
                     "status": status,
                     "error_type": type(exc).__name__,
                     "error": str(exc),
-                }
+                },
             )
             return None
 
@@ -840,6 +914,7 @@ def main() -> None:
     parser.add_argument("--timeout", type=int, default=30)
     parser.add_argument("--poll-attempts", type=int, default=3)
     parser.add_argument("--poll-sleep", type=float, default=0.5)
+    parser.add_argument("--max-consecutive-failures", type=int, default=3)
     parser.add_argument("--sleep", type=float, default=0.1)
     parser.add_argument(
         "--out-dir", type=Path, default=Path("genotype_panels/brapi_recovery_v1")
@@ -879,7 +954,43 @@ def main() -> None:
     callsets: list[dict[str, object]] = []
     calls: list[dict[str, object]] = []
 
+    write_tsv(query_terms, out_dir / "brapi_query_terms.tsv", [
+        "source_row", "query_id", "query_kind", "query_text", "normalized_query",
+        "marker_probe_eligible", "selection_stage_count", "selection_stages",
+    ])
+    initial_qc: list[dict[str, object]] = []
+    metric(initial_qc, "run_status", "running")
+    metric(initial_qc, "resolver_rows_available", len(query))
+    metric(initial_qc, "resolver_rows_selected", len(selected))
+    metric(initial_qc, "query_terms", len(query_terms))
+    metric(initial_qc, "marker_probe_terms", len(marker_terms))
+    metric(initial_qc, "server_count", len(specs))
+    write_tsv(initial_qc, out_dir / "brapi_recovery_qc.tsv", ["metric", "value"])
+    progress: dict[str, object] = {
+        "status": "running",
+        "started_at_utc": utc_now(),
+        "server": "",
+        "phase": "initializing",
+        "query_term_index": 0,
+        "query_term_count": len(query_terms),
+        "request_count": 0,
+        "failure_count": 0,
+    }
+
+    def checkpoint() -> None:
+        progress["updated_at_utc"] = utc_now()
+        progress["request_count"] = len(request_log)
+        progress["failure_count"] = len(failures)
+        write_tsv(request_log, out_dir / "brapi_request_log.tsv", REQUEST_LOG_COLUMNS)
+        write_tsv(failures, out_dir / "brapi_failures.tsv", FAILURE_COLUMNS)
+        write_json_atomic(progress, out_dir / "brapi_run_status.json")
+
+    checkpoint()
+
     for spec in specs:
+        progress.update({"server": spec.name, "phase": "serverinfo", "query_term_index": 0})
+        print(f"[{utc_now()}] SERVER {spec.name}: capability discovery", flush=True)
+        checkpoint()
         client = BrAPIClient(
             spec,
             cache_dir,
@@ -888,17 +999,33 @@ def main() -> None:
             timeout=args.timeout,
             poll_attempts=args.poll_attempts,
             poll_sleep=args.poll_sleep,
+            max_consecutive_failures=args.max_consecutive_failures,
+            checkpoint=checkpoint,
         )
         serverinfo = client.request("GET", "serverinfo", context="serverinfo")
         capabilities.extend(capability_rows(client, serverinfo))
         server_matches: list[dict[str, object]] = []
-        for term in query_terms:
+        progress["phase"] = "germplasm_search"
+        for term_index, term in enumerate(query_terms, start=1):
+            progress["query_term_index"] = term_index
+            progress["query_id"] = term["query_id"]
+            progress["query_kind"] = term["query_kind"]
+            progress["query_text"] = term["query_text"]
+            print(
+                f"[{utc_now()}] SERVER {spec.name}: germplasm term "
+                f"{term_index}/{len(query_terms)} query_id={term['query_id']} "
+                f"kind={term['query_kind']}",
+                flush=True,
+            )
+            checkpoint()
             hits = germplasm_search(client, term, args.page_size)
             for hit in hits:
                 status = "exact" if exact_record_match(str(term["query_text"]), hit) else "review_candidate"
                 server_matches.append(germplasm_row(spec.name, term, hit, status))
             time.sleep(args.sleep)
         matches.extend(server_matches)
+        progress["phase"] = "cross_search"
+        checkpoint()
         cross_matches.extend(search_crosses(client, query_terms, args.page_size))
         exact = [row for row in server_matches if row["match_status"] == "exact"]
         unique_roots: list[tuple[str, str, str]] = []
@@ -908,26 +1035,37 @@ def main() -> None:
             if row["germplasmDbId"] and key not in seen_roots:
                 seen_roots.add(key)
                 unique_roots.append((key[0], key[1], str(row["germplasmName"])))
+        progress["phase"] = "pedigree_traversal"
+        checkpoint()
         nodes, edges = traverse_pedigree(
             client, unique_roots[: args.max_matched_germplasm], args.max_pedigree_depth
         )
         pedigree_nodes.extend(nodes)
         pedigree_edges.extend(edges)
+        progress["phase"] = "sample_search"
+        checkpoint()
         server_samples = find_samples(client, exact, marker_terms, args.page_size)
         samples.extend(server_samples)
+        progress["phase"] = "callset_search"
+        checkpoint()
         server_callsets = find_callsets(client, server_samples, marker_terms, args.page_size)
         callsets.extend(server_callsets)
         if args.fetch_calls:
+            progress["phase"] = "marker_call_fetch"
+            checkpoint()
             calls.extend(find_calls(client, server_callsets, args.max_calls_per_callset))
             calls.extend(
                 find_allele_matrix_calls(client, server_callsets, args.max_calls_per_callset)
             )
+        print(
+            f"[{utc_now()}] SERVER {spec.name}: done; exact_matches="
+            f"{sum(row['match_status'] == 'exact' for row in server_matches)} "
+            f"samples={len(server_samples)} callsets={len(server_callsets)} "
+            f"circuit_open={client.circuit_open}",
+            flush=True,
+        )
+        checkpoint()
 
-    query_columns = [
-        "source_row", "query_id", "query_kind", "query_text", "normalized_query",
-        "marker_probe_eligible", "selection_stage_count", "selection_stages",
-    ]
-    write_tsv(query_terms, out_dir / "brapi_query_terms.tsv", query_columns)
     write_tsv(capabilities, out_dir / "brapi_capability_audit.tsv", [
         "server", "base_url", "authenticated", "serverinfo_available", "resource",
         "advertised", "advertised_call_count",
@@ -961,15 +1099,11 @@ def main() -> None:
         "server", "query_id", "sampleDbId", "callSetDbId", "callSetName", "call_source",
         "variantDbId", "variantName", "genotype", "genotypeValue", "phaseSet", "raw_json",
     ])
-    write_tsv(request_log, out_dir / "brapi_request_log.tsv", [
-        "server", "context", "method", "url", "status", "elapsed_seconds",
-        "response_bytes", "cache_path",
-    ])
-    write_tsv(failures, out_dir / "brapi_failures.tsv", [
-        "server", "context", "method", "url", "status", "error_type", "error",
-    ])
+    write_tsv(request_log, out_dir / "brapi_request_log.tsv", REQUEST_LOG_COLUMNS)
+    write_tsv(failures, out_dir / "brapi_failures.tsv", FAILURE_COLUMNS)
 
     qc: list[dict[str, object]] = []
+    metric(qc, "run_status", "complete_with_failures" if failures else "complete")
     metric(qc, "resolver_rows_available", len(query))
     metric(qc, "resolver_rows_selected", len(selected))
     metric(qc, "query_terms", len(query_terms))
@@ -1020,6 +1154,7 @@ def main() -> None:
             "max_calls_per_callset": args.max_calls_per_callset,
             "timeout": args.timeout,
             "poll_attempts": args.poll_attempts,
+            "max_consecutive_failures": args.max_consecutive_failures,
         },
         "selection_data": "identifiers_and_public_api_metadata_only",
         "phenotype_values_read": False,
@@ -1027,9 +1162,15 @@ def main() -> None:
         "final_holdout_outcomes_read": False,
         "output_sha256": {str(path.relative_to(out_dir)): sha256_file(path) for path in output_paths},
     }
-    (out_dir / "brapi_recovery_provenance.json").write_text(
-        json.dumps(provenance, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    write_json_atomic(provenance, out_dir / "brapi_recovery_provenance.json")
+    progress.update(
+        {
+            "status": "complete_with_failures" if failures else "complete",
+            "phase": "complete",
+            "finished_at_utc": utc_now(),
+        }
     )
+    checkpoint()
     print(pd.DataFrame(qc).to_string(index=False))
 
 

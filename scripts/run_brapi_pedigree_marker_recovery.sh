@@ -11,6 +11,7 @@ OFFSET="${BRAPI_RECOVERY_OFFSET:-0}"
 TIMEOUT="${BRAPI_RECOVERY_TIMEOUT:-30}"
 MAX_DEPTH="${BRAPI_PEDIGREE_MAX_DEPTH:-3}"
 MAX_CALLS="${BRAPI_MAX_CALLS_PER_CALLSET:-1000}"
+MAX_FAILURES="${BRAPI_MAX_CONSECUTIVE_FAILURES:-3}"
 FETCH_CALLS="${BRAPI_FETCH_CALLS:-1}"
 SERVERS="${BRAPI_SERVERS:-t3=https://wheat.triticeaetoolbox.org/brapi/v2;cimmyt_gigwa=https://gdata.cimmyt.org/gigwa2/rest/brapi/v2}"
 
@@ -26,6 +27,7 @@ args=(
   --timeout "$TIMEOUT"
   --max-pedigree-depth "$MAX_DEPTH"
   --max-calls-per-callset "$MAX_CALLS"
+  --max-consecutive-failures "$MAX_FAILURES"
 )
 
 IFS=';' read -r -a server_specs <<< "$SERVERS"

@@ -65,6 +65,32 @@ def test_async_search_handle_is_followed(tmp_path: Path) -> None:
     assert calls[-1].endswith("/search/germplasm/abc")
 
 
+def test_transport_failure_circuit_breaker_skips_later_requests(tmp_path: Path) -> None:
+    transport_calls = 0
+
+    def transport(method, url, payload, headers, timeout):
+        nonlocal transport_calls
+        transport_calls += 1
+        raise TimeoutError("timed out")
+
+    request_log: list[dict[str, object]] = []
+    failures: list[dict[str, object]] = []
+    client = BrAPIClient(
+        ServerSpec("fake", "https://example.test/brapi/v2"),
+        tmp_path,
+        request_log,
+        failures,
+        max_consecutive_failures=2,
+        transport=transport,
+    )
+    assert client.request("GET", "serverinfo") is None
+    assert client.request("GET", "germplasm") is None
+    assert client.circuit_open
+    assert client.request("GET", "samples") is None
+    assert transport_calls == 2
+    assert request_log[-1]["status"] == "SKIPPED_CIRCUIT_OPEN"
+
+
 def test_parent_record_parsing_and_recursive_traversal(tmp_path: Path) -> None:
     def transport(method, url, payload, headers, timeout):
         if url.endswith("/germplasm/child"):
