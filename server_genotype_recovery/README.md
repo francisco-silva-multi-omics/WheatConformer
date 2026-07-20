@@ -263,6 +263,9 @@ The runner writes `brapi_run_status.json`, `brapi_request_log.tsv`,
 query to the nohup log and opens a server circuit breaker after three
 consecutive timeout, authentication, DNS or server failures. Configure the
 threshold with `BRAPI_MAX_CONSECUTIVE_FAILURES`.
+Synchronous exact-name collection endpoints are tried before asynchronous
+search jobs; this avoids treating a successfully queued search as successful
+data retrieval when the result handle later times out.
 
 Selection histories are decomposed into a BCID and developmental-stage tokens.
 The BCID, GID, cross and named parents are germplasm queries, but only the GID

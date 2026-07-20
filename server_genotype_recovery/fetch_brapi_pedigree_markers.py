@@ -425,9 +425,15 @@ class BrAPIClient:
     def get_collection(
         self, resource: str, params: dict[str, object], context: str
     ) -> list[dict]:
+        rows, _ = self.get_collection_with_status(resource, params, context)
+        return rows
+
+    def get_collection_with_status(
+        self, resource: str, params: dict[str, object], context: str
+    ) -> tuple[list[dict], bool]:
         query = urllib.parse.urlencode({key: value for key, value in params.items() if value not in (None, "")})
         payload = self.request("GET", f"{resource}?{query}", context=context)
-        return [] if payload is None else response_data(payload)
+        return ([] if payload is None else response_data(payload), payload is not None)
 
 
 def parse_server_specs(
@@ -496,17 +502,17 @@ def build_query_terms(
 def germplasm_search(client: BrAPIClient, term: dict[str, object], page_size: int) -> list[dict]:
     text = str(term["query_text"])
     context = f"germplasm:{term['query_id']}:{term['query_kind']}:{text}"
-    rows = client.search(
+    rows, direct_supported = client.get_collection_with_status(
+        "germplasm",
+        {"germplasmName": text, "pageSize": page_size},
+        f"{context}:direct_get",
+    )
+    if direct_supported:
+        return rows
+    return client.search(
         "germplasm",
         {"germplasmNames": [text], "commonCropNames": ["wheat"], "pageSize": page_size},
         context,
-    )
-    if rows:
-        return rows
-    return client.get_collection(
-        "germplasm",
-        {"germplasmName": text, "pageSize": page_size},
-        f"{context}:get_fallback",
     )
 
 
@@ -683,25 +689,31 @@ def find_samples(
         query_id = str(match["query_id"])
         if not dbid:
             continue
-        rows = client.search(
+        rows, direct_supported = client.get_collection_with_status(
             "samples",
-            {"germplasmDbIds": [dbid], "pageSize": page_size},
-            f"samples:germplasm:{query_id}:{dbid}",
+            {"germplasmDbId": dbid, "pageSize": page_size},
+            f"samples:germplasm:{query_id}:{dbid}:direct_get",
         )
-        if not rows:
-            rows = client.get_collection(
+        if not direct_supported:
+            rows = client.search(
                 "samples",
-                {"germplasmDbId": dbid, "pageSize": page_size},
-                f"samples:germplasm:{query_id}:{dbid}:get_fallback",
+                {"germplasmDbIds": [dbid], "pageSize": page_size},
+                f"samples:germplasm:{query_id}:{dbid}",
             )
         add(query_id, dbid, rows)
     for term in marker_terms:
         text = str(term["query_text"])
-        rows = client.search(
+        rows, direct_supported = client.get_collection_with_status(
             "samples",
-            {"sampleNames": [text], "pageSize": page_size},
-            f"samples:name:{term['query_id']}:{text}",
+            {"sampleName": text, "pageSize": page_size},
+            f"samples:name:{term['query_id']}:{text}:direct_get",
         )
+        if not direct_supported:
+            rows = client.search(
+                "samples",
+                {"sampleNames": [text], "pageSize": page_size},
+                f"samples:name:{term['query_id']}:{text}",
+            )
         add(str(term["query_id"]), "", rows)
     return output
 
@@ -741,25 +753,31 @@ def find_callsets(
         sample_dbid = str(sample["sampleDbId"])
         if not sample_dbid:
             continue
-        rows = client.search(
+        rows, direct_supported = client.get_collection_with_status(
             "callsets",
-            {"sampleDbIds": [sample_dbid], "pageSize": page_size},
-            f"callsets:sample:{sample['query_id']}:{sample_dbid}",
+            {"sampleDbId": sample_dbid, "pageSize": page_size},
+            f"callsets:sample:{sample['query_id']}:{sample_dbid}:direct_get",
         )
-        if not rows:
-            rows = client.get_collection(
+        if not direct_supported:
+            rows = client.search(
                 "callsets",
-                {"sampleDbId": sample_dbid, "pageSize": page_size},
-                f"callsets:sample:{sample['query_id']}:{sample_dbid}:get_fallback",
+                {"sampleDbIds": [sample_dbid], "pageSize": page_size},
+                f"callsets:sample:{sample['query_id']}:{sample_dbid}",
             )
         add(str(sample["query_id"]), sample_dbid, rows)
     for term in marker_terms:
         text = str(term["query_text"])
-        rows = client.search(
+        rows, direct_supported = client.get_collection_with_status(
             "callsets",
-            {"callSetNames": [text], "pageSize": page_size},
-            f"callsets:name:{term['query_id']}:{text}",
+            {"callSetName": text, "pageSize": page_size},
+            f"callsets:name:{term['query_id']}:{text}:direct_get",
         )
+        if not direct_supported:
+            rows = client.search(
+                "callsets",
+                {"callSetNames": [text], "pageSize": page_size},
+                f"callsets:name:{term['query_id']}:{text}",
+            )
         add(str(term["query_id"]), "", rows)
     return output
 
