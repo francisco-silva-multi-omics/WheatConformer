@@ -49,6 +49,10 @@ def true_values(values: pd.Series) -> pd.Series:
     )
 
 
+def true_value(value: object) -> bool:
+    return str(value).strip().lower() in {"1", "true", "yes", "y", "pass", "retained"}
+
+
 def valid_coordinates(frame: pd.DataFrame) -> pd.Series:
     chrom_col = detect_column(frame, ["chromosome", "chrom", "chr"])
     pos_col = detect_column(
@@ -102,6 +106,7 @@ def marker_evidence(
         sources.append(
             {
                 "path": str(path),
+                "sha256": sha256_file(path),
                 "rows": len(frame),
                 "status": "loaded",
                 "markers_with_coordinates": int(coordinate_mask.sum()),
@@ -395,12 +400,23 @@ def build_panel_evidence(
                 "support_type": support_type,
                 "certification_status": certification,
                 "sample_order_path": str(order_path),
+                "sample_order_sha256": sha256_file(order_path),
                 "sample_order_count": len(raw_ids),
                 "certified_gid_count": len(gids),
                 "noncanonical_sample_id_count": len(raw_ids) - len(gids),
                 "genotype_matrix_path": str(matrix_path) if matrix_path is not None else "",
+                "genotype_matrix_sha256": (
+                    sha256_file(matrix_path)
+                    if matrix_path is not None and matrix_path.is_file()
+                    else ""
+                ),
                 **matrix_evidence,
                 "retained_marker_path": str(marker_path) if marker_path is not None else "",
+                "retained_marker_sha256": (
+                    sha256_file(marker_path)
+                    if marker_path is not None and marker_path.is_file()
+                    else ""
+                ),
                 "retained_marker_count": len(marker_ids),
                 "markers_with_alleles": len(allele_markers),
                 "markers_with_physical_coordinates": len(coordinate_markers),
@@ -478,12 +494,12 @@ def build_gid_manifest(
         projected_panels = sorted(
             panel
             for panel in marker_panels
-            if bool(evidence_by_panel[panel]["graph_projection_ready"])
+            if true_value(evidence_by_panel[panel]["graph_projection_ready"])
         )
         matrix_panels = sorted(
             panel
             for panel in marker_panels
-            if bool(evidence_by_panel[panel]["genotype_matrix_certified"])
+            if true_value(evidence_by_panel[panel]["genotype_matrix_certified"])
         )
         direct_window_ready = sorted(set(projected_panels) & set(matrix_panels))
         in_pedigree = gid in pedigree_ids
@@ -609,6 +625,17 @@ def summary_tables(manifest: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
     return status, pd.DataFrame(panel_rows)
 
 
+def projection_work_queue(panel_evidence: pd.DataFrame) -> pd.DataFrame:
+    work_queue = panel_evidence[
+        ["panel_id", "certified_gid_count", "next_required_action"]
+    ].copy()
+    work_queue = work_queue.sort_values(
+        ["certified_gid_count", "panel_id"], ascending=[False, True], kind="stable"
+    ).reset_index(drop=True)
+    work_queue.insert(0, "priority", range(1, len(work_queue) + 1))
+    return work_queue
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Build a provenance-aware regulatory eligibility manifest for certified GIDs."
@@ -721,13 +748,7 @@ def main() -> None:
     panel_summary.to_csv(
         out_dir / "regulatory_eligibility_panel_summary.tsv", sep="\t", index=False
     )
-    work_queue = panel_evidence[
-        ["panel_id", "certified_gid_count", "next_required_action"]
-    ].copy()
-    work_queue = work_queue.sort_values(
-        ["certified_gid_count", "panel_id"], ascending=[False, True], kind="stable"
-    ).reset_index(drop=True)
-    work_queue.insert(0, "priority", range(1, len(work_queue) + 1))
+    work_queue = projection_work_queue(panel_evidence)
     work_queue.to_csv(
         out_dir / "regulatory_projection_work_queue.tsv", sep="\t", index=False
     )
@@ -745,12 +766,28 @@ def main() -> None:
         "kernel_qc_sha256": sha256_file(kernel_qc_path),
         "regulatory_retention_policy": str(regulatory_policy_path),
         "regulatory_retention_policy_sha256": sha256_file(regulatory_policy_path),
+        "pedigree_order": str(pedigree_path),
+        "pedigree_order_present": pedigree_path.is_file(),
+        "pedigree_order_sha256": (
+            sha256_file(pedigree_path) if pedigree_path.is_file() else ""
+        ),
         "marker_projection": str(marker_projection_path),
         "marker_projection_present": marker_projection_path.is_file(),
+        "marker_projection_sha256": (
+            sha256_file(marker_projection_path) if marker_projection_path.is_file() else ""
+        ),
         "path_dictionary": str(path_dictionary_path),
         "path_dictionary_present": path_dictionary_path.is_file(),
+        "path_dictionary_sha256": (
+            sha256_file(path_dictionary_path) if path_dictionary_path.is_file() else ""
+        ),
+        "builder_path": str(Path(__file__).resolve()),
+        "builder_sha256": sha256_file(Path(__file__).resolve()),
         "coordinate_sources": coordinate_sources,
         "embedding_order_paths": [str(path) for path in embedding_paths],
+        "embedding_order_sources": [
+            {"path": str(path), "sha256": sha256_file(path)} for path in embedding_paths
+        ],
         "genotype_count": len(manifest),
         "panel_count": len(panel_evidence),
         "direct_marker_supported_genotypes": int(manifest["direct_marker_panel_count"].gt(0).sum()),

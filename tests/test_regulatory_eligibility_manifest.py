@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import numpy as np
@@ -9,7 +10,13 @@ from server_genotype_recovery.build_regulatory_eligibility_manifest import (
     build_gid_manifest,
     build_panel_evidence,
     marker_evidence,
+    projection_work_queue,
     regulatory_retention_policy,
+    sha256_file,
+    summary_tables,
+)
+from server_genotype_recovery.validate_regulatory_eligibility_manifest import (
+    validate_artifacts,
 )
 
 
@@ -198,3 +205,136 @@ def test_regulatory_policy_rejects_quantitative_panel_discard(tmp_path: Path) ->
         assert "contract failed" in str(exc)
     else:
         raise AssertionError("A panel-discarding policy must be rejected")
+
+
+def test_regulatory_artifact_freeze_recomputes_entire_contract(tmp_path: Path) -> None:
+    code_root = Path(__file__).resolve().parents[1]
+    out_dir = tmp_path / "model_kernels/regulatory_eligibility_v1"
+    hmp_dir = tmp_path / "genotype_panels/hmp"
+    out_dir.mkdir(parents=True)
+    write_tsv(pd.DataFrame({"sample_id": ["GID1"]}), hmp_dir / "hmp_order.tsv")
+    write_tsv(
+        pd.DataFrame(
+            {
+                "marker_id": ["M1_A/G"],
+                "chromosome": ["1A"],
+                "position": [100],
+                "alleles": ["A/G"],
+            }
+        ),
+        hmp_dir / "hmp_marker_metadata.tsv",
+    )
+    write_tsv(
+        pd.DataFrame({"marker_id": ["M1_A/G"], "keep_marker": [True]}),
+        hmp_dir / "qc_hmp_marker_stats.tsv",
+    )
+    pd.DataFrame({"sample_id": ["GID1"], "M1_A/G": [1.0]}).to_parquet(
+        hmp_dir / "hmp_sample_by_marker.QCfiltered.parquet", index=False
+    )
+    candidates = pd.DataFrame(
+        [
+            {
+                "kernel": "K_G_HMP_LINEAR",
+                "biological_role": "HMP",
+                "order_path": hmp_dir / "hmp_order.tsv",
+                "source_id_col": "sample_id",
+                "candidate_group": "existing_HMP",
+            }
+        ]
+    )
+    coordinate_ids, allele_ids, _ = marker_evidence([hmp_dir / "hmp_marker_metadata.tsv"])
+    panel_evidence, samples = build_panel_evidence(
+        root=tmp_path,
+        candidates=candidates,
+        qc_status={"K_G_HMP_LINEAR": "PASS"},
+        coordinate_ids=coordinate_ids,
+        allele_ids=allele_ids,
+        graph_marker_ids=set(),
+        minimum_graph_projection_fraction=0.9,
+    )
+    catalog_path = tmp_path / "audit/genotypic_recovery/canonical_genotype_catalog.csv"
+    catalog_path.parent.mkdir(parents=True)
+    catalog = pd.DataFrame(
+        {
+            "canonical_gid": ["GID1", "GID2"],
+            "canonical_observation_rows": [10, 20],
+        }
+    )
+    catalog.to_csv(catalog_path, index=False)
+    pedigree_path = tmp_path / "genotype_panels/pedigree/K_A_sample_order.tsv"
+    write_tsv(pd.DataFrame({"sample_id": ["GID1", "GID2"]}), pedigree_path)
+    recovered_path = tmp_path / "genotype_panels/recovered/manifest.tsv"
+    kernel_qc_path = tmp_path / "model_kernels/genomic_candidate_screen_v1/qc.tsv"
+    policy_path = tmp_path / "model_kernels/genomic_candidate_screen_v1/policy.tsv"
+    write_tsv(pd.DataFrame({"placeholder": [1]}), recovered_path)
+    write_tsv(pd.DataFrame({"placeholder": [1]}), kernel_qc_path)
+    write_tsv(pd.DataFrame({"placeholder": [1]}), policy_path)
+    manifest = build_gid_manifest(
+        catalog=catalog,
+        pedigree_ids={"GID1", "GID2"},
+        panel_evidence=panel_evidence,
+        panel_samples=samples,
+        graph_path_ids=set(),
+        embeddings={},
+    )
+    status_summary, panel_summary = summary_tables(manifest)
+    manifest.to_csv(
+        out_dir / "regulatory_genotype_eligibility_manifest.tsv.gz",
+        sep="\t",
+        index=False,
+        compression="gzip",
+    )
+    panel_evidence.to_csv(out_dir / "regulatory_panel_evidence.tsv", sep="\t", index=False)
+    status_summary.to_csv(
+        out_dir / "regulatory_eligibility_status_summary.tsv", sep="\t", index=False
+    )
+    panel_summary.to_csv(
+        out_dir / "regulatory_eligibility_panel_summary.tsv", sep="\t", index=False
+    )
+    projection_work_queue(panel_evidence).to_csv(
+        out_dir / "regulatory_projection_work_queue.tsv", sep="\t", index=False
+    )
+    missing_projection = tmp_path / "pangenome_resources/graph/marker_to_graph_interval.tsv"
+    missing_paths = tmp_path / "pangenome_resources/graph/genotype_path_dictionary.tsv"
+    builder_path = code_root / "server_genotype_recovery/build_regulatory_eligibility_manifest.py"
+    provenance = {
+        "status": "PASS",
+        "phenotype_values_read": False,
+        "outer_test_metrics_read": False,
+        "final_holdout_outcomes_read": False,
+        "canonical_catalog": str(catalog_path),
+        "canonical_catalog_sha256": sha256_file(catalog_path),
+        "recovered_manifest": str(recovered_path),
+        "recovered_manifest_sha256": sha256_file(recovered_path),
+        "kernel_qc": str(kernel_qc_path),
+        "kernel_qc_sha256": sha256_file(kernel_qc_path),
+        "regulatory_retention_policy": str(policy_path),
+        "regulatory_retention_policy_sha256": sha256_file(policy_path),
+        "pedigree_order": str(pedigree_path),
+        "pedigree_order_present": True,
+        "pedigree_order_sha256": sha256_file(pedigree_path),
+        "marker_projection": str(missing_projection),
+        "marker_projection_present": False,
+        "marker_projection_sha256": "",
+        "path_dictionary": str(missing_paths),
+        "path_dictionary_present": False,
+        "path_dictionary_sha256": "",
+        "coordinate_sources": [],
+        "builder_sha256": sha256_file(builder_path),
+    }
+    (out_dir / "regulatory_eligibility_provenance.json").write_text(
+        json.dumps(provenance), encoding="utf-8"
+    )
+    checks, certification = validate_artifacts(tmp_path, out_dir, code_root)
+    assert certification["status"] == "PASS", checks[checks["status"].eq("FAIL")].to_dict(
+        "records"
+    )
+    assert checks["status"].eq("PASS").all()
+    catalog.loc[0, "canonical_observation_rows"] = 11
+    catalog.to_csv(catalog_path, index=False)
+    checks, certification = validate_artifacts(tmp_path, out_dir, code_root)
+    assert certification["status"] == "FAIL"
+    failed = set(checks.loc[checks["status"].eq("FAIL"), "check"])
+    assert {"input_identity_canonical_catalog", "canonical_observation_row_conservation"}.issubset(
+        failed
+    )

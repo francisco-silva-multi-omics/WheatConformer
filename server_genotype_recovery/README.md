@@ -208,3 +208,25 @@ Pedigree-only entries remain `pedigree_imputation_candidate` with
 `required_not_evaluated` confidence gating; the builder never promotes them to
 observed sequence. The current manifest therefore records
 `observed_sequence_equivalent=False` for every GID.
+
+Before using the ledger for graph projection, rerun the builder from the pinned
+code commit and freeze its complete input/output contract:
+
+```bash
+PYTHON="$HOME/tools/tf_wheat_cpu/bin/python" \
+WHEATCONFORMER_CODE_ROOT="$HOME/tools/WheatConformer" \
+bash scripts/build_regulatory_eligibility_manifest.sh \
+  /DATA2/estancias/tesis_javier/model_DATA/genotipoXambiente
+
+PYTHON="$HOME/tools/tf_wheat_cpu/bin/python" \
+WHEATCONFORMER_CODE_ROOT="$HOME/tools/WheatConformer" \
+bash scripts/freeze_regulatory_eligibility_manifest.sh \
+  /DATA2/estancias/tesis_javier/model_DATA/genotipoXambiente
+```
+
+The freeze validator independently recomputes every GID classification, panel
+membership, summary and work-queue row. It also verifies the hashes of the
+catalog, pedigree order, panel orders, retained markers, available dosage
+matrices, coordinate sources, graph inputs and embedding orders. It writes a
+certification JSON, a check table and an `audit/regulatory_eligibility_*.sha256`
+manifest only when every check passes.
