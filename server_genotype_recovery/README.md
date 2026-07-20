@@ -320,6 +320,13 @@ histories, shared BCIDs/crosses and candidate marker bridges. No Dataverse hit
 is marked ready for direct marker assignment until the external sample axis and
 marker-call concordance have been certified separately.
 
+When structured evidence contains an exact unique selection history, run
+`scripts/audit_cimmyt_dataverse_two_hop_marker_bridges.sh`. It tests only
+dataset-local links of the form trial selection history to external germplasm
+alias to marker-matrix row or column. Ambiguous aliases and interior matrix-cell
+matches remain non-identifying; even a unique sample-axis candidate requires
+marker-call concordance before it can become a direct genotype assignment.
+
 Selection histories are decomposed into a BCID and developmental-stage tokens.
 The BCID, GID, cross and named parents are germplasm queries, but only the GID
 and BCID are used as direct sample/callset names. Stage suffixes such as `0Y`
