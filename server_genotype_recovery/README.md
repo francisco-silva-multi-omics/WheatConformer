@@ -313,6 +313,13 @@ This separates API request volume from local evidence recovery. Large resolver
 sets use an indexed exact-cell/GID scanner rather than a term-by-line nested
 loop, and existing downloads are reused when a run is resumed in place.
 
+Run `scripts/audit_cimmyt_dataverse_structured_evidence.sh` after recovery to
+reopen downloaded TSV/CSV/TXT/XLSX files and certify matches at the source-row
+and source-cell level. Its outputs distinguish direct GIDs, unique selection
+histories, shared BCIDs/crosses and candidate marker bridges. No Dataverse hit
+is marked ready for direct marker assignment until the external sample axis and
+marker-call concordance have been certified separately.
+
 Selection histories are decomposed into a BCID and developmental-stage tokens.
 The BCID, GID, cross and named parents are germplasm queries, but only the GID
 and BCID are used as direct sample/callset names. Stage suffixes such as `0Y`
