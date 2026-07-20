@@ -277,6 +277,29 @@ audit. CIMMYT's current Germinate Wheat API requires authentication and is not
 a drop-in public BrAPI-v2 replacement. Add a new CIMMYT endpoint through
 `BRAPI_SERVERS` only after its base URL and credentials are validated.
 
+## Authenticated CIMMYT Dataverse Recovery
+
+The CIMMYT Research Data & Software Repository Network is a Dataverse service,
+not a BrAPI server. Store its API token only in `CIMMYT_DATAVERSE_TOKEN`; the
+runner transmits it through `X-Dataverse-key` and never writes the value or a
+token fingerprint to logs or provenance.
+
+```bash
+PYTHON="$HOME/tools/tf_wheat_cpu/bin/python" \
+WHEATCONFORMER_CODE_ROOT="$HOME/tools/WheatConformer" \
+CIMMYT_DATAVERSE_LIMIT=10 \
+bash "$HOME/tools/WheatConformer/scripts/run_cimmyt_dataverse_recovery.sh" \
+  /DATA2/estancias/tesis_javier/model_DATA/genotipoXambiente
+```
+
+The bounded pilot validates the token, searches resolver identifiers and
+broader wheat genotype/pedigree discovery terms, enumerates dataset files, and
+downloads at most ten non-restricted candidate files up to 25 MiB each and
+100 MiB total. Downloaded text, gzip and zip content is scanned for exact GIDs,
+BCIDs, crosses and parents. Restricted or oversized files remain in the
+candidate manifest with an explicit skip reason. Repository evidence is never
+merged into dosage matrices or pedigree kernels automatically.
+
 Selection histories are decomposed into a BCID and developmental-stage tokens.
 The BCID, GID, cross and named parents are germplasm queries, but only the GID
 and BCID are used as direct sample/callset names. Stage suffixes such as `0Y`

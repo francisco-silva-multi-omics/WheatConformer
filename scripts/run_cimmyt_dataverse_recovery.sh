@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="${1:-.}"
+PYTHON="${PYTHON:-python}"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+CODE_ROOT="${WHEATCONFORMER_CODE_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}"
+OUT_DIR="${CIMMYT_DATAVERSE_OUT_DIR:-genotype_panels/cimmyt_dataverse_recovery_v1/batch_00000_00010}"
+LIMIT="${CIMMYT_DATAVERSE_LIMIT:-10}"
+OFFSET="${CIMMYT_DATAVERSE_OFFSET:-0}"
+TIMEOUT="${CIMMYT_DATAVERSE_TIMEOUT:-60}"
+DOWNLOAD="${CIMMYT_DATAVERSE_DOWNLOAD_CANDIDATES:-1}"
+MAX_FILES="${CIMMYT_DATAVERSE_MAX_DOWNLOAD_FILES:-10}"
+MAX_FILE_BYTES="${CIMMYT_DATAVERSE_MAX_FILE_BYTES:-26214400}"
+MAX_TOTAL_BYTES="${CIMMYT_DATAVERSE_MAX_TOTAL_BYTES:-104857600}"
+
+if [[ -z "${CIMMYT_DATAVERSE_TOKEN:-}" ]]; then
+  echo "ERROR: CIMMYT_DATAVERSE_TOKEN is not set" >&2
+  exit 1
+fi
+
+export PYTHONPATH="$CODE_ROOT${PYTHONPATH:+:$PYTHONPATH}"
+cd "$ROOT"
+mkdir -p "$OUT_DIR" logs
+
+args=(
+  --root .
+  --out-dir "$OUT_DIR"
+  --limit "$LIMIT"
+  --offset "$OFFSET"
+  --timeout "$TIMEOUT"
+  --max-download-files "$MAX_FILES"
+  --max-file-bytes "$MAX_FILE_BYTES"
+  --max-total-download-bytes "$MAX_TOTAL_BYTES"
+)
+if [[ "$DOWNLOAD" == "1" ]]; then
+  args+=(--download-candidates)
+fi
+
+echo "[$(date '+%F %T')] START authenticated CIMMYT Dataverse recovery"
+"$PYTHON" -P -m server_genotype_recovery.fetch_cimmyt_dataverse_recovery "${args[@]}"
+echo "[$(date '+%F %T')] DONE authenticated CIMMYT Dataverse recovery"
+echo "Outputs: $OUT_DIR"
