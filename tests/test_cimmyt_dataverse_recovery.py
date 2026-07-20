@@ -5,9 +5,11 @@ from pathlib import Path
 
 from server_genotype_recovery.fetch_cimmyt_dataverse_recovery import (
     DataverseClient,
+    candidate_priority,
     classify_candidate_file,
     dataset_file_rows,
     exact_term_pattern,
+    repository_search_text,
     scan_file_for_terms,
 )
 
@@ -96,3 +98,30 @@ def test_exact_term_pattern_tolerates_cross_separators() -> None:
     assert pattern is not None
     assert pattern.search("PARENT-A / PARENT-B") is not None
     assert pattern.search("XPARENT-A / PARENT-B") is None
+
+
+def test_repository_search_sanitizes_pedigree_syntax() -> None:
+    query = repository_search_text("cross_name", "SHAKTI//BAJ #1*2/TINKIO #1")
+    assert query == '"SHAKTI BAJ 1 2 TINKIO 1"'
+    assert "#" not in query
+    assert "/" not in query
+
+
+def test_candidate_priority_prefers_gid_mapping_over_readme() -> None:
+    mapping = {
+        "candidate_role": "marker_and_pedigree",
+        "filename": "Mexican_landrace_samples_for_Germinate.txt",
+        "description": "Sample ID associated with each GID",
+        "content_type": "text/plain",
+        "resolver_dataset_query_count": 1,
+        "resolver_file_query_count": 1,
+    }
+    readme = {
+        "candidate_role": "marker",
+        "filename": "genotypic_data_readme.txt",
+        "description": "readme",
+        "content_type": "text/plain",
+        "resolver_dataset_query_count": 0,
+        "resolver_file_query_count": 0,
+    }
+    assert candidate_priority(mapping)[0] > candidate_priority(readme)[0]

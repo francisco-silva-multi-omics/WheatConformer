@@ -33,6 +33,7 @@ SEARCH_COLUMNS = [
     "query_id",
     "query_kind",
     "query_text",
+    "repository_query_text",
     "item_type",
     "name",
     "global_id",
@@ -58,6 +59,10 @@ FILE_COLUMNS = [
     "description",
     "checksum_type",
     "checksum_value",
+    "resolver_dataset_query_count",
+    "resolver_file_query_count",
+    "priority_score",
+    "priority_reason",
 ]
 REQUEST_COLUMNS = [
     "context",
@@ -99,6 +104,63 @@ def classify_candidate_file(filename: object, description: object, content_type:
     if pedigree:
         return "pedigree", "|".join(pedigree)
     return "none", ""
+
+
+def repository_search_text(query_kind: object, value: object) -> str:
+    text = clean(value)
+    if not text:
+        return ""
+    if clean(query_kind) in {"sample_id", "bcid", "discovery"}:
+        return text[:240]
+    tokens = re.findall(r"[A-Za-z0-9]+", text)
+    if not tokens:
+        return ""
+    # Phrase-search a bounded, punctuation-free representation. This avoids
+    # Dataverse/Solr parser and WAF failures on raw pedigree notation.
+    return f'"{" ".join(tokens[:16])}"'
+
+
+def candidate_priority(row: dict[str, object]) -> tuple[int, str]:
+    role_scores = {"marker_and_pedigree": 80, "pedigree": 60, "marker": 40, "none": 0}
+    score = role_scores.get(clean(row.get("candidate_role")), 0)
+    reasons = [f"role={clean(row.get('candidate_role')) or 'none'}"]
+    dataset_hits = int(row.get("resolver_dataset_query_count") or 0)
+    file_hits = int(row.get("resolver_file_query_count") or 0)
+    if dataset_hits:
+        gain = min(dataset_hits, 5) * 15
+        score += gain
+        reasons.append(f"resolver_dataset_hits={dataset_hits}")
+    if file_hits:
+        gain = min(file_hits, 5) * 30
+        score += gain
+        reasons.append(f"resolver_file_hits={file_hits}")
+
+    text = " ".join(
+        [clean(row.get("filename")), clean(row.get("description")), clean(row.get("content_type"))]
+    ).lower()
+    recovery_terms = ("sample", "gid", "germplasm", "pedigree", "passport", "accession", "cross", "parent")
+    marker_terms = ("call", "dosage", "variant", "snp", "hapmap", "vcf", "genotypic")
+    low_value_terms = ("readme", "dictionary", "protocol", "md5", "checksum", "gebv", "phenotyp", "yield")
+    recovery_hits = [term for term in recovery_terms if term in text]
+    marker_hits = [term for term in marker_terms if term in text]
+    low_value_hits = [term for term in low_value_terms if term in text]
+    if recovery_hits:
+        score += 35
+        reasons.append("recovery_metadata=" + "|".join(recovery_hits))
+    if marker_hits:
+        score += 15
+        reasons.append("marker_data=" + "|".join(marker_hits))
+    if low_value_hits:
+        score -= 35
+        reasons.append("low_value=" + "|".join(low_value_hits))
+    suffix = Path(clean(row.get("filename"))).suffix.lower()
+    if suffix in {".txt", ".tsv", ".tab", ".csv", ".gz", ".zip", ".xlsx", ".xlsm"}:
+        score += 5
+        reasons.append("machine_readable")
+    if suffix == ".pdf":
+        score -= 20
+        reasons.append("pdf_penalty")
+    return score, ";".join(reasons)
 
 
 def response_data(payload: dict | None) -> object:
@@ -279,13 +341,19 @@ class DataverseClient:
 
 
 def normalize_search_item(
-    item: dict, query_scope: str, query_id: str, query_kind: str, query_text: str
+    item: dict,
+    query_scope: str,
+    query_id: str,
+    query_kind: str,
+    query_text: str,
+    repository_query_text: str,
 ) -> dict[str, object]:
     return {
         "query_scope": query_scope,
         "query_id": query_id,
         "query_kind": query_kind,
         "query_text": query_text,
+        "repository_query_text": repository_query_text,
         "item_type": clean(item.get("type")),
         "name": clean(item.get("name")),
         "global_id": clean(item.get("global_id")),
@@ -344,7 +412,7 @@ def dataset_file_rows(payload: dict | None, persistent_id: str) -> tuple[dict[st
 
 def text_streams(path: Path) -> Iterator[tuple[str, Iterator[str]]]:
     lower = path.name.lower()
-    if lower.endswith(".zip"):
+    if lower.endswith((".zip", ".xlsx", ".xlsm")):
         archive = zipfile.ZipFile(path)
         try:
             for member in archive.infolist():
@@ -501,6 +569,9 @@ def main() -> None:
     ]
     query_specs.extend(("discovery", "", "discovery", value) for value in discovery)
     for query_index, (scope, query_id, query_kind, query_text) in enumerate(query_specs, start=1):
+        repository_query = repository_search_text(query_kind, query_text)
+        if not repository_query:
+            continue
         print(
             f"[{utc_now()}] SEARCH {query_index}/{len(query_specs)} scope={scope} "
             f"kind={query_kind} query_id={query_id}",
@@ -510,20 +581,27 @@ def main() -> None:
             payload = client.request_json(
                 "api/search",
                 [
-                    ("q", query_text),
+                    ("q", repository_query),
                     ("type", "dataset"),
                     ("type", "file"),
                     ("per_page", args.per_page),
                     ("start", page * args.per_page),
                 ],
-                f"search:{scope}:{query_kind}:{query_text}:page_{page}",
+                f"search:{scope}:{query_kind}:{query_id or query_index}:page_{page}",
             )
             data = response_data(payload)
             items = data.get("items") if isinstance(data, dict) else []
             for item in items or []:
                 if isinstance(item, dict):
                     search_rows.append(
-                        normalize_search_item(item, scope, query_id, query_kind, query_text)
+                        normalize_search_item(
+                            item,
+                            scope,
+                            query_id,
+                            query_kind,
+                            query_text,
+                            repository_query,
+                        )
                     )
             if not items or len(items) < args.per_page:
                 break
@@ -554,6 +632,33 @@ def main() -> None:
             dataset_rows.append(dataset)
             file_rows.extend(files)
 
+    resolver_dataset_queries: dict[str, set[str]] = {}
+    resolver_file_queries: dict[tuple[str, str], set[str]] = {}
+    for row in search_rows:
+        if row["query_scope"] != "resolver":
+            continue
+        persistent_id = clean(row["dataset_persistent_id"] or row["global_id"])
+        query_id = clean(row["query_id"])
+        if not persistent_id or not query_id:
+            continue
+        resolver_dataset_queries.setdefault(persistent_id, set()).add(query_id)
+        if row["item_type"] == "file" and clean(row["entity_id"]):
+            resolver_file_queries.setdefault(
+                (persistent_id, clean(row["entity_id"])), set()
+            ).add(query_id)
+    for row in file_rows:
+        persistent_id = clean(row["dataset_persistent_id"])
+        datafile_id = clean(row["datafile_id"])
+        row["resolver_dataset_query_count"] = len(
+            resolver_dataset_queries.get(persistent_id, set())
+        )
+        row["resolver_file_query_count"] = len(
+            resolver_file_queries.get((persistent_id, datafile_id), set())
+        )
+        score, reason = candidate_priority(row)
+        row["priority_score"] = score
+        row["priority_reason"] = reason
+
     write_tsv(dataset_rows, out_dir / "dataverse_dataset_metadata.tsv", [
         "dataset_persistent_id", "dataset_id", "version", "version_state", "release_time",
         "file_count", "raw_json",
@@ -568,7 +673,14 @@ def main() -> None:
     download_dir.mkdir(parents=True, exist_ok=True)
     if args.download_candidates:
         candidates = [row for row in file_rows if row["candidate_role"] != "none"]
-        candidates.sort(key=lambda row: (bool(row["restricted"]), int(row["filesize"])))
+        candidates.sort(
+            key=lambda row: (
+                -int(row["priority_score"]),
+                bool(row["restricted"]) and not args.include_restricted,
+                int(row["filesize"]),
+                clean(row["filename"]),
+            )
+        )
         for row in candidates:
             reason = ""
             size = int(row["filesize"])

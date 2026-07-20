@@ -300,6 +300,13 @@ BCIDs, crosses and parents. Restricted or oversized files remain in the
 candidate manifest with an explicit skip reason. Repository evidence is never
 merged into dosage matrices or pedigree kernels automatically.
 
+Candidate downloads are ranked by resolver-linked search evidence, file role,
+machine readability and GID/pedigree relevance. Restricted files remain opt-in;
+set `CIMMYT_DATAVERSE_INCLUDE_RESTRICTED=1` only when the account is authorized
+to access them. Raw pedigree strings are converted to bounded punctuation-free
+phrase searches to avoid repository query-parser failures while retaining the
+original term in the audit output.
+
 Selection histories are decomposed into a BCID and developmental-stage tokens.
 The BCID, GID, cross and named parents are germplasm queries, but only the GID
 and BCID are used as direct sample/callset names. Stage suffixes such as `0Y`
