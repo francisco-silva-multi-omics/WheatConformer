@@ -25,14 +25,15 @@ cd "$DATA"
 env \
   PYTHON="$PYTHON" \
   WHEATCONFORMER_CODE_ROOT="$CODE" \
+  SINGLE_STEP_READINESS_OUT_DIR="model_kernels/single_step_readiness_v2" \
   bash "$CODE/scripts/run_single_step_readiness_audit.sh" "$DATA" \
-  > logs/single_step_readiness_v1.log 2>&1
+  > logs/single_step_readiness_v2.log 2>&1
 ```
 
 Inspect the decision and the review queues:
 
 ```bash
-OUT="$DATA/model_kernels/single_step_readiness_v1"
+OUT="$DATA/model_kernels/single_step_readiness_v2"
 
 cat "$OUT/single_step_readiness_decision.json"
 column -t -s $'\t' "$OUT/single_step_readiness_metrics.tsv"
