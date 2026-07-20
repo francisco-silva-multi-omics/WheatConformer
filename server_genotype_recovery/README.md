@@ -180,3 +180,31 @@ matched training configurations. Quantitative rejection never changes the
 independent regulatory-panel retention policy.
 
 The RBF kernel is generated for ablation but is not enabled automatically.
+
+## Regulatory Eligibility
+
+After freezing the quantitative `K_G` decision, build the independent
+regulatory-eligibility ledger:
+
+```bash
+PYTHON="$HOME/tools/tf_wheat_cpu/bin/python" \
+WHEATCONFORMER_CODE_ROOT="$HOME/tools/WheatConformer" \
+bash scripts/build_regulatory_eligibility_manifest.sh \
+  /DATA2/estancias/tesis_javier/model_DATA/genotipoXambiente
+```
+
+The builder unions certified HMP, GBS and recovered-panel sample orders with
+canonical trial GIDs and pedigree GIDs. It separately audits retained marker
+IDs, allele evidence, RefSeq v1 coordinates, graph marker projection, genotype
+path assignment and existing embedding orders. Outputs under
+`model_kernels/regulatory_eligibility_v1` include the compressed per-GID
+manifest, panel evidence, status and panel summaries, a projection work queue,
+and machine-readable provenance.
+
+`observed_marker_supported_sequence` is only a future provenance class until
+certified genotype calls have adequate allele evidence, physical coordinates,
+graph projection, sequence-window construction and embedding provenance.
+Pedigree-only entries remain `pedigree_imputation_candidate` with
+`required_not_evaluated` confidence gating; the builder never promotes them to
+observed sequence. The current manifest therefore records
+`observed_sequence_equivalent=False` for every GID.
