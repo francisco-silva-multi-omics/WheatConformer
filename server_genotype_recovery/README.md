@@ -164,4 +164,19 @@ Repeat across the immutable outer-training contexts for
 `genomic_candidate_ablation_plan.tsv`; RBF candidates and single-step `H` are
 deferred by default. It writes no outer-test ensemble.
 
+After completing every declared outer-training context for a scenario,
+aggregate the paired inner-validation results without reading outer tests:
+
+```bash
+python -P -m server_genotype_recovery.summarize_inner_screen \
+  --root . \
+  --scenario unseen_genotypes \
+  --expected-outer-folds 5 \
+  --expected-inner-folds 3
+```
+
+The summary verifies the complete architecture/fold grid, matched seeds and
+matched training configurations. Quantitative rejection never changes the
+independent regulatory-panel retention policy.
+
 The RBF kernel is generated for ablation but is not enabled automatically.
