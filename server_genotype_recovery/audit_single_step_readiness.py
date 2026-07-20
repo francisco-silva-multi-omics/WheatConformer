@@ -516,7 +516,6 @@ def readiness_decision(
             "curated_parent_aliases_require_canonical_K_A_rebuild",
         ),
         ("self_parent_rows", "self_parent_relationships_present"),
-        ("duplicate_parent_rows", "duplicate_parent_relationships_present"),
         ("cycle_node_count", "pedigree_cycles_present"),
     ]:
         if structure.get(metric, 0):
@@ -543,6 +542,8 @@ def readiness_decision(
             blocking.append(reason)
     if structure["pedigree_depth_max"] <= 1:
         warnings.append("pedigree_depth_is_shallow")
+    if structure.get("duplicate_parent_rows", 0):
+        warnings.append("duplicate_parent_rows_require_explicit_selfing_review")
     if source_metrics.get("source_children_absent_from_pedigree", 0):
         warnings.append("source_children_are_absent_from_pedigree")
     if compatibility["sampled_informative_pair_count"] < 30:

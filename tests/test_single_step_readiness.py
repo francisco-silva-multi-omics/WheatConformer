@@ -123,6 +123,44 @@ def test_noncanonical_parent_tokens_block_current_k_a_even_when_alias_is_curated
     }
 
 
+def test_explicit_canonical_selfing_is_a_warning_not_a_blocker() -> None:
+    pedigree = pd.DataFrame(
+        {
+            "sample_id": ["GID1", "GID2"],
+            "parent1": ["", "GID1"],
+            "parent2": ["", "GID1"],
+        }
+    )
+    _, _, _, structure = pedigree_structure(
+        pedigree,
+        child_pattern=re.compile(r"^GID[0-9]+$"),
+        parent_pattern=re.compile(r"^GID[0-9]+$"),
+        curated_tokens=set(),
+    )
+    structure.pop("cycle_nodes")
+    status, blocking, warnings = readiness_decision(
+        {
+            "source_manifest_present": True,
+            "source_children_with_multiple_lineages": 0,
+        },
+        structure,
+        {"status": "PASS"},
+        {"status": "PASS"},
+        {
+            "overlap_genotypes": 100,
+            "alignment_beta": 1.0,
+            "sampled_blended_G_min_eigenvalue": 0.0,
+            "sampled_informative_pair_count": 30,
+            "sampled_offdiagonal_correlation": 0.5,
+        },
+        minimum_overlap=100,
+    )
+
+    assert status == "WARN"
+    assert blocking == []
+    assert "duplicate_parent_rows_require_explicit_selfing_review" in warnings
+
+
 def test_source_lineage_conflicts_are_reported(tmp_path: Path) -> None:
     path = tmp_path / "source.tsv"
     pd.DataFrame(

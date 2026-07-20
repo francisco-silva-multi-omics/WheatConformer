@@ -64,7 +64,8 @@ Single-step `H` remains prohibited until all blocking reasons are cleared:
 
 - source children have one reviewed lineage;
 - children and parents use stable canonical IDs;
-- no self-parent, duplicate-parent, or cyclic relationships exist;
+- no self-parent or cyclic relationships exist;
+- repeated parent IDs are explicitly reviewed as legitimate selfing records;
 - the pedigree-node universe exactly matches the `K_A` order;
 - both relationship kernels pass numerical integrity checks;
 - `A22` and HMP `G` have sufficient overlap and valid scale alignment;
