@@ -17,6 +17,9 @@ args=(
 if [[ -n "${CURATED_PARENT_REGISTRY:-}" ]]; then
   args+=(--curated-parent-registry "$CURATED_PARENT_REGISTRY")
 fi
+if [[ -n "${PEDIGREE_SOURCE_MANIFEST:-}" ]]; then
+  args+=(--pedigree-source-manifest "$PEDIGREE_SOURCE_MANIFEST")
+fi
 
 "$PYTHON" -P -m server_genotype_recovery.audit_single_step_readiness "${args[@]}"
 

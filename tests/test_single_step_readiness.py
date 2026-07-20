@@ -132,9 +132,10 @@ def test_source_lineage_conflicts_are_reported(tmp_path: Path) -> None:
         }
     ).to_csv(path, sep="\t", index=False)
 
-    conflicts, metrics = source_lineage_conflicts(path)
+    conflicts, metrics, source_children = source_lineage_conflicts(path)
 
     assert metrics["source_children_with_multiple_lineages"] == 1
+    assert source_children == {"GID1", "GID2"}
     assert conflicts["sample_id"].unique().tolist() == ["GID1"]
     assert set(conflicts["lineage_signature"]) == {"A/B", "A/C"}
 
@@ -142,14 +143,18 @@ def test_source_lineage_conflicts_are_reported(tmp_path: Path) -> None:
 def test_single_step_readiness_cli_writes_outcome_free_decision(tmp_path: Path) -> None:
     pedigree_dir = tmp_path / "genotype_panels/pedigree"
     hmp_dir = tmp_path / "genotype_panels/hmp"
+    metadata_dir = tmp_path / "metadata_outputs"
     regulatory_dir = tmp_path / "model_kernels/regulatory_eligibility_v1"
     pedigree_dir.mkdir(parents=True)
     hmp_dir.mkdir(parents=True)
+    metadata_dir.mkdir(parents=True)
     regulatory_dir.mkdir(parents=True)
     pedigree = canonical_pedigree()
     pedigree.to_csv(pedigree_dir / "pedigree_parent_table.tsv", sep="\t", index=False)
     pedigree.assign(cross_name=["", "", "GID1/GID2", "GID1/GID2"]).to_csv(
-        pedigree_dir / "trial_derived_pedigree_manifest.tsv", sep="\t", index=False
+        metadata_dir / "all_trials_genotype_manifest_resolved.tsv",
+        sep="\t",
+        index=False,
     )
     relationship, order, _ = additive_relationship(pedigree, None)
     np.save(pedigree_dir / "K_A.npy", relationship)

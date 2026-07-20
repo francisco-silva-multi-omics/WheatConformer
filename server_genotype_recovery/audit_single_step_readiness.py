@@ -71,14 +71,21 @@ def parent_table(path: Path) -> pd.DataFrame:
     return output
 
 
-def source_lineage_conflicts(path: Path) -> tuple[pd.DataFrame, dict[str, object]]:
+def source_lineage_conflicts(
+    path: Path,
+) -> tuple[pd.DataFrame, dict[str, object], set[str]]:
     if not path.is_file() or path.stat().st_size == 0:
-        return pd.DataFrame(), {
-            "source_manifest_present": False,
-            "source_manifest_rows": 0,
-            "source_unique_children": 0,
-            "source_children_with_multiple_lineages": 0,
-        }
+        return (
+            pd.DataFrame(),
+            {
+                "source_manifest_present": False,
+                "source_manifest_rows": 0,
+                "source_unique_children": 0,
+                "source_unique_children_with_lineage": 0,
+                "source_children_with_multiple_lineages": 0,
+            },
+            set(),
+        )
     frame = read_table(path)
     id_col = detect_column(
         frame, ["sample_id", "panel_sample_id_expected", "panel_sample_id", "genotype_id"]
@@ -89,6 +96,7 @@ def source_lineage_conflicts(path: Path) -> tuple[pd.DataFrame, dict[str, object
     if id_col is None or (cross_col is None and p1_col is None and p2_col is None):
         raise ValueError(f"Source pedigree manifest has no usable lineage columns: {path}")
     work = pd.DataFrame({"sample_id": frame[id_col].map(clean)})
+    source_children = set(work.loc[work["sample_id"].ne(""), "sample_id"])
     if p1_col is not None or p2_col is not None:
         work["lineage_signature"] = (
             (frame[p1_col].map(clean) if p1_col else "")
@@ -104,12 +112,17 @@ def source_lineage_conflicts(path: Path) -> tuple[pd.DataFrame, dict[str, object
     conflicts = unique[unique["sample_id"].isin(conflict_ids)].sort_values(
         ["sample_id", "lineage_signature"]
     )
-    return conflicts.reset_index(drop=True), {
-        "source_manifest_present": True,
-        "source_manifest_rows": len(frame),
-        "source_unique_children": work["sample_id"].nunique(),
-        "source_children_with_multiple_lineages": len(conflict_ids),
-    }
+    return (
+        conflicts.reset_index(drop=True),
+        {
+            "source_manifest_present": True,
+            "source_manifest_rows": len(frame),
+            "source_unique_children": len(source_children),
+            "source_unique_children_with_lineage": work["sample_id"].nunique(),
+            "source_children_with_multiple_lineages": len(conflict_ids),
+        },
+        source_children,
+    )
 
 
 def curated_parent_tokens(path: Path | None) -> set[str]:
@@ -489,6 +502,8 @@ def readiness_decision(
         blocking.append("source_pedigree_manifest_absent")
     if source_metrics["source_children_with_multiple_lineages"]:
         blocking.append("source_children_have_multiple_lineages")
+    if source_metrics.get("pedigree_children_missing_from_source_manifest", 0):
+        blocking.append("pedigree_children_missing_from_source_manifest")
     for metric, reason in [
         ("children_with_conflicting_parent_assignments", "parent_assignments_conflict"),
         ("invalid_child_ids", "child_ids_are_not_canonical"),
@@ -528,6 +543,8 @@ def readiness_decision(
             blocking.append(reason)
     if structure["pedigree_depth_max"] <= 1:
         warnings.append("pedigree_depth_is_shallow")
+    if source_metrics.get("source_children_absent_from_pedigree", 0):
+        warnings.append("source_children_are_absent_from_pedigree")
     if compatibility["sampled_informative_pair_count"] < 30:
         warnings.append("few_informative_A22_pairs_in_sample")
     correlation = compatibility["sampled_offdiagonal_correlation"]
@@ -555,7 +572,7 @@ def main() -> None:
     parser.add_argument(
         "--pedigree-source-manifest",
         type=Path,
-        default=Path("genotype_panels/pedigree/trial_derived_pedigree_manifest.tsv"),
+        default=Path("metadata_outputs/all_trials_genotype_manifest_resolved.tsv"),
     )
     parser.add_argument("--curated-parent-registry", type=Path)
     parser.add_argument(
@@ -630,7 +647,7 @@ def main() -> None:
         raise SystemExit("Regulatory eligibility certification is not PASS")
 
     pedigree = parent_table(paths["pedigree_parent_table"])
-    source_conflicts, source_metrics = source_lineage_conflicts(
+    source_conflicts, source_metrics, source_children = source_lineage_conflicts(
         paths["pedigree_source_manifest"]
     )
     curated = curated_parent_tokens(curated_path)
@@ -641,6 +658,30 @@ def main() -> None:
         curated_tokens=curated,
     )
     cycle_nodes = structure.pop("cycle_nodes")
+    pedigree_children = set(pedigree["sample_id"])
+    missing_source_children = sorted(pedigree_children - source_children)
+    source_only_children = sorted(source_children - pedigree_children)
+    source_metrics["pedigree_children_missing_from_source_manifest"] = len(
+        missing_source_children
+    )
+    source_metrics["source_children_absent_from_pedigree"] = len(source_only_children)
+    source_child_mismatches = pd.concat(
+        [
+            pd.DataFrame(
+                {
+                    "sample_id": missing_source_children,
+                    "status": "pedigree_child_missing_from_source_manifest",
+                }
+            ),
+            pd.DataFrame(
+                {
+                    "sample_id": source_only_children,
+                    "status": "source_child_absent_from_pedigree",
+                }
+            ),
+        ],
+        ignore_index=True,
+    )
     ka_order = load_order(paths["K_A_order"])
     kg_order = load_order(paths["K_G_HMP_order"])
     pedigree_nodes = set(pedigree["sample_id"])
@@ -707,6 +748,9 @@ def main() -> None:
     pedigree.to_csv(out_dir / "pedigree_parent_table_audited.tsv", sep="\t", index=False)
     source_conflicts.to_csv(
         out_dir / "source_lineage_conflicts.tsv", sep="\t", index=False
+    )
+    source_child_mismatches.to_csv(
+        out_dir / "source_pedigree_child_mismatches.tsv", sep="\t", index=False
     )
     issues.to_csv(out_dir / "pedigree_structural_issues.tsv", sep="\t", index=False)
     parent_issues.to_csv(

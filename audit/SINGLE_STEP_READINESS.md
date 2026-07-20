@@ -5,6 +5,9 @@ relationship matrix. It reads pedigree identifiers, `K_A`, the certified HMP
 genomic kernel, their sample orders, and the frozen regulatory-eligibility
 certification. It does not read phenotype values, outer-test metrics, or final
 holdout outcomes, and it does not modify or construct any relationship kernel.
+The default source-lineage manifest is
+`metadata_outputs/all_trials_genotype_manifest_resolved.tsv`; set
+`PEDIGREE_SOURCE_MANIFEST` only when auditing a versioned replacement.
 
 ## Server run
 
@@ -34,6 +37,7 @@ OUT="$DATA/model_kernels/single_step_readiness_v1"
 cat "$OUT/single_step_readiness_decision.json"
 column -t -s $'\t' "$OUT/single_step_readiness_metrics.tsv"
 column -t -s $'\t' "$OUT/source_lineage_conflicts.tsv" | head -50
+column -t -s $'\t' "$OUT/source_pedigree_child_mismatches.tsv" | head -50
 column -t -s $'\t' "$OUT/uncurated_parent_tokens.tsv" | head -50
 column -t -s $'\t' "$OUT/K_A_pedigree_order_mismatches.tsv" | head -50
 ```
