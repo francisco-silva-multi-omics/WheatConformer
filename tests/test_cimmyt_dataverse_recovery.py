@@ -11,6 +11,7 @@ from server_genotype_recovery.fetch_cimmyt_dataverse_recovery import (
     exact_term_pattern,
     repository_search_text,
     scan_file_for_terms,
+    scan_file_for_indexed_terms,
 )
 
 
@@ -125,3 +126,35 @@ def test_candidate_priority_prefers_gid_mapping_over_readme() -> None:
         "resolver_file_query_count": 0,
     }
     assert candidate_priority(mapping)[0] > candidate_priority(readme)[0]
+
+
+def test_indexed_scan_recovers_gid_from_large_term_catalog(tmp_path: Path) -> None:
+    path = tmp_path / "sample_map.tsv"
+    path.write_text("sample_id\tgid\nDART-1\tGID8231407\n", encoding="utf-8")
+    terms = [
+        {"query_id": f"GID{index}", "query_kind": "sample_id", "query_text": f"GID{index}"}
+        for index in range(1000, 1600)
+    ]
+    terms.append(
+        {"query_id": "GID8231407", "query_kind": "sample_id", "query_text": "GID8231407"}
+    )
+    hits = scan_file_for_indexed_terms(path, terms)
+    assert [(row["query_id"], row["query_kind"]) for row in hits] == [
+        ("GID8231407", "sample_id")
+    ]
+
+
+def test_candidate_priority_penalizes_non_wheat_pedigree() -> None:
+    wheat = {
+        "candidate_role": "pedigree",
+        "filename": "wheat_germplasm.tsv",
+        "description": "wheat pedigree",
+        "content_type": "text/tab-separated-values",
+    }
+    maize = {
+        "candidate_role": "pedigree",
+        "filename": "CML_information.xlsx",
+        "description": "CIMMYT Maize Lines pedigree",
+        "content_type": "application/octet-stream",
+    }
+    assert candidate_priority(wheat)[0] > candidate_priority(maize)[0]

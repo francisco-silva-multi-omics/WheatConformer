@@ -20,6 +20,7 @@ import pandas as pd
 from server_genotype_recovery.fetch_brapi_pedigree_markers import (
     build_query_terms,
     clean,
+    normalized_identifier,
     read_table,
     sha256_file,
     write_json_atomic,
@@ -141,9 +142,11 @@ def candidate_priority(row: dict[str, object]) -> tuple[int, str]:
     recovery_terms = ("sample", "gid", "germplasm", "pedigree", "passport", "accession", "cross", "parent")
     marker_terms = ("call", "dosage", "variant", "snp", "hapmap", "vcf", "genotypic")
     low_value_terms = ("readme", "dictionary", "protocol", "md5", "checksum", "gebv", "phenotyp", "yield")
+    non_wheat_terms = ("maize", "barley", "rice")
     recovery_hits = [term for term in recovery_terms if term in text]
     marker_hits = [term for term in marker_terms if term in text]
     low_value_hits = [term for term in low_value_terms if term in text]
+    non_wheat_hits = [term for term in non_wheat_terms if term in text]
     if recovery_hits:
         score += 35
         reasons.append("recovery_metadata=" + "|".join(recovery_hits))
@@ -153,6 +156,9 @@ def candidate_priority(row: dict[str, object]) -> tuple[int, str]:
     if low_value_hits:
         score -= 35
         reasons.append("low_value=" + "|".join(low_value_hits))
+    if non_wheat_hits:
+        score -= 100
+        reasons.append("non_wheat=" + "|".join(non_wheat_hits))
     suffix = Path(clean(row.get("filename"))).suffix.lower()
     if suffix in {".txt", ".tsv", ".tab", ".csv", ".gz", ".zip", ".xlsx", ".xlsm"}:
         score += 5
@@ -447,6 +453,8 @@ def scan_file_for_terms(
     terms: list[dict[str, object]],
     max_hits_per_term: int = 3,
 ) -> list[dict[str, object]]:
+    if len(terms) > 500:
+        return scan_file_for_indexed_terms(path, terms, max_hits_per_term=max_hits_per_term)
     hits: list[dict[str, object]] = []
     counts: dict[tuple[str, str, str], int] = {}
     prepared = [
@@ -491,6 +499,71 @@ def scan_file_for_terms(
     return hits
 
 
+def scan_file_for_indexed_terms(
+    path: Path,
+    terms: list[dict[str, object]],
+    max_hits_per_term: int = 3,
+) -> list[dict[str, object]]:
+    term_index: dict[str, list[dict[str, object]]] = {}
+    for term in terms:
+        normalized = normalized_identifier(term.get("query_text"))
+        if normalized:
+            term_index.setdefault(normalized, []).append(term)
+    hits: list[dict[str, object]] = []
+    counts: dict[tuple[str, str, str], int] = {}
+    try:
+        for member, lines in text_streams(path):
+            for line_number, line in enumerate(lines, start=1):
+                upper = line.upper()
+                candidates: set[str] = set()
+                for match in re.finditer(r"(?<![A-Z0-9])GID[\s._-]*\d+(?![A-Z0-9])", upper):
+                    candidates.add(normalized_identifier(match.group(0)))
+                pieces = re.split(r"[\t,;|]", upper)
+                pieces.extend(re.findall(r">([^<>]{1,2000})<", upper))
+                for piece in pieces:
+                    if len(piece) <= 2000:
+                        candidates.add(normalized_identifier(piece.strip(' "\'')))
+                for token in re.findall(r"[A-Z0-9][A-Z0-9._-]{3,}", upper):
+                    candidates.add(normalized_identifier(token))
+                    if "-" in token:
+                        candidates.add(normalized_identifier(token.split("-", 1)[0]))
+                candidates.discard("")
+                for normalized in candidates.intersection(term_index):
+                    for term in term_index[normalized]:
+                        key = (
+                            str(term["query_id"]),
+                            str(term["query_kind"]),
+                            str(term["query_text"]),
+                        )
+                        if counts.get(key, 0) >= max_hits_per_term:
+                            continue
+                        counts[key] = counts.get(key, 0) + 1
+                        hits.append(
+                            {
+                                "query_id": term["query_id"],
+                                "query_kind": term["query_kind"],
+                                "query_text": term["query_text"],
+                                "path": str(path),
+                                "archive_member": member,
+                                "line_number": line_number,
+                                "match_excerpt": line.strip()[:1000],
+                            }
+                        )
+    except (UnicodeError, OSError, zipfile.BadZipFile) as exc:
+        hits.append(
+            {
+                "query_id": "",
+                "query_kind": "scan_error",
+                "query_text": "",
+                "path": str(path),
+                "archive_member": "",
+                "line_number": 0,
+                "match_excerpt": f"{type(exc).__name__}: {exc}",
+            }
+        )
+    return hits
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Authenticated, bounded CIMMYT Dataverse recovery for genotype and pedigree evidence."
@@ -509,6 +582,7 @@ def main() -> None:
     parser.add_argument("--max-pages", type=int, default=1)
     parser.add_argument("--discovery-query", action="append", default=[])
     parser.add_argument("--download-candidates", action="store_true")
+    parser.add_argument("--scan-all-resolver-terms", action="store_true")
     parser.add_argument("--include-restricted", action="store_true")
     parser.add_argument("--max-download-files", type=int, default=10)
     parser.add_argument("--max-file-bytes", type=int, default=25 * 1024 * 1024)
@@ -534,6 +608,9 @@ def main() -> None:
 
     resolver_frame = read_table(resolver)
     selected, terms = build_query_terms(resolver_frame, args.limit, args.offset)
+    scan_terms = terms
+    if args.scan_all_resolver_terms:
+        _, scan_terms = build_query_terms(resolver_frame, len(resolver_frame), 0)
     discovery = args.discovery_query or [
         "wheat genotypic",
         "wheat pedigree",
@@ -541,6 +618,10 @@ def main() -> None:
         "DArTseq wheat",
     ]
     write_tsv(terms, out_dir / "dataverse_query_terms.tsv", [
+        "source_row", "query_id", "query_kind", "query_text", "normalized_query",
+        "marker_probe_eligible", "selection_stage_count", "selection_stages",
+    ])
+    write_tsv(scan_terms, out_dir / "dataverse_content_scan_terms.tsv", [
         "source_row", "query_id", "query_kind", "query_text", "normalized_query",
         "marker_probe_eligible", "selection_stage_count", "selection_stages",
     ])
@@ -700,20 +781,24 @@ def main() -> None:
                 args.max_file_bytes,
                 args.max_total_download_bytes - total_downloaded,
             )
-            ok, detail = client.download_file(
-                str(row["datafile_id"]),
-                destination,
-                f"download:{row['datafile_id']}",
-                max_bytes=enforced_limit,
-            )
+            reused = destination.is_file() and destination.stat().st_size > 0
+            if reused:
+                ok, detail = True, "reused_existing_download"
+            else:
+                ok, detail = client.download_file(
+                    str(row["datafile_id"]),
+                    destination,
+                    f"download:{row['datafile_id']}",
+                    max_bytes=enforced_limit,
+                )
             if ok:
                 downloaded_files += 1
                 total_downloaded += destination.stat().st_size
-                content_hits.extend(scan_file_for_terms(destination, terms))
+                content_hits.extend(scan_file_for_terms(destination, scan_terms))
             downloads.append(
                 {
                     **row,
-                    "download_status": "DOWNLOADED" if ok else "FAILED",
+                    "download_status": ("REUSED" if reused else "DOWNLOADED") if ok else "FAILED",
                     "local_path": str(destination) if ok else "",
                     "detail": detail,
                 }
@@ -735,6 +820,8 @@ def main() -> None:
         {"metric": "resolver_rows_available", "value": len(resolver_frame)},
         {"metric": "resolver_rows_selected", "value": len(selected)},
         {"metric": "resolver_query_terms", "value": len(terms)},
+        {"metric": "content_scan_resolver_rows", "value": len(resolver_frame) if args.scan_all_resolver_terms else len(selected)},
+        {"metric": "content_scan_terms", "value": len(scan_terms)},
         {"metric": "discovery_queries", "value": len(discovery)},
         {"metric": "search_result_rows", "value": len(search_rows)},
         {"metric": "datasets_resolved", "value": len(dataset_rows)},
@@ -767,6 +854,7 @@ def main() -> None:
             "per_page": args.per_page,
             "max_pages": args.max_pages,
             "download_candidates": args.download_candidates,
+            "scan_all_resolver_terms": args.scan_all_resolver_terms,
             "include_restricted": args.include_restricted,
             "max_download_files": args.max_download_files,
             "max_file_bytes": args.max_file_bytes,

@@ -307,6 +307,12 @@ to access them. Raw pedigree strings are converted to bounded punctuation-free
 phrase searches to avoid repository query-parser failures while retaining the
 original term in the audit output.
 
+By default, API discovery remains bounded by `CIMMYT_DATAVERSE_LIMIT`, but all
+downloaded files are indexed against every resolver GID, BCID, parent and cross.
+This separates API request volume from local evidence recovery. Large resolver
+sets use an indexed exact-cell/GID scanner rather than a term-by-line nested
+loop, and existing downloads are reused when a run is resumed in place.
+
 Selection histories are decomposed into a BCID and developmental-stage tokens.
 The BCID, GID, cross and named parents are germplasm queries, but only the GID
 and BCID are used as direct sample/callset names. Stage suffixes such as `0Y`
