@@ -516,6 +516,7 @@ def main() -> None:
     term_index, term_count = term_index_from_resolver(resolver)
     downloads = read_table(downloads_path)
     downloads = downloads[downloads["download_status"].isin(["DOWNLOADED", "REUSED"])].copy()
+    downloads["source_origin"] = "recovery_download_manifest"
     local_reuse_count = 0
     if local_reuse_path.is_file():
         local_reuse = read_table(local_reuse_path)
@@ -548,6 +549,7 @@ def main() -> None:
                 "wheat checksum matches"
             )
         local_reuse_count = len(local_reuse)
+        local_reuse["source_origin"] = "certified_local_reuse"
         downloads = pd.concat([downloads, local_reuse], ignore_index=True)
         downloads = downloads.drop_duplicates(
             ["dataset_persistent_id", "datafile_id"], keep="last"
@@ -565,6 +567,7 @@ def main() -> None:
             "dataset_name",
             "filename",
             "local_path",
+            "source_origin",
             "crop_scope",
             "crop_scope_evidence",
         ]
@@ -585,9 +588,11 @@ def main() -> None:
     for file_number, record in enumerate(records, start=1):
         path = Path(clean(record.get("local_path")))
         filename = clean(record.get("filename")) or path.name
+        source_origin = clean(record.get("source_origin")) or "unknown"
         started = time.monotonic()
         print(
-            f"[{file_number}/{len(records)}] structured evidence: {filename}",
+            f"[{file_number}/{len(records)}] structured evidence: {filename}\n"
+            f"  source={source_origin}; path={path}",
             flush=True,
         )
         crop_scope = clean(record.get("crop_scope"))
@@ -600,6 +605,8 @@ def main() -> None:
             parse_rows.append(
                 {
                     "filename": filename,
+                    "local_path": str(path),
+                    "source_origin": source_origin,
                     "status": status,
                     "parts": 0,
                     "rows": 0,
@@ -609,7 +616,17 @@ def main() -> None:
             print(f"  {status}; skipped", flush=True)
             continue
         if not path.is_file():
-            parse_rows.append({"filename": record.get("filename", ""), "status": "MISSING", "parts": 0, "rows": 0, "detail": str(path)})
+            parse_rows.append(
+                {
+                    "filename": filename,
+                    "local_path": str(path),
+                    "source_origin": source_origin,
+                    "status": "MISSING",
+                    "parts": 0,
+                    "rows": 0,
+                    "detail": str(path),
+                }
+            )
             continue
         path_key = str(path)
         full_scan = (
@@ -623,6 +640,8 @@ def main() -> None:
             parse_rows.append(
                 {
                     "filename": filename,
+                    "local_path": str(path),
+                    "source_origin": source_origin,
                     "status": "INDEXED_NO_IDENTIFIER_MATCH",
                     "parts": 0,
                     "rows": 0,
@@ -660,7 +679,17 @@ def main() -> None:
         except Exception as exc:
             status, detail = "SKIPPED_OR_FAILED", f"{type(exc).__name__}: {exc}"
         evidence_rows.extend(file_evidence_rows)
-        parse_rows.append({"filename": record.get("filename", ""), "status": status, "parts": parts, "rows": parsed_rows, "detail": detail})
+        parse_rows.append(
+            {
+                "filename": filename,
+                "local_path": str(path),
+                "source_origin": source_origin,
+                "status": status,
+                "parts": parts,
+                "rows": parsed_rows,
+                "detail": detail,
+            }
+        )
         print(
             f"  {status}; parts={parts}; rows={parsed_rows}; "
             f"matches={len(file_evidence_rows)}; seconds={time.monotonic() - started:.2f}",
@@ -691,6 +720,7 @@ def main() -> None:
             {"metric": "resolver_rows", "value": len(resolver)},
             {"metric": "resolver_terms", "value": term_count},
             {"metric": "downloaded_files_considered", "value": len(downloads)},
+            {"metric": "recovery_manifest_files_considered", "value": int(downloads["source_origin"].eq("recovery_download_manifest").sum())},
             {"metric": "verified_local_reuse_files_considered", "value": local_reuse_count},
             {"metric": "wheat_confirmed_downloaded_files", "value": int(downloads["crop_scope"].eq(WHEAT_CONFIRMED).sum())},
             {"metric": "non_wheat_downloaded_files_excluded", "value": int(downloads["crop_scope"].eq(NON_WHEAT_EXCLUDED).sum())},
