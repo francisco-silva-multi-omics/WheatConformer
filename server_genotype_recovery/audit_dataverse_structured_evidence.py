@@ -56,6 +56,9 @@ EVIDENCE_COLUMNS = [
     "row_context_json",
 ]
 
+LARGE_STRUCTURED_BYTES = 512 * 1024**2
+LARGE_MATRIX_AXIS_ROWS = 32
+
 
 def _first_nonempty(values: pd.Series) -> str:
     for value in values:
@@ -164,7 +167,12 @@ def marker_bridge_class(
     return "family_context_only"
 
 
-def _read_delimited(source: object, suffix: str) -> pd.DataFrame:
+def _read_delimited(
+    source: object,
+    suffix: str,
+    *,
+    nrows: int | None = None,
+) -> pd.DataFrame:
     compression = "gzip" if suffix.endswith(".gz") else "infer"
     try:
         return pd.read_csv(
@@ -175,6 +183,7 @@ def _read_delimited(source: object, suffix: str) -> pd.DataFrame:
             dtype=str,
             compression=compression,
             on_bad_lines="skip",
+            nrows=nrows,
         )
     except (UnicodeDecodeError, pd.errors.ParserError):
         if hasattr(source, "seek"):
@@ -187,6 +196,7 @@ def _read_delimited(source: object, suffix: str) -> pd.DataFrame:
             compression=compression,
             encoding="latin-1",
             on_bad_lines="skip",
+            nrows=nrows,
         )
 
 
@@ -249,10 +259,14 @@ def structured_parts(path: Path) -> Iterator[tuple[str, pd.DataFrame]]:
                 member_lower = member.filename.lower()
                 if not member_lower.endswith((".txt", ".tsv", ".tab", ".csv")):
                     continue
-                payload = archive.read(member)
-                yield f"archive:{member.filename}", _read_delimited(
-                    io.BytesIO(payload), member_lower
-                )
+                bounded = member.file_size >= LARGE_STRUCTURED_BYTES
+                part_kind = "archive_axis_preview" if bounded else "archive"
+                with archive.open(member) as handle:
+                    yield f"{part_kind}:{member.filename}", _read_delimited(
+                        handle,
+                        member_lower,
+                        nrows=LARGE_MATRIX_AXIS_ROWS if bounded else None,
+                    )
         return
     if lower.endswith(".7z"):
         for member_name, member_path in iter_7z_members(path):
@@ -276,7 +290,12 @@ def structured_parts(path: Path) -> Iterator[tuple[str, pd.DataFrame]]:
                 yield f"archive:{member_name}:{source_part}", frame
         return
     if lower.endswith((".txt", ".tsv", ".tab", ".csv", ".txt.gz", ".tsv.gz", ".csv.gz")):
-        yield "file", _read_delimited(path, lower)
+        bounded = path.stat().st_size >= LARGE_STRUCTURED_BYTES
+        yield "file_axis_preview" if bounded else "file", _read_delimited(
+            path,
+            lower,
+            nrows=LARGE_MATRIX_AXIS_ROWS if bounded else None,
+        )
         return
     raise ValueError(f"unsupported structured format: {path.name}")
 
@@ -619,15 +638,25 @@ def main() -> None:
         )
         parts = 0
         parsed_rows = 0
+        bounded_axis_scan = False
         file_evidence_rows: list[dict[str, object]] = []
         try:
             for source_part, frame in structured_parts(path):
                 parts += 1
                 parsed_rows += len(frame)
+                bounded_axis_scan |= "axis_preview" in source_part
                 file_evidence_rows.extend(
                     scan_frame(frame, local_term_index, record, source_part)
                 )
-            status, detail = "PASS", ""
+            if bounded_axis_scan:
+                status = "PASS_BOUNDED_AXIS"
+                detail = (
+                    "Large marker matrix: scanned only the first "
+                    f"{LARGE_MATRIX_AXIS_ROWS} identifier/header rows; genotype "
+                    "cells were not materialized."
+                )
+            else:
+                status, detail = "PASS", ""
         except Exception as exc:
             status, detail = "SKIPPED_OR_FAILED", f"{type(exc).__name__}: {exc}"
         evidence_rows.extend(file_evidence_rows)
@@ -666,7 +695,8 @@ def main() -> None:
             {"metric": "wheat_confirmed_downloaded_files", "value": int(downloads["crop_scope"].eq(WHEAT_CONFIRMED).sum())},
             {"metric": "non_wheat_downloaded_files_excluded", "value": int(downloads["crop_scope"].eq(NON_WHEAT_EXCLUDED).sum())},
             {"metric": "ambiguous_crop_downloaded_files_deferred", "value": int(downloads["crop_scope"].eq(AMBIGUOUS_REVIEW).sum())},
-            {"metric": "files_parsed", "value": int((parse_log["status"] == "PASS").sum()) if not parse_log.empty else 0},
+            {"metric": "files_parsed", "value": int(parse_log["status"].str.startswith("PASS").sum()) if not parse_log.empty else 0},
+            {"metric": "large_matrices_scanned_as_bounded_axes", "value": int(parse_log["status"].eq("PASS_BOUNDED_AXIS").sum()) if not parse_log.empty else 0},
             {"metric": "files_skipped_by_complete_content_index", "value": int((parse_log["status"] == "INDEXED_NO_IDENTIFIER_MATCH").sum()) if not parse_log.empty else 0},
             {"metric": "structured_match_rows", "value": len(evidence)},
             {"metric": "matched_query_ids", "value": evidence["query_id"].nunique() if not evidence.empty else 0},
@@ -696,6 +726,11 @@ def main() -> None:
                 ".xlsm.gz",
                 ".7z",
             ],
+            "large_matrix_strategy": {
+                "minimum_uncompressed_bytes": LARGE_STRUCTURED_BYTES,
+                "axis_rows_scanned": LARGE_MATRIX_AXIS_ROWS,
+                "genotype_cells_materialized": False,
+            },
         },
         "crop_selection": {
             "policy": "only WHEAT_CONFIRMED downloaded sources are parsed",
@@ -720,7 +755,7 @@ def main() -> None:
             "status": "COMPLETE",
             "completed_at_utc": datetime.now(timezone.utc).isoformat(),
             "files_considered": len(downloads),
-            "files_parsed": int((parse_log["status"] == "PASS").sum())
+            "files_parsed": int(parse_log["status"].str.startswith("PASS").sum())
             if not parse_log.empty
             else 0,
             "structured_match_rows": len(evidence),

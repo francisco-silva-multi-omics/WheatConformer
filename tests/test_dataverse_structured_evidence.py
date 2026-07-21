@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import gzip
+import zipfile
 
 import pandas as pd
 
@@ -238,3 +239,27 @@ def test_mislabeled_text_xls_uses_delimited_fallback(tmp_path) -> None:
     assert part_name == "sheet:text_fallback"
     assert frame.iloc[0].tolist() == ["Trial name", "GID", "Selection History"]
     assert frame.iloc[1].tolist() == ["SAWYT", "123", "SEL-1"]
+
+
+def test_large_zip_matrix_reads_only_bounded_axis_rows(
+    tmp_path, monkeypatch
+) -> None:
+    path = tmp_path / "large_matrix.csv.zip"
+    rows = ["sample_a,sample_b,sample_c"]
+    rows.extend(f"m{index},A,T" for index in range(100))
+    with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("large_matrix.csv", "\n".join(rows))
+
+    monkeypatch.setattr(
+        "server_genotype_recovery.audit_dataverse_structured_evidence."
+        "LARGE_STRUCTURED_BYTES",
+        1,
+    )
+
+    parts = list(structured_parts(path))
+
+    assert len(parts) == 1
+    part_name, frame = parts[0]
+    assert part_name == "archive_axis_preview:large_matrix.csv"
+    assert len(frame) == 32
+    assert frame.iloc[0].tolist() == ["sample_a", "sample_b", "sample_c"]
