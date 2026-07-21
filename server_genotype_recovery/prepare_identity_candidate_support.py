@@ -90,6 +90,59 @@ def prepare_support_inputs(
     return manifest, quarantine, provenance
 
 
+def identity_replacement_inner_plan(
+    manifest: pd.DataFrame, candidate_fragment: pd.DataFrame
+) -> pd.DataFrame:
+    baseline_kernel = "K_G_SEEDS_DARTSEQ_LINEAR"
+    manifest_kernels = set(manifest["kernel"].astype(str))
+    if baseline_kernel not in manifest_kernels:
+        raise ValueError(f"Scoped replacement screen requires {baseline_kernel}")
+    linear = [
+        value
+        for value in candidate_fragment["kernel"].astype(str)
+        if value.endswith("_LINEAR")
+    ]
+    if len(linear) != 1:
+        raise ValueError("Scoped replacement screen requires exactly one candidate linear kernel")
+    candidate_kernel = linear[0]
+    return pd.DataFrame(
+        [
+            {
+                "architecture": "pedigree_environment_only",
+                "include_disabled_kernels": "",
+                "exclude_kernels": "K_G_HMP_LINEAR,K_G_HMP_RBF,K_G_GBS_LINEAR,K_G_GBS_RBF",
+                "screen_phase": "phase_1_inner_validation",
+                "status": "ready",
+                "decision_note": "frozen_reference_without_marker_experts",
+            },
+            {
+                "architecture": "frozen_existing_HMP_GBS",
+                "include_disabled_kernels": "",
+                "exclude_kernels": "",
+                "screen_phase": "phase_1_inner_validation",
+                "status": "ready",
+                "decision_note": "frozen_existing_marker_reference",
+            },
+            {
+                "architecture": f"existing_plus_{baseline_kernel}",
+                "include_disabled_kernels": baseline_kernel,
+                "exclude_kernels": "",
+                "screen_phase": "phase_1_inner_validation",
+                "status": "ready",
+                "decision_note": "certified_original_Seeds_linear_candidate",
+            },
+            {
+                "architecture": f"existing_plus_{candidate_kernel}",
+                "include_disabled_kernels": candidate_kernel,
+                "exclude_kernels": "",
+                "screen_phase": "phase_1_inner_validation",
+                "status": "ready",
+                "decision_note": "scoped_replacement_never_cofit_with_original_Seeds_or_80K",
+            },
+        ]
+    )
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Prepare an isolated scoped-identity registry and quarantine prior out-of-scope GIDs."
@@ -131,12 +184,18 @@ def main() -> None:
     )
     manifest_path = out_dir / "recovered_genotype_kernel_manifest_scoped.tsv"
     quarantine_path = out_dir / "unscoped_general_lookup_gid_quarantine.tsv"
+    plan_path = out_dir / "identity_replacement_inner_plan.tsv"
     manifest.to_csv(manifest_path, sep="\t", index=False)
     quarantine.to_csv(quarantine_path, sep="\t", index=False)
+    identity_replacement_inner_plan(
+        manifest,
+        pd.read_csv(paths["candidate_fragment"], sep="\t", dtype=str),
+    ).to_csv(plan_path, sep="\t", index=False)
     provenance["input_sha256"] = {name: sha256_file(path) for name, path in paths.items()}
     provenance["output_sha256"] = {
         "manifest": sha256_file(manifest_path),
         "quarantine": sha256_file(quarantine_path),
+        "inner_plan": sha256_file(plan_path),
     }
     provenance_path = out_dir / "identity_candidate_support_preparation.json"
     provenance_path.write_text(json.dumps(provenance, indent=2) + "\n", encoding="utf-8")

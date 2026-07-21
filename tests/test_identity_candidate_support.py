@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import pandas as pd
 
-from server_genotype_recovery.prepare_identity_candidate_support import prepare_support_inputs
+from server_genotype_recovery.prepare_identity_candidate_support import (
+    identity_replacement_inner_plan,
+    prepare_support_inputs,
+)
 
 
 def test_prepare_support_inputs_replaces_prior_identity_candidates_and_quarantines_extras() -> None:
@@ -51,3 +54,20 @@ def test_prepare_support_inputs_replaces_prior_identity_candidates_and_quarantin
     assert quarantine["sample_id"].tolist() == ["GID3"]
     assert not quarantine["eligible_for_kernel"].any()
     assert provenance["quarantined_general_lookup_gids"] == 1
+
+    plan = identity_replacement_inner_plan(manifest, candidate)
+    assert set(plan["architecture"]) == {
+        "pedigree_environment_only",
+        "frozen_existing_HMP_GBS",
+        "existing_plus_K_G_SEEDS_DARTSEQ_LINEAR",
+        "existing_plus_K_G_SEEDS_DARTSEQ_IDENTITY_V4_LINEAR",
+    }
+    assert plan["status"].eq("ready").all()
+    scoped = plan[
+        plan["architecture"].eq(
+            "existing_plus_K_G_SEEDS_DARTSEQ_IDENTITY_V4_LINEAR"
+        )
+    ].iloc[0]
+    assert scoped["include_disabled_kernels"] == (
+        "K_G_SEEDS_DARTSEQ_IDENTITY_V4_LINEAR"
+    )
