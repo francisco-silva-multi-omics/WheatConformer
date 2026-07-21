@@ -8,6 +8,12 @@ from pathlib import Path
 
 import pandas as pd
 
+from server_genotype_recovery.dataverse_crop_scope import (
+    AMBIGUOUS_REVIEW,
+    NON_WHEAT_EXCLUDED,
+    WHEAT_CONFIRMED,
+    classify_crop_scope,
+)
 from server_genotype_recovery.fetch_brapi_pedigree_markers import (
     clean,
     read_table,
@@ -67,7 +73,6 @@ def tier2_file_class(row: pd.Series | dict[str, object]) -> str:
     text = f"{raw_text} {re.sub(r'[^a-z0-9]+', ' ', raw_text)}"
     suffixes = "".join(Path(filename).suffixes).lower()
 
-    non_wheat = any(term in text for term in ("maize", "rice", "barley", "groundnut"))
     low_value = any(
         term in text
         for term in (
@@ -101,6 +106,22 @@ def tier2_file_class(row: pd.Series | dict[str, object]) -> str:
             "entry list",
         )
     )
+    strong_identity_mapping = any(
+        term in text
+        for term in (
+            "sampleidvsgid",
+            "sample id",
+            "sample_id",
+            "sample map",
+            "sample mapping",
+            "ids list",
+            "id list",
+            "germplasm doi",
+            "germplasm list",
+            "germplasm information",
+            "accession link",
+        )
+    )
     strong_matrix = any(
         term in text
         for term in (
@@ -126,8 +147,12 @@ def tier2_file_class(row: pd.Series | dict[str, object]) -> str:
         term in text for term in ("snp", "genotyp", "marker", "dart", "gbs")
     )
 
-    if non_wheat or low_value:
+    if low_value:
         return "excluded_low_relevance"
+    if strong_identity_mapping and not suffixes.endswith(
+        (".vcf", ".vcf.gz", ".hmp", ".bed", ".bim")
+    ) and not any(term in text for term in ("snp call", "genotype call", "dosage", "matrix")):
+        return "sample_mapping"
     if mapping and not strong_matrix:
         return "sample_mapping"
     if strong_matrix:
@@ -237,6 +262,14 @@ def build_inventory(
         )
     inventory = inventory.merge(dataset_names, on="dataset_persistent_id", how="left")
     inventory["dataset_name"] = inventory["dataset_name"].fillna("")
+    crop = inventory.apply(
+        lambda row: classify_crop_scope(
+            row.get("dataset_name"), row.get("filename"), row.get("description")
+        ),
+        axis=1,
+        result_type="expand",
+    )
+    inventory[["crop_scope", "crop_scope_evidence"]] = crop
 
     dataset_flags = (
         inventory.groupby("dataset_persistent_id", dropna=False)
@@ -254,6 +287,42 @@ def build_inventory(
                         values
                         & inventory.loc[values.index, "tier2_file_class"].isin(
                             MAPPING_CLASSES
+                        )
+                    ).any()
+                ),
+            ),
+            dataset_has_wheat_marker_matrix=(
+                "tier2_file_class",
+                lambda values: bool(
+                    (
+                        values.isin(MARKER_CLASSES)
+                        & inventory.loc[values.index, "crop_scope"].eq(
+                            WHEAT_CONFIRMED
+                        )
+                    ).any()
+                ),
+            ),
+            dataset_has_wheat_sample_mapping=(
+                "tier2_file_class",
+                lambda values: bool(
+                    (
+                        values.isin(MAPPING_CLASSES)
+                        & inventory.loc[values.index, "crop_scope"].eq(
+                            WHEAT_CONFIRMED
+                        )
+                    ).any()
+                ),
+            ),
+            dataset_has_downloaded_wheat_sample_mapping=(
+                "already_downloaded",
+                lambda values: bool(
+                    (
+                        values
+                        & inventory.loc[values.index, "tier2_file_class"].isin(
+                            MAPPING_CLASSES
+                        )
+                        & inventory.loc[values.index, "crop_scope"].eq(
+                            WHEAT_CONFIRMED
                         )
                     ).any()
                 ),
@@ -290,10 +359,10 @@ def build_inventory(
     ).round(3)
     inventory["mapping_support_status"] = "missing_sample_mapping"
     inventory.loc[
-        inventory["dataset_has_sample_mapping"], "mapping_support_status"
+        inventory["dataset_has_wheat_sample_mapping"], "mapping_support_status"
     ] = "mapping_candidate_available"
     inventory.loc[
-        inventory["dataset_has_downloaded_sample_mapping"], "mapping_support_status"
+        inventory["dataset_has_downloaded_wheat_sample_mapping"], "mapping_support_status"
     ] = "mapping_already_downloaded"
     return inventory
 
@@ -320,17 +389,31 @@ def build_download_plan(
     relevant["plan_status"] = "DEFERRED_NOT_SELECTED"
     relevant["plan_reason"] = "lower_priority_or_budget"
     relevant["selection_order"] = pd.NA
+    non_wheat = relevant["crop_scope"].eq(NON_WHEAT_EXCLUDED)
+    ambiguous = relevant["crop_scope"].eq(AMBIGUOUS_REVIEW)
+    relevant.loc[non_wheat, ["plan_status", "plan_reason"]] = [
+        "EXCLUDED_NON_WHEAT",
+        "explicit non-wheat crop evidence",
+    ]
+    relevant.loc[ambiguous, ["plan_status", "plan_reason"]] = [
+        "DEFERRED_AMBIGUOUS_CROP",
+        "no explicit wheat evidence; manual crop review required",
+    ]
+    eligible = relevant["crop_scope"].eq(WHEAT_CONFIRMED)
 
     selected_count = 0
     selected_bytes = 0
     selection_order = 0
     dataset_scores = (
-        relevant.groupby("dataset_persistent_id")["tier2_priority_score"]
+        relevant[eligible].groupby("dataset_persistent_id")["tier2_priority_score"]
         .max()
         .sort_values(ascending=False)
     )
     for dataset_id in dataset_scores.index:
-        group = relevant[relevant["dataset_persistent_id"].eq(dataset_id)]
+        group = relevant[
+            relevant["dataset_persistent_id"].eq(dataset_id)
+            & relevant["crop_scope"].eq(WHEAT_CONFIRMED)
+        ]
         pending = group[~group["already_downloaded"]].copy()
         mappings = pending[pending["tier2_file_class"].isin(MAPPING_CLASSES)].head(
             mapping_files_per_dataset
@@ -340,7 +423,9 @@ def build_download_plan(
         )
         if markers.empty:
             continue
-        mapping_ready = bool(group["dataset_has_downloaded_sample_mapping"].any())
+        mapping_ready = bool(
+            group["dataset_has_downloaded_wheat_sample_mapping"].any()
+        )
         accessible_mappings = mappings[
             include_restricted | ~mappings["restricted"]
         ]
@@ -413,6 +498,15 @@ def dataset_summary(inventory: pd.DataFrame) -> pd.DataFrame:
                 "tier2_file_class", lambda values: values.isin(MAPPING_CLASSES).sum()
             ),
             already_downloaded_files=("already_downloaded", "sum"),
+            wheat_confirmed_files=(
+                "crop_scope", lambda values: values.eq(WHEAT_CONFIRMED).sum()
+            ),
+            non_wheat_excluded_files=(
+                "crop_scope", lambda values: values.eq(NON_WHEAT_EXCLUDED).sum()
+            ),
+            ambiguous_crop_files=(
+                "crop_scope", lambda values: values.eq(AMBIGUOUS_REVIEW).sum()
+            ),
             structured_matched_query_ids=("structured_matched_query_ids", "max"),
             structured_unique_selection_query_ids=(
                 "structured_unique_selection_query_ids", "max"
@@ -425,6 +519,48 @@ def dataset_summary(inventory: pd.DataFrame) -> pd.DataFrame:
             ascending=False,
             kind="stable",
         )
+    )
+
+
+def annotate_evidence_crop(
+    evidence: pd.DataFrame,
+    inventory: pd.DataFrame,
+) -> pd.DataFrame:
+    mapping = inventory[
+        [
+            "dataset_persistent_id",
+            "datafile_id",
+            "crop_scope",
+            "crop_scope_evidence",
+        ]
+    ].drop_duplicates(["dataset_persistent_id", "datafile_id"])
+    local = evidence.merge(
+        mapping,
+        on=["dataset_persistent_id", "datafile_id"],
+        how="left",
+    )
+    local["crop_scope"] = local["crop_scope"].fillna(AMBIGUOUS_REVIEW)
+    local["crop_scope_evidence"] = local["crop_scope_evidence"].fillna(
+        "file_not_present_in_candidate_inventory"
+    )
+    return local
+
+
+def evidence_crop_summary(
+    evidence: pd.DataFrame,
+    inventory: pd.DataFrame,
+) -> pd.DataFrame:
+    local = annotate_evidence_crop(evidence, inventory)
+    return (
+        local.groupby(["crop_scope", "evidence_class"], dropna=False)
+        .agg(
+            evidence_rows=("query_id", "size"),
+            query_ids=("query_id", "nunique"),
+            datasets=("dataset_persistent_id", "nunique"),
+            files=("datafile_id", "nunique"),
+        )
+        .reset_index()
+        .sort_values(["crop_scope", "evidence_rows"], ascending=[True, False])
     )
 
 
@@ -485,13 +621,16 @@ def main() -> None:
     if missing:
         raise FileNotFoundError(f"Tier-2 planning inputs are missing: {missing}")
 
+    evidence = pd.read_csv(paths["evidence"], sep="\t", dtype=str)
     inventory = build_inventory(
         read_table(paths["candidate_files"]),
         read_table(paths["downloads"]),
-        pd.read_csv(paths["evidence"], sep="\t", dtype=str),
+        evidence,
         read_table(paths["search_results"]),
     )
     summary = dataset_summary(inventory)
+    annotated_evidence = annotate_evidence_crop(evidence, inventory)
+    crop_evidence = evidence_crop_summary(evidence, inventory)
     unrestricted = build_download_plan(
         inventory,
         include_restricted=False,
@@ -516,11 +655,19 @@ def main() -> None:
     summary.to_csv(
         out_dir / "dataverse_tier2_dataset_summary.tsv", sep="\t", index=False
     )
+    crop_evidence.to_csv(
+        out_dir / "dataverse_tier2_structured_evidence_crop_audit.tsv",
+        sep="\t",
+        index=False,
+    )
     write_plan(unrestricted, out_dir, "unrestricted")
     write_plan(authorized, out_dir, "authorized")
 
     selected_unrestricted = unrestricted[unrestricted["plan_status"].eq("SELECTED")]
     selected_authorized = authorized[authorized["plan_status"].eq("SELECTED")]
+    non_wheat_evidence = annotated_evidence[
+        annotated_evidence["crop_scope"].eq(NON_WHEAT_EXCLUDED)
+    ]
     qc = pd.DataFrame(
         [
             {"metric": "inventory_files", "value": len(inventory)},
@@ -529,6 +676,11 @@ def main() -> None:
             {"metric": "sample_mapping_files", "value": int(inventory["tier2_file_class"].isin(MAPPING_CLASSES).sum())},
             {"metric": "restricted_files", "value": int(inventory["restricted"].sum())},
             {"metric": "already_downloaded_files", "value": int(inventory["already_downloaded"].sum())},
+            {"metric": "wheat_confirmed_files", "value": int(inventory["crop_scope"].eq(WHEAT_CONFIRMED).sum())},
+            {"metric": "non_wheat_excluded_files", "value": int(inventory["crop_scope"].eq(NON_WHEAT_EXCLUDED).sum())},
+            {"metric": "ambiguous_crop_files", "value": int(inventory["crop_scope"].eq(AMBIGUOUS_REVIEW).sum())},
+            {"metric": "non_wheat_structured_evidence_rows", "value": len(non_wheat_evidence)},
+            {"metric": "non_wheat_structured_query_ids", "value": non_wheat_evidence["query_id"].nunique()},
             {"metric": "unrestricted_selected_files", "value": len(selected_unrestricted)},
             {"metric": "unrestricted_selected_bytes", "value": int(selected_unrestricted["filesize"].sum())},
             {"metric": "authorized_selected_files", "value": len(selected_authorized)},
@@ -554,6 +706,7 @@ def main() -> None:
             "mapping_files_per_dataset": args.mapping_files_per_dataset,
         },
         "restricted_plan_requires_explicit_authorization": True,
+        "crop_selection_policy": "only WHEAT_CONFIRMED rows may be selected",
         "automatic_download_performed": False,
         "phenotype_values_read": False,
         "outer_test_metrics_read": False,

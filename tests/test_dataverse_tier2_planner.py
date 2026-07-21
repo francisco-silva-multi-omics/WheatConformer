@@ -2,9 +2,16 @@ from __future__ import annotations
 
 import pandas as pd
 
+from server_genotype_recovery.dataverse_crop_scope import (
+    AMBIGUOUS_REVIEW,
+    NON_WHEAT_EXCLUDED,
+    WHEAT_CONFIRMED,
+    classify_crop_scope,
+)
 from server_genotype_recovery.plan_cimmyt_dataverse_tier2 import (
     build_download_plan,
     build_inventory,
+    evidence_crop_summary,
     tier2_file_class,
 )
 
@@ -49,12 +56,29 @@ def test_tier2_classification_separates_matrix_mapping_and_low_value() -> None:
     assert tier2_file_class(
         candidate("d", "2", "SampleIDvsGID_45610samples.txt", role="marker_and_pedigree")
     ) == "sample_mapping"
+    assert tier2_file_class(
+        candidate(
+            "d",
+            "2b",
+            "DArtSeq_SNPs_Iranian_Landrace_Germplasm_DOIs.tab",
+            role="marker_and_pedigree",
+        )
+    ) == "sample_mapping"
     assert tier2_file_class(candidate("d", "3", "genotyping_readme.txt")) == (
         "excluded_low_relevance"
     )
     assert tier2_file_class(
         candidate("d", "4", "curated_pedigree.ped", role="pedigree")
     ) == "pedigree_metadata"
+
+
+def test_crop_scope_requires_explicit_wheat_and_rejects_maize() -> None:
+    assert classify_crop_scope("DArTseq SNPs for wheat landraces")[0] == (
+        WHEAT_CONFIRMED
+    )
+    assert classify_crop_scope("CIMMYT Maize Line SNPs")[0] == NON_WHEAT_EXCLUDED
+    assert classify_crop_scope("Populations Axiom SNP Data")[0] == AMBIGUOUS_REVIEW
+    assert classify_crop_scope("", "M49IBWSN_markers.7z")[0] == WHEAT_CONFIRMED
 
 
 def test_plans_require_dataset_local_mapping_and_explicit_restricted_access() -> None:
@@ -71,6 +95,8 @@ def test_plans_require_dataset_local_mapping_and_explicit_restricted_access() ->
                 filesize=700,
             ),
             candidate("doi:c", "c-snp", "DArTseq_SNP_calls.txt", filesize=600),
+            candidate("doi:d", "d-map", "SampleIDvsGID.txt", role="marker_and_pedigree"),
+            candidate("doi:d", "d-snp", "maize_SNP_calls.hmp.txt", restricted=True),
         ]
     )
     downloads = pd.DataFrame(
@@ -93,7 +119,12 @@ def test_plans_require_dataset_local_mapping_and_explicit_restricted_access() ->
         ]
     )
     search = pd.DataFrame(
-        columns=["dataset_persistent_id", "global_id", "dataset_name"]
+        [
+            {"dataset_persistent_id": "doi:a", "global_id": "", "dataset_name": "Wheat 80K genotyping"},
+            {"dataset_persistent_id": "doi:b", "global_id": "", "dataset_name": "HiBAP wheat 35K"},
+            {"dataset_persistent_id": "doi:c", "global_id": "", "dataset_name": "Wheat DArTseq calls"},
+            {"dataset_persistent_id": "doi:d", "global_id": "", "dataset_name": "CIMMYT Maize Line SNPs"},
+        ]
     )
     inventory = build_inventory(files, downloads, evidence, search)
 
@@ -123,3 +154,27 @@ def test_plans_require_dataset_local_mapping_and_explicit_restricted_access() ->
     ).set_index("datafile_id")
     assert authorized.loc["b-map", "plan_status"] == "SELECTED"
     assert authorized.loc["b-snp", "plan_status"] == "SELECTED"
+    assert authorized.loc["d-map", "plan_status"] == "EXCLUDED_NON_WHEAT"
+    assert authorized.loc["d-snp", "plan_status"] == "EXCLUDED_NON_WHEAT"
+
+    crop_audit = evidence_crop_summary(
+        pd.concat(
+            [
+                evidence,
+                pd.DataFrame(
+                    [
+                        {
+                            "dataset_persistent_id": "doi:d",
+                            "datafile_id": "d-map",
+                            "query_id": "GID9",
+                            "evidence_class": "selection_history_exact_unique",
+                        }
+                    ]
+                ),
+            ],
+            ignore_index=True,
+        ),
+        inventory,
+    )
+    non_wheat = crop_audit[crop_audit["crop_scope"].eq(NON_WHEAT_EXCLUDED)]
+    assert int(non_wheat["evidence_rows"].sum()) == 1

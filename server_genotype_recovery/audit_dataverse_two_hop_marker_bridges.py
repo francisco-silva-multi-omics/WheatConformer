@@ -404,6 +404,17 @@ def main() -> None:
     downloads = read_table(downloads_path)
     downloads = downloads[downloads["download_status"].isin(["DOWNLOADED", "REUSED"])].copy()
     evidence = pd.read_csv(evidence_path, sep="\t", dtype=str)
+    if "crop_scope" not in evidence.columns:
+        raise ValueError(
+            "Structured evidence is stale and lacks crop_scope; rerun the "
+            "wheat-gated structured evidence audit"
+        )
+    invalid_crop = evidence[~evidence["crop_scope"].eq("WHEAT_CONFIRMED")]
+    if not invalid_crop.empty:
+        raise ValueError(
+            "Structured evidence contains non-wheat or ambiguous rows; rerun the "
+            "wheat-gated structured evidence audit"
+        )
     evidence["source_row"] = pd.to_numeric(evidence["source_row"], errors="coerce").fillna(-1).astype(int)
     selected_downloads, mapping_parts, marker_paths = select_two_hop_downloads(
         downloads, evidence

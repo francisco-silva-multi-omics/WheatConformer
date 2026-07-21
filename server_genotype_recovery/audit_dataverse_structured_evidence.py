@@ -13,6 +13,12 @@ from typing import Iterator
 
 import pandas as pd
 
+from server_genotype_recovery.dataverse_crop_scope import (
+    AMBIGUOUS_REVIEW,
+    NON_WHEAT_EXCLUDED,
+    WHEAT_CONFIRMED,
+    classify_crop_scope,
+)
 from server_genotype_recovery.fetch_brapi_pedigree_markers import (
     build_query_terms,
     clean,
@@ -32,6 +38,9 @@ EVIDENCE_COLUMNS = [
     "evidence_class",
     "individual_identity_level",
     "marker_bridge_class",
+    "crop_scope",
+    "crop_scope_evidence",
+    "dataset_name",
     "dataset_persistent_id",
     "datafile_id",
     "candidate_role",
@@ -44,6 +53,49 @@ EVIDENCE_COLUMNS = [
     "cell_value",
     "row_context_json",
 ]
+
+
+def _first_nonempty(values: pd.Series) -> str:
+    for value in values:
+        value = clean(value)
+        if value:
+            return value
+    return ""
+
+
+def annotate_download_crop_scope(
+    downloads: pd.DataFrame,
+    search_results: pd.DataFrame,
+) -> pd.DataFrame:
+    local = downloads.copy()
+    if search_results.empty:
+        dataset_names = pd.DataFrame(
+            columns=["dataset_persistent_id", "dataset_name"]
+        )
+    else:
+        search = search_results.copy()
+        for column in ("dataset_persistent_id", "global_id", "dataset_name"):
+            if column not in search.columns:
+                search[column] = ""
+        search["dataset_persistent_id"] = search["dataset_persistent_id"].fillna("")
+        missing = search["dataset_persistent_id"].map(clean).eq("")
+        search.loc[missing, "dataset_persistent_id"] = search.loc[missing, "global_id"]
+        dataset_names = (
+            search.groupby("dataset_persistent_id", dropna=False)["dataset_name"]
+            .agg(_first_nonempty)
+            .reset_index()
+        )
+    local = local.merge(dataset_names, on="dataset_persistent_id", how="left")
+    local["dataset_name"] = local["dataset_name"].fillna("")
+    crop = local.apply(
+        lambda row: classify_crop_scope(
+            row.get("dataset_name"), row.get("filename"), row.get("description")
+        ),
+        axis=1,
+        result_type="expand",
+    )
+    local[["crop_scope", "crop_scope_evidence"]] = crop
+    return local
 
 
 @lru_cache(maxsize=250_000)
@@ -260,6 +312,9 @@ def scan_frame(
                             "evidence_class": evidence,
                             "individual_identity_level": identity,
                             "marker_bridge_class": bridge,
+                            "crop_scope": source.get("crop_scope", ""),
+                            "crop_scope_evidence": source.get("crop_scope_evidence", ""),
+                            "dataset_name": source.get("dataset_name", ""),
                             "dataset_persistent_id": source.get("dataset_persistent_id", ""),
                             "datafile_id": source.get("datafile_id", ""),
                             "candidate_role": source.get("candidate_role", ""),
@@ -385,6 +440,7 @@ def main() -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     downloads_path = recovery_dir / "dataverse_downloads.tsv"
     content_matches_path = recovery_dir / "dataverse_content_matches.tsv"
+    search_results_path = recovery_dir / "dataverse_search_results.tsv"
     if not downloads_path.is_file():
         raise FileNotFoundError(downloads_path)
     if not resolver_path.is_file():
@@ -394,6 +450,26 @@ def main() -> None:
     term_index, term_count = term_index_from_resolver(resolver)
     downloads = read_table(downloads_path)
     downloads = downloads[downloads["download_status"].isin(["DOWNLOADED", "REUSED"])].copy()
+    search_results = (
+        read_table(search_results_path)
+        if search_results_path.is_file()
+        else pd.DataFrame()
+    )
+    downloads = annotate_download_crop_scope(downloads, search_results)
+    source_crop_audit = downloads[
+        [
+            "dataset_persistent_id",
+            "datafile_id",
+            "dataset_name",
+            "filename",
+            "local_path",
+            "crop_scope",
+            "crop_scope_evidence",
+        ]
+    ].copy()
+    source_crop_audit.to_csv(
+        out_dir / "dataverse_structured_source_crop_scope.tsv", sep="\t", index=False
+    )
     content_matches = (
         read_table(content_matches_path)
         if content_matches_path.is_file()
@@ -412,6 +488,24 @@ def main() -> None:
             f"[{file_number}/{len(records)}] structured evidence: {filename}",
             flush=True,
         )
+        crop_scope = clean(record.get("crop_scope"))
+        if crop_scope != WHEAT_CONFIRMED:
+            status = (
+                "EXCLUDED_NON_WHEAT_CROP"
+                if crop_scope == NON_WHEAT_EXCLUDED
+                else "DEFERRED_AMBIGUOUS_CROP"
+            )
+            parse_rows.append(
+                {
+                    "filename": filename,
+                    "status": status,
+                    "parts": 0,
+                    "rows": 0,
+                    "detail": clean(record.get("crop_scope_evidence")),
+                }
+            )
+            print(f"  {status}; skipped", flush=True)
+            continue
         if not path.is_file():
             parse_rows.append({"filename": record.get("filename", ""), "status": "MISSING", "parts": 0, "rows": 0, "detail": str(path)})
             continue
@@ -480,6 +574,9 @@ def main() -> None:
             {"metric": "resolver_rows", "value": len(resolver)},
             {"metric": "resolver_terms", "value": term_count},
             {"metric": "downloaded_files_considered", "value": len(downloads)},
+            {"metric": "wheat_confirmed_downloaded_files", "value": int(downloads["crop_scope"].eq(WHEAT_CONFIRMED).sum())},
+            {"metric": "non_wheat_downloaded_files_excluded", "value": int(downloads["crop_scope"].eq(NON_WHEAT_EXCLUDED).sum())},
+            {"metric": "ambiguous_crop_downloaded_files_deferred", "value": int(downloads["crop_scope"].eq(AMBIGUOUS_REVIEW).sum())},
             {"metric": "files_parsed", "value": int((parse_log["status"] == "PASS").sum()) if not parse_log.empty else 0},
             {"metric": "files_skipped_by_complete_content_index", "value": int((parse_log["status"] == "INDEXED_NO_IDENTIFIER_MATCH").sum()) if not parse_log.empty else 0},
             {"metric": "structured_match_rows", "value": len(evidence)},
@@ -504,6 +601,12 @@ def main() -> None:
             "path": str(content_matches_path) if use_content_prefilter else "",
             "sha256": sha256_file(content_matches_path) if use_content_prefilter else "",
             "full_scan_formats": [".xls", ".xls.gz", ".xlsx.gz", ".xlsm.gz"],
+        },
+        "crop_selection": {
+            "policy": "only WHEAT_CONFIRMED downloaded sources are parsed",
+            "search_results_path": str(search_results_path) if search_results_path.is_file() else "",
+            "search_results_sha256": sha256_file(search_results_path) if search_results_path.is_file() else "",
+            "source_crop_audit": str(out_dir / "dataverse_structured_source_crop_scope.tsv"),
         },
         "direct_marker_assignment_ready": False,
         "required_next_certification": "external_sample_axis_and_marker_call_concordance",

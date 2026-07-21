@@ -5,6 +5,7 @@ import gzip
 import pandas as pd
 
 from server_genotype_recovery.audit_dataverse_structured_evidence import (
+    annotate_download_crop_scope,
     _excel_engine,
     content_term_index,
     evidence_class,
@@ -14,6 +15,68 @@ from server_genotype_recovery.audit_dataverse_structured_evidence import (
     structured_parts,
     summarize_gid_evidence,
 )
+from server_genotype_recovery.dataverse_crop_scope import (
+    AMBIGUOUS_REVIEW,
+    NON_WHEAT_EXCLUDED,
+    WHEAT_CONFIRMED,
+)
+
+
+def test_download_crop_scope_uses_dataset_title_and_non_wheat_precedence() -> None:
+    downloads = pd.DataFrame(
+        [
+            {
+                "dataset_persistent_id": "doi:wheat",
+                "datafile_id": "1",
+                "filename": "calls.txt",
+                "description": "",
+            },
+            {
+                "dataset_persistent_id": "doi:maize",
+                "datafile_id": "2",
+                "filename": "calls.txt",
+                "description": "",
+            },
+            {
+                "dataset_persistent_id": "doi:ambiguous",
+                "datafile_id": "3",
+                "filename": "axiom_calls.txt",
+                "description": "",
+            },
+            {
+                "dataset_persistent_id": "doi:wheat",
+                "datafile_id": "4",
+                "filename": "maize_calls.txt",
+                "description": "",
+            },
+        ]
+    )
+    search = pd.DataFrame(
+        [
+            {
+                "dataset_persistent_id": "doi:wheat",
+                "global_id": "",
+                "dataset_name": "Wheat diversity panel",
+            },
+            {
+                "dataset_persistent_id": "doi:maize",
+                "global_id": "",
+                "dataset_name": "CIMMYT maize lines",
+            },
+            {
+                "dataset_persistent_id": "doi:ambiguous",
+                "global_id": "",
+                "dataset_name": "Axiom diversity panel",
+            },
+        ]
+    )
+
+    scoped = annotate_download_crop_scope(downloads, search).set_index("datafile_id")
+
+    assert scoped.loc["1", "crop_scope"] == WHEAT_CONFIRMED
+    assert scoped.loc["2", "crop_scope"] == NON_WHEAT_EXCLUDED
+    assert scoped.loc["3", "crop_scope"] == AMBIGUOUS_REVIEW
+    assert scoped.loc["4", "crop_scope"] == NON_WHEAT_EXCLUDED
 
 
 def test_evidence_class_does_not_promote_family_cross_to_individual() -> None:

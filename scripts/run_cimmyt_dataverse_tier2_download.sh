@@ -43,6 +43,10 @@ import pandas as pd
 plan_path, target_path, mode = Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3]
 max_files, max_file_bytes, max_total_bytes = map(int, sys.argv[4:7])
 plan = pd.read_csv(plan_path, sep="\t", dtype=str)
+required = {"datafile_id", "filesize", "restricted", "plan_status", "crop_scope"}
+missing = sorted(required - set(plan.columns))
+if missing:
+    raise SystemExit(f"Plan is stale or incomplete; missing columns: {missing}")
 selected = plan[plan["plan_status"].eq("SELECTED")].copy()
 selected["filesize"] = pd.to_numeric(selected["filesize"], errors="raise").astype("int64")
 targets = [line.strip() for line in target_path.read_text().splitlines() if line.strip()]
@@ -57,6 +61,12 @@ if int(selected["filesize"].sum()) > max_total_bytes:
 restricted = selected["restricted"].str.lower().isin(["true", "1", "yes"])
 if mode == "unrestricted" and restricted.any():
     raise SystemExit("Unrestricted plan contains restricted files")
+if not selected["crop_scope"].eq("WHEAT_CONFIRMED").all():
+    bad = selected.loc[
+        ~selected["crop_scope"].eq("WHEAT_CONFIRMED"),
+        ["datafile_id", "filename", "crop_scope"],
+    ]
+    raise SystemExit(f"Selected plan contains non-wheat or ambiguous files:\n{bad}")
 print(f"PASS plan={mode}; files={len(targets)}; bytes={int(selected['filesize'].sum())}")
 PY
 

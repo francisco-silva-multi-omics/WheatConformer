@@ -337,9 +337,13 @@ The planner inventories the complete discovered file catalog by restriction,
 size, role, platform and dataset-local resolver support. It writes separate
 unrestricted and authorization-required plans. Marker matrices are selected
 only when a sample mapping exists in the same dataset or has already been
-downloaded. Defaults are 20 files, 2 GiB per file and 10 GiB total; files beyond
-those limits remain explicitly deferred. The planner reads no phenotype values
-or evaluation outcomes and performs no downloads.
+downloaded. Only files with explicit wheat, Triticum or recognized wheat-trial
+evidence can be selected; maize and other crops are excluded, while ambiguous
+datasets require manual review. Defaults are 20 files, 2 GiB per file and 10 GiB
+total; files beyond those limits remain explicitly deferred. The structured
+evidence audit applies the same wheat-only gate before pedigree evidence is
+created. The planner reads no phenotype values or evaluation outcomes and
+performs no downloads.
 
 Run the unrestricted target list only after reviewing its TSV:
 
