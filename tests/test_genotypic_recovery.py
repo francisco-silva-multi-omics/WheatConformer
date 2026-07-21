@@ -172,16 +172,21 @@ def test_marker_by_sample_parser_streams_selected_columns(tmp_path: Path) -> Non
 def test_marker_by_sample_parser_certifies_adjudicated_matrix_hash(tmp_path: Path) -> None:
     matrix_path = tmp_path / "marker_by_sample.txt"
     matrix_path.write_text(
-        "MarkerID\tS1\tS2\n"
+        "MarkerID\tS1\tSEEDYT&N350\n"
         "m1:A>G\tA\tG\n",
         encoding="utf-8",
     )
     import hashlib
 
     expected = hashlib.sha256(matrix_path.read_bytes()).hexdigest()
-    parse_marker_by_sample(
-        matrix_path, {"S1": {"GID1"}}, expected_sha256=expected
+    matrix, gids, sources, _, _ = parse_marker_by_sample(
+        matrix_path,
+        {"S1": {"GID1"}},
+        expected_sha256=expected,
+        forced_sample_columns={2: ("GID2", "SEEDYT&N350", "SEEDYTN350")},
     )
+    assert gids == ["GID1", "GID2"]
+    assert sources == ["S1", "SEEDYT&N350"]
     try:
         parse_marker_by_sample(
             matrix_path, {"S1": {"GID1"}}, expected_sha256="0" * 64
@@ -223,7 +228,7 @@ def test_accepted_identity_loader_requires_reconciled_evidence(tmp_path: Path) -
     identity_dir = tmp_path / "identity"
     identity_dir.mkdir()
     matrix_path = tmp_path / "matrix.tsv"
-    matrix_path.write_text("MarkerID\tS1\nm1:A>G\tA\n", encoding="utf-8")
+    matrix_path.write_text("MarkerID\tS&1\nm1:A>G\tA\n", encoding="utf-8")
     import hashlib
 
     matrix_hash = hashlib.sha256(matrix_path.read_bytes()).hexdigest()
@@ -231,10 +236,11 @@ def test_accepted_identity_loader_requires_reconciled_evidence(tmp_path: Path) -
         {
             "trial_gid": ["GID1"],
             "panel_id": ["RECOVERY"],
-            "sample_id": ["S1"],
+            "sample_id": ["S&1"],
             "normalized_sample_id": ["S1"],
             "marker_matrix_path": [str(matrix_path.resolve())],
             "marker_matrix_sha256": [matrix_hash],
+            "marker_matrix_axis_index": [1],
             "marker_axis_match_count": [1],
             "classification": ["accepted_unique_identity"],
             "direct_marker_assignment_ready": [True],
@@ -287,14 +293,14 @@ def test_accepted_identity_loader_requires_reconciled_evidence(tmp_path: Path) -
         ),
         encoding="utf-8",
     )
-    accepted, lookup, replicates, observed_hash, _ = load_accepted_identity_mappings(
+    accepted, columns, replicates, observed_hash, _ = load_accepted_identity_mappings(
         identity_dir=identity_dir,
         panel_ids={"RECOVERY"},
         canonical_ids={"GID1"},
         matrix_path=matrix_path,
     )
     assert accepted["trial_gid"].tolist() == ["GID1"]
-    assert lookup == {"S1": {"GID1"}}
+    assert columns == {1: ("GID1", "S&1", "S1")}
     assert replicates == {}
     assert observed_hash == matrix_hash
 
@@ -331,7 +337,7 @@ def test_identity_recovered_builder_writes_isolated_gated_artifact(
     matrix_path = tmp_path / "GENOTYPIC_DATA/seeds/matrix.tsv"
     matrix_path.parent.mkdir(parents=True)
     matrix_path.write_text(
-        "MarkerID\tGID1\tGID2\tGID3\tS4\n"
+        "MarkerID\tGID1\tGID2\tGID3\tS&4\n"
         "m1:A>G\tA\tA\tG\tG\n"
         "m2:A>G\tA\tG\tG\tA\n"
         "m3:A>G\tG\tG\tA\tA\n"
@@ -352,10 +358,11 @@ def test_identity_recovered_builder_writes_isolated_gated_artifact(
         {
             "trial_gid": ["GID4"],
             "panel_id": ["RECOVERY"],
-            "sample_id": ["S4"],
+            "sample_id": ["S&4"],
             "normalized_sample_id": ["S4"],
             "marker_matrix_path": [str(matrix_path.resolve())],
             "marker_matrix_sha256": [matrix_hash],
+            "marker_matrix_axis_index": [4],
             "marker_axis_match_count": [1],
             "classification": ["accepted_unique_identity"],
             "direct_marker_assignment_ready": [True],

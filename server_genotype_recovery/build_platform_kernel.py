@@ -5,6 +5,7 @@ import csv
 import gzip
 import hashlib
 import json
+import re
 from collections import defaultdict
 from contextlib import contextmanager
 from pathlib import Path
@@ -263,6 +264,7 @@ def parse_marker_by_sample(
     lookup: dict[str, set[str]],
     *,
     expected_sha256: str | None = None,
+    forced_sample_columns: dict[int, tuple[str, str, str]] | None = None,
 ) -> tuple[np.ndarray, list[str], list[str], list[str], list[str]]:
     """Stream a marker-by-sample text matrix and retain only resolved trial samples."""
     digest = hashlib.sha256() if expected_sha256 else None
@@ -278,12 +280,41 @@ def parse_marker_by_sample(
             raise SystemExit(f"Could not find MarkerID header in {path}")
 
         header = header_line.decode("utf-8-sig", errors="replace").rstrip("\r\n").split("\t")
+        forced = forced_sample_columns or {}
+        invalid_columns = sorted(column for column in forced if column < 1 or column >= len(header))
+        if invalid_columns:
+            raise SystemExit(
+                f"Adjudicated marker columns are outside the current matrix header: {invalid_columns[:10]}"
+            )
         selected: list[tuple[int, str, str]] = []
+        observed_forced: set[int] = set()
         for field_index, raw_sample in enumerate(header[1:], start=1):
             sample = normalize_identifier(raw_sample)
             candidates = lookup.get(sample.upper(), set())
-            if len(candidates) == 1:
+            if field_index in forced:
+                forced_gid, forced_display, forced_normalized = forced[field_index]
+                if axis_identifier(raw_sample) != forced_normalized:
+                    raise SystemExit(
+                        "Adjudicated marker column no longer contains the expected sample: "
+                        f"column={field_index}; expected={forced_display!r}/"
+                        f"{forced_normalized}; observed={raw_sample!r}/"
+                        f"{axis_identifier(raw_sample)}"
+                    )
+                if candidates and candidates != {forced_gid}:
+                    raise SystemExit(
+                        "Adjudicated marker column conflicts with an existing sample mapping: "
+                        f"column={field_index}; sample={raw_sample!r}; "
+                        f"existing={sorted(candidates)}; accepted={forced_gid}"
+                    )
+                selected.append((field_index, forced_gid, sample))
+                observed_forced.add(field_index)
+            elif len(candidates) == 1:
                 selected.append((field_index, next(iter(candidates)), sample))
+        missing_forced = sorted(set(forced) - observed_forced)
+        if missing_forced:
+            raise SystemExit(
+                f"Adjudicated marker columns were not observed: {missing_forced[:10]}"
+            )
         if not selected:
             raise SystemExit(f"No canonical samples from {path} were found in the matrix header")
 
@@ -516,13 +547,23 @@ def boolean_values(values: pd.Series) -> pd.Series:
     return normalized.isin({"1", "true", "yes"})
 
 
+def axis_identifier(value: object) -> str:
+    return re.sub(r"[^A-Z0-9]", "", normalize_identifier(value).upper())
+
+
 def load_accepted_identity_mappings(
     *,
     identity_dir: Path,
     panel_ids: set[str],
     canonical_ids: set[str],
     matrix_path: Path,
-) -> tuple[pd.DataFrame, dict[str, set[str]], dict[str, set[str]], str, dict[str, str]]:
+) -> tuple[
+    pd.DataFrame,
+    dict[int, tuple[str, str, str]],
+    dict[str, set[str]],
+    str,
+    dict[str, str],
+]:
     candidates_path = identity_dir / "marker_identity_candidate_paths.tsv.gz"
     pairs_path = identity_dir / "marker_identity_pairwise_concordance.tsv.gz"
     validation_path = identity_dir / "marker_identity_validation.tsv"
@@ -567,6 +608,7 @@ def load_accepted_identity_mappings(
         "normalized_sample_id",
         "marker_matrix_path",
         "marker_matrix_sha256",
+        "marker_matrix_axis_index",
         "marker_axis_match_count",
         "classification",
         "direct_marker_assignment_ready",
@@ -599,9 +641,10 @@ def load_accepted_identity_mappings(
         raise SystemExit(
             f"Accepted identity artifact contains {len(outside_catalog)} GIDs outside the canonical catalog"
         )
-    accepted["normalized_sample_id"] = accepted["normalized_sample_id"].map(
-        normalize_identifier
-    )
+    accepted["sample_id"] = accepted["sample_id"].map(normalize_identifier)
+    accepted["normalized_sample_id"] = accepted["normalized_sample_id"].map(axis_identifier)
+    if accepted["sample_id"].eq("").any():
+        raise SystemExit("Accepted identity artifact contains empty physical marker sample IDs")
     if accepted["normalized_sample_id"].eq("").any():
         raise SystemExit("Accepted identity artifact contains empty marker sample IDs")
     axis_matches = pd.to_numeric(accepted["marker_axis_match_count"], errors="coerce")
@@ -619,19 +662,29 @@ def load_accepted_identity_mappings(
         raise SystemExit(f"Accepted identities do not share one marker matrix hash: {matrix_hashes}")
     expected_matrix_sha256 = next(iter(matrix_hashes))
 
-    lookup: dict[str, set[str]] = defaultdict(set)
+    accepted_columns: dict[int, tuple[str, str, str]] = {}
     for row in accepted.itertuples(index=False):
-        lookup[str(row.normalized_sample_id).upper()].add(str(row.trial_gid))
-    ambiguous = {sample: gids for sample, gids in lookup.items() if len(gids) != 1}
-    if ambiguous:
-        raise SystemExit(f"Accepted marker samples map to multiple trial GIDs: {ambiguous}")
+        try:
+            column = int(float(row.marker_matrix_axis_index))
+        except (TypeError, ValueError) as exc:
+            raise SystemExit(
+                f"Accepted identity has a nonnumeric marker column: {row.marker_matrix_axis_index!r}"
+            ) from exc
+        value = (str(row.trial_gid), str(row.sample_id), str(row.normalized_sample_id))
+        existing = accepted_columns.get(column)
+        if existing is not None and existing != value:
+            raise SystemExit(
+                f"Accepted marker column maps to multiple identities: column={column}; "
+                f"first={existing}; second={value}"
+            )
+        accepted_columns[column] = value
 
     replicate_groups: dict[str, set[str]] = {}
     replicate_rows = accepted[
         accepted["classification"].eq("accepted_concordant_replicates")
     ]
     for gid, group in replicate_rows.groupby("trial_gid", sort=True):
-        samples = set(group["normalized_sample_id"].str.upper()) - {""}
+        samples = set(group["sample_id"].str.upper()) - {""}
         if len(samples) < 2:
             raise SystemExit(f"Accepted replicate identity has fewer than two samples: {gid}")
         replicate_groups[gid] = samples
@@ -650,7 +703,11 @@ def load_accepted_identity_mappings(
         raise SystemExit(f"Pairwise evidence is missing columns: {sorted(pair_required - set(pairs.columns))}")
     pairs["overlap_pass"] = boolean_values(pairs["overlap_pass"])
     pairs["concordance_pass"] = boolean_values(pairs["concordance_pass"])
-    for gid, samples in replicate_groups.items():
+    normalized_replicate_groups = {
+        gid: set(group["normalized_sample_id"].str.upper()) - {""}
+        for gid, group in replicate_rows.groupby("trial_gid", sort=True)
+    }
+    for gid, samples in normalized_replicate_groups.items():
         local = pairs[pairs["trial_gid"].map(canonical_gid).eq(gid) & pairs["panel_id"].isin(panel_ids)]
         expected_pairs = len(samples) * (len(samples) - 1) // 2
         if (
@@ -667,21 +724,7 @@ def load_accepted_identity_mappings(
         "validation": sha256_file(validation_path),
         "provenance": sha256_file(provenance_path),
     }
-    return accepted, dict(lookup), replicate_groups, expected_matrix_sha256, input_hashes
-
-
-def merge_accepted_identity_lookup(
-    lookup: dict[str, set[str]], accepted_lookup: dict[str, set[str]]
-) -> None:
-    for sample, gids in accepted_lookup.items():
-        existing = lookup.get(sample, set())
-        combined = existing | gids
-        if len(combined) != 1:
-            raise SystemExit(
-                f"Accepted marker identity conflicts with an existing sample mapping: "
-                f"sample={sample}; existing={sorted(existing)}; accepted={sorted(gids)}"
-            )
-        lookup[sample] = combined
+    return accepted, accepted_columns, replicate_groups, expected_matrix_sha256, input_hashes
 
 
 def collapse_accepted_replicates(
@@ -1014,7 +1057,7 @@ def identity_recovery_status(
     rows: list[dict[str, object]] = []
     for gid, group in accepted.groupby("trial_gid", sort=True):
         classes = sorted(set(group["classification"]))
-        expected_samples = sorted(set(group["normalized_sample_id"]) - {""})
+        expected_samples = sorted(set(group["sample_id"]) - {""})
         found_samples = sorted(raw_sources.get(gid, set()))
         all_found = set(sample.upper() for sample in expected_samples).issubset(
             {sample.upper() for sample in found_samples}
@@ -1172,13 +1215,14 @@ def main() -> None:
         raise SystemExit(f"Canonical genotype catalog is missing or empty: {canonical_catalog_path}")
     canonical_ids, lookup = target_sample_lookup(root=root, canonical_catalog_path=canonical_catalog_path)
     accepted_identities = pd.DataFrame()
+    accepted_sample_columns: dict[int, tuple[str, str, str]] = {}
     accepted_replicates: dict[str, set[str]] = {}
     expected_matrix_sha256: str | None = None
     identity_input_hashes: dict[str, str] = {}
     if identity_dir is not None:
         (
             accepted_identities,
-            accepted_lookup,
+            accepted_sample_columns,
             accepted_replicates,
             expected_matrix_sha256,
             identity_input_hashes,
@@ -1188,13 +1232,15 @@ def main() -> None:
             canonical_ids=canonical_ids,
             matrix_path=matrix_paths[0],
         )
-        merge_accepted_identity_lookup(lookup, accepted_lookup)
 
     if defaults["format"] == "sample_by_marker":
         matrix, gids, source_samples, marker_ids, allele_values = parse_sample_by_marker(matrix_paths[0], lookup)
     elif defaults["format"] == "marker_by_sample":
         matrix, gids, source_samples, marker_ids, allele_values = parse_marker_by_sample(
-            matrix_paths[0], lookup, expected_sha256=expected_matrix_sha256
+            matrix_paths[0],
+            lookup,
+            expected_sha256=expected_matrix_sha256,
+            forced_sample_columns=accepted_sample_columns,
         )
     elif defaults["format"] == "iwyp":
         matrix, gids, source_samples, marker_ids, allele_values = parse_iwyp(matrix_paths[0], canonical_ids)
