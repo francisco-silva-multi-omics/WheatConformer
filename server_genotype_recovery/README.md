@@ -416,6 +416,41 @@ alias to marker-matrix row or column. Ambiguous aliases and interior matrix-cell
 matches remain non-identifying; even a unique sample-axis candidate requires
 marker-call concordance before it can become a direct genotype assignment.
 
+After the two-hop and pedigree-enrichment audits are complete, adjudicate every
+candidate under the frozen identity policy:
+
+```bash
+PYTHON="$HOME/tools/tf_wheat_cpu/bin/python" \
+WHEATCONFORMER_CODE_ROOT="$HOME/tools/WheatConformer" \
+CIMMYT_DATAVERSE_RECOVERY_DIR="genotype_panels/cimmyt_dataverse_recovery_v1/wide_inventory_v1" \
+nohup bash "$HOME/tools/WheatConformer/scripts/run_marker_identity_adjudication.sh" \
+  /DATA2/estancias/tesis_javier/model_DATA/genotipoXambiente \
+  > logs/marker_identity_adjudication_v1.nohup.log 2>&1 &
+```
+
+The policy in `marker_identity_concordance_policy_v1.json` is phenotype-blind
+and fixes the identity and technical-replicate rules before results are read.
+The adjudicator writes the complete trial GID, selection history/cross,
+external identity, sample ID and physical matrix-axis path. Marker calls are
+streamed only for candidate replicate samples. Replicates require at least the
+panel-specific marker overlap and pairwise call concordance of `0.995`.
+
+DArTseq audit inputs are refreshed by default before adjudication, and their
+structured-evidence and resolver hashes must match exactly. Set
+`MARKER_IDENTITY_REFRESH_UPSTREAM=0` only when both existing provenance files
+already certify the same completed wide-inventory snapshot.
+
+Terminal classes are `accepted_unique_identity`,
+`accepted_concordant_replicates`, `requires_metadata_review`,
+`conflicting_marker_samples` and `family_only_not_assignable`. Accepted links
+remain marker-QC pending and are not inserted into a relationship kernel.
+Unresolved and conflicting links are retained in the regulatory eligibility
+overlay as `candidate_unresolved`, with `K_G`, `K_z` and genotype-specific
+sequence eligibility explicitly false. Existing 80K, Seeds DArTseq, IWYP35K,
+DArTAG and haplotype artifacts are re-audited from their sample-QC and duplicate
+concordance files; missing panel artifacts are reported rather than silently
+treated as absent biology.
+
 If unique selection-history evidence does not connect to marker calls, audit it
 as pedigree enrichment rather than discarding it:
 

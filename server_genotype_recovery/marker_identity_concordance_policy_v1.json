@@ -1,0 +1,82 @@
+{
+  "protocol_version": "marker_identity_concordance_v1",
+  "selection_data": "identifiers_metadata_pedigree_and_marker_calls_only",
+  "minimum_pairwise_call_concordance": 0.995,
+  "minimum_shared_markers_default": 1000,
+  "accepted_classes": [
+    "accepted_unique_identity",
+    "accepted_concordant_replicates"
+  ],
+  "unresolved_classes": [
+    "requires_metadata_review",
+    "family_only_not_assignable"
+  ],
+  "conflicting_classes": [
+    "conflicting_marker_samples"
+  ],
+  "new_candidate_panel": {
+    "panel_id": "SEEDS_DARTSEQ_DATAVERSE_RECOVERY",
+    "canonical_matrix_path": "GENOTYPIC_DATA/Seeds_of_Discovery_-_MasAgro_Biodiversidad_Wheat_DArTseq-Derived_SNP_Data_Beta_Recall_Results_From_2011-2014/SEQ_SNPs_Extract_45610samples_102474markers.txt",
+    "matrix_format": "marker_by_sample",
+    "delimiter": "tab",
+    "sample_header_sentinel": "MarkerID",
+    "minimum_shared_markers": 5000
+  },
+  "existing_panel_artifacts": [
+    {
+      "panel_id": "80K_HEXAPLOID",
+      "artifact_dir": "genotype_panels/recovered/80k_hexaploid",
+      "prefix": "K_G_80K_HEXAPLOID",
+      "minimum_shared_markers": 5000
+    },
+    {
+      "panel_id": "SEEDS_DARTSEQ",
+      "artifact_dir": "genotype_panels/recovered/seeds_dartseq",
+      "prefix": "K_G_SEEDS_DARTSEQ",
+      "minimum_shared_markers": 5000
+    },
+    {
+      "panel_id": "IWYP35K",
+      "artifact_dir": "genotype_panels/recovered/iwyp35k",
+      "prefix": "K_G_IWYP35K",
+      "minimum_shared_markers": 5000
+    },
+    {
+      "panel_id": "DARTAG",
+      "artifact_dir": "genotype_panels/recovered/dartag",
+      "prefix": "K_G_DARTAG",
+      "minimum_shared_markers": 100
+    },
+    {
+      "panel_id": "HAPLOTYPE",
+      "artifact_dir": "genotype_panels/recovered/haplotype_blocks",
+      "prefix": "K_G_HAPLOTYPE",
+      "minimum_shared_markers": 100
+    }
+  ],
+  "direct_certified_panel_orders": [
+    {
+      "panel_id": "HMP",
+      "sample_order_path": "genotype_panels/hmp/hmp_K_sample_order.QCfiltered.tsv"
+    },
+    {
+      "panel_id": "GBS_SAWYT",
+      "sample_order_path": "genotype_panels/gbs_sawyt/gbs_sawyt_K_sample_order.QCfiltered.tsv"
+    }
+  ],
+  "automatic_assignment_rejections": [
+    "selection_history_not_unique",
+    "multiple_external_germplasm_identities",
+    "pedigree_or_cross_conflict",
+    "family_level_identity_only",
+    "marker_sample_not_uniquely_located",
+    "replicate_overlap_below_panel_minimum",
+    "replicate_concordance_below_threshold"
+  ],
+  "prohibited_inputs": [
+    "phenotype_values",
+    "validation_metrics",
+    "outer_test_metrics",
+    "final_holdout_outcomes"
+  ]
+}

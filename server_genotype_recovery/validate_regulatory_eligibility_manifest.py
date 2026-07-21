@@ -10,10 +10,12 @@ import pandas as pd
 
 from genotype_recovery import canonical_gid
 from server_genotype_recovery.build_regulatory_eligibility_manifest import (
+    apply_marker_identity_overlay,
     build_gid_manifest,
     detect_column,
     embedding_evidence,
     load_gid_set,
+    load_marker_identity_overlay,
     path_dictionary_ids,
     projection_work_queue,
     read_table,
@@ -302,6 +304,29 @@ def validate_artifacts(
         f"certified={int(matrix_certified.sum())}; available={int(matrix_available.sum())}",
     )
 
+    marker_overlay_path = Path(str(provenance.get("marker_identity_overlay", "")))
+    marker_overlay_present = bool(provenance.get("marker_identity_overlay_present", False))
+    marker_overlay_hash = str(provenance.get("marker_identity_overlay_sha256", ""))
+    marker_overlay_identity, marker_overlay_detail = evidence_file_identity(
+        marker_overlay_path if marker_overlay_present else "",
+        marker_overlay_hash,
+        required=marker_overlay_present,
+    )
+    add_check(
+        checks,
+        "marker_identity_overlay_input_identity",
+        marker_overlay_identity,
+        marker_overlay_detail,
+    )
+    marker_identity_overlay = (
+        load_marker_identity_overlay(marker_overlay_path)
+        if marker_overlay_present
+        else pd.DataFrame()
+    )
+    marker_identity_contract_present = (
+        "marker_identity_adjudication_status" in manifest.columns
+    )
+
     samples = panel_samples(panel_evidence)
     pedigree_ids = load_gid_set(
         Path(str(provenance["pedigree_order"])),
@@ -317,6 +342,10 @@ def validate_artifacts(
         graph_path_ids=graph_paths,
         embeddings=embeddings,
     )
+    if marker_identity_contract_present:
+        recomputed_manifest = apply_marker_identity_overlay(
+            recomputed_manifest, marker_identity_overlay
+        )
     matched, detail = frame_matches(
         manifest, recomputed_manifest, sort_by=["canonical_gid"]
     )
@@ -383,6 +412,25 @@ def validate_artifacts(
         "direct_sequence_eligibility_contract",
         bool(direct_contract),
         f"direct_eligible={int(direct.sum())}",
+    )
+    candidate_gate_columns = [
+        "candidate_eligible_for_K_G",
+        "candidate_eligible_for_K_z",
+        "candidate_eligible_for_genotype_specific_sequence",
+    ]
+    candidate_gates_closed = (
+        all(
+            column in manifest.columns and not bool_series(manifest[column]).any()
+            for column in candidate_gate_columns
+        )
+        if marker_identity_contract_present
+        else not marker_overlay_present
+    )
+    add_check(
+        checks,
+        "uncertified_marker_identity_candidates_are_gated",
+        candidate_gates_closed,
+        f"contract_present={marker_identity_contract_present}; columns={candidate_gate_columns}",
     )
     checks_frame = pd.DataFrame(checks)
     status = "PASS" if checks_frame["status"].eq("PASS").all() else "FAIL"

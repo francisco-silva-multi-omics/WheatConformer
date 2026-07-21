@@ -7,8 +7,10 @@ import numpy as np
 import pandas as pd
 
 from server_genotype_recovery.build_regulatory_eligibility_manifest import (
+    apply_marker_identity_overlay,
     build_gid_manifest,
     build_panel_evidence,
+    load_marker_identity_overlay,
     marker_evidence,
     projection_work_queue,
     regulatory_retention_policy,
@@ -127,6 +129,93 @@ def test_regulatory_manifest_separates_direct_and_imputed_evidence(tmp_path: Pat
     assert manifest.loc["GID3", "confidence_gate_status"] == "required_not_evaluated"
     assert not manifest.loc["GID3", "observed_sequence_equivalent"]
     assert manifest.loc["GID4", "regulatory_embedding_eligibility"] == "unavailable"
+
+
+def test_marker_identity_overlay_keeps_candidates_out_of_kernels(tmp_path: Path) -> None:
+    overlay_path = tmp_path / "regulatory_eligibility_overlay.tsv"
+    write_tsv(
+        pd.DataFrame(
+            [
+                {
+                    "canonical_gid": "GID1",
+                    "marker_identity_adjudication_status": (
+                        "accepted_identity_marker_qc_pending"
+                    ),
+                    "marker_identity_classes": "accepted_unique_identity",
+                    "candidate_marker_panels": "SEEDS",
+                    "accepted_marker_panels": "SEEDS",
+                    "candidate_unresolved": False,
+                    "accepted_for_new_kernel_input": True,
+                    "eligible_for_K_G": False,
+                    "eligible_for_K_z": False,
+                    "eligible_for_genotype_specific_sequence": False,
+                    "next_required_action": (
+                        "build_and_certify_panel_specific_genotype_artifact"
+                    ),
+                },
+                {
+                    "canonical_gid": "GID2",
+                    "marker_identity_adjudication_status": "candidate_unresolved",
+                    "marker_identity_classes": "requires_metadata_review",
+                    "candidate_marker_panels": "SEEDS",
+                    "accepted_marker_panels": "",
+                    "candidate_unresolved": True,
+                    "accepted_for_new_kernel_input": False,
+                    "eligible_for_K_G": False,
+                    "eligible_for_K_z": False,
+                    "eligible_for_genotype_specific_sequence": False,
+                    "next_required_action": "resolve_identity_or_marker_sample_conflict",
+                },
+            ]
+        ),
+        overlay_path,
+    )
+    overlay = load_marker_identity_overlay(overlay_path)
+    manifest = pd.DataFrame(
+        {
+            "canonical_gid": ["GID1", "GID2", "GID3"],
+            "regulatory_embedding_eligibility": [
+                "pedigree_imputation_candidate",
+                "pedigree_imputation_candidate",
+                "unavailable",
+            ],
+        }
+    )
+    updated = apply_marker_identity_overlay(manifest, overlay).set_index("canonical_gid")
+    assert bool(updated.loc["GID1", "accepted_for_new_kernel_input"])
+    assert not bool(updated.loc["GID1", "candidate_eligible_for_K_G"])
+    assert bool(updated.loc["GID2", "candidate_unresolved"])
+    assert updated.loc["GID3", "marker_identity_adjudication_status"] == "no_candidate"
+
+
+def test_marker_identity_overlay_rejects_premature_kernel_eligibility(
+    tmp_path: Path,
+) -> None:
+    overlay_path = tmp_path / "invalid_overlay.tsv"
+    write_tsv(
+        pd.DataFrame(
+            [
+                {
+                    "canonical_gid": "GID1",
+                    "marker_identity_adjudication_status": (
+                        "accepted_identity_marker_qc_pending"
+                    ),
+                    "marker_identity_classes": "accepted_unique_identity",
+                    "candidate_marker_panels": "SEEDS",
+                    "accepted_marker_panels": "SEEDS",
+                    "candidate_unresolved": False,
+                    "accepted_for_new_kernel_input": True,
+                    "eligible_for_K_G": True,
+                    "eligible_for_K_z": False,
+                    "eligible_for_genotype_specific_sequence": False,
+                    "next_required_action": "invalid",
+                }
+            ]
+        ),
+        overlay_path,
+    )
+    with np.testing.assert_raises(ValueError):
+        load_marker_identity_overlay(overlay_path)
 
 
 def test_graph_readiness_requires_alleles_and_coordinates(tmp_path: Path) -> None:

@@ -460,6 +460,114 @@ def embedding_evidence(root: Path) -> tuple[dict[str, set[str]], list[Path]]:
     return by_gid, paths
 
 
+def load_marker_identity_overlay(path: Path) -> pd.DataFrame:
+    required = {
+        "canonical_gid",
+        "marker_identity_adjudication_status",
+        "marker_identity_classes",
+        "candidate_marker_panels",
+        "accepted_marker_panels",
+        "candidate_unresolved",
+        "accepted_for_new_kernel_input",
+        "eligible_for_K_G",
+        "eligible_for_K_z",
+        "eligible_for_genotype_specific_sequence",
+        "next_required_action",
+    }
+    if not path.is_file() or path.stat().st_size == 0:
+        return pd.DataFrame(columns=sorted(required))
+    overlay = read_table(path)
+    missing = sorted(required - set(overlay.columns))
+    if missing:
+        raise ValueError(f"Marker identity overlay is missing columns {missing}: {path}")
+    overlay = overlay.copy()
+    overlay["canonical_gid"] = overlay["canonical_gid"].map(canonical_gid)
+    if overlay["canonical_gid"].eq("").any():
+        raise ValueError(f"Marker identity overlay contains noncanonical GIDs: {path}")
+    if overlay["canonical_gid"].duplicated().any():
+        raise ValueError(f"Marker identity overlay contains duplicate GIDs: {path}")
+    for column in (
+        "candidate_unresolved",
+        "accepted_for_new_kernel_input",
+        "eligible_for_K_G",
+        "eligible_for_K_z",
+        "eligible_for_genotype_specific_sequence",
+    ):
+        overlay[column] = overlay[column].map(true_value)
+    prohibited = overlay[
+        overlay["eligible_for_K_G"]
+        | overlay["eligible_for_K_z"]
+        | overlay["eligible_for_genotype_specific_sequence"]
+    ]
+    if not prohibited.empty:
+        raise ValueError(
+            "Uncertified marker identity candidates cannot be eligible for K_G, K_z, "
+            "or genotype-specific sequence"
+        )
+    accepted = overlay["accepted_for_new_kernel_input"]
+    unresolved = overlay["candidate_unresolved"]
+    if (~(accepted | unresolved)).any():
+        raise ValueError(
+            "Every marker identity overlay row must contain an accepted or unresolved candidate"
+        )
+    return overlay
+
+
+def apply_marker_identity_overlay(
+    manifest: pd.DataFrame, overlay: pd.DataFrame
+) -> pd.DataFrame:
+    output = manifest.copy()
+    if overlay.empty:
+        output["marker_identity_adjudication_status"] = "no_candidate"
+        output["marker_identity_classes"] = ""
+        output["candidate_marker_panels"] = ""
+        output["accepted_marker_panels"] = ""
+        output["candidate_unresolved"] = False
+        output["accepted_for_new_kernel_input"] = False
+        output["candidate_eligible_for_K_G"] = False
+        output["candidate_eligible_for_K_z"] = False
+        output["candidate_eligible_for_genotype_specific_sequence"] = False
+        output["marker_identity_next_required_action"] = "not_applicable"
+        return output
+    missing_gids = sorted(set(overlay["canonical_gid"]) - set(output["canonical_gid"]))
+    if missing_gids:
+        raise ValueError(
+            f"Marker identity overlay contains {len(missing_gids)} GIDs outside the "
+            "regulatory manifest universe; examples={missing_gids[:5]}"
+        )
+    renamed = overlay.rename(
+        columns={
+            "eligible_for_K_G": "candidate_eligible_for_K_G",
+            "eligible_for_K_z": "candidate_eligible_for_K_z",
+            "eligible_for_genotype_specific_sequence": (
+                "candidate_eligible_for_genotype_specific_sequence"
+            ),
+            "next_required_action": "marker_identity_next_required_action",
+        }
+    )
+    output = output.merge(renamed, on="canonical_gid", how="left", validate="one_to_one")
+    text_defaults = {
+        "marker_identity_adjudication_status": "no_candidate",
+        "marker_identity_classes": "",
+        "candidate_marker_panels": "",
+        "accepted_marker_panels": "",
+        "marker_identity_next_required_action": "not_applicable",
+    }
+    for column, default in text_defaults.items():
+        output[column] = output[column].fillna(default)
+    for column in (
+        "candidate_unresolved",
+        "accepted_for_new_kernel_input",
+        "candidate_eligible_for_K_G",
+        "candidate_eligible_for_K_z",
+        "candidate_eligible_for_genotype_specific_sequence",
+    ):
+        output[column] = output[column].map(
+            lambda value: bool(value) if pd.notna(value) else False
+        )
+    return output
+
+
 def build_gid_manifest(
     *,
     catalog: pd.DataFrame,
@@ -683,6 +791,15 @@ def main() -> None:
         default=Path("pangenome_resources/graph/genotype_path_dictionary.tsv"),
     )
     parser.add_argument("--coordinate-table", type=Path, action="append", default=[])
+    parser.add_argument(
+        "--marker-identity-overlay",
+        type=Path,
+        default=Path(
+            "genotype_panels/marker_identity_adjudication_v1/"
+            "regulatory_eligibility_overlay.tsv"
+        ),
+    )
+    parser.add_argument("--require-marker-identity-overlay", action="store_true")
     parser.add_argument("--minimum-graph-projection-fraction", type=float, default=0.90)
     parser.add_argument(
         "--out-dir", type=Path, default=Path("model_kernels/regulatory_eligibility_v1")
@@ -698,6 +815,7 @@ def main() -> None:
     pedigree_path = resolve(root, args.pedigree_order)
     marker_projection_path = resolve(root, args.marker_projection)
     path_dictionary_path = resolve(root, args.path_dictionary)
+    marker_identity_overlay_path = resolve(root, args.marker_identity_overlay)
     out_dir = resolve(root, args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     required = [recovered_manifest, kernel_qc_path, regulatory_policy_path, catalog_path]
@@ -737,6 +855,12 @@ def main() -> None:
         graph_path_ids=graph_path_ids,
         embeddings=embeddings,
     )
+    if args.require_marker_identity_overlay and not marker_identity_overlay_path.is_file():
+        raise SystemExit(
+            f"Required marker identity overlay is missing: {marker_identity_overlay_path}"
+        )
+    marker_identity_overlay = load_marker_identity_overlay(marker_identity_overlay_path)
+    manifest = apply_marker_identity_overlay(manifest, marker_identity_overlay)
     status_summary, panel_summary = summary_tables(manifest)
     manifest.to_csv(
         out_dir / "regulatory_genotype_eligibility_manifest.tsv.gz",
@@ -784,6 +908,13 @@ def main() -> None:
         "path_dictionary_sha256": (
             sha256_file(path_dictionary_path) if path_dictionary_path.is_file() else ""
         ),
+        "marker_identity_overlay": str(marker_identity_overlay_path),
+        "marker_identity_overlay_present": marker_identity_overlay_path.is_file(),
+        "marker_identity_overlay_sha256": (
+            sha256_file(marker_identity_overlay_path)
+            if marker_identity_overlay_path.is_file()
+            else ""
+        ),
         "builder_path": str(Path(__file__).resolve()),
         "builder_sha256": sha256_file(Path(__file__).resolve()),
         "coordinate_sources": coordinate_sources,
@@ -802,6 +933,12 @@ def main() -> None:
             manifest["regulatory_embedding_eligibility"]
             .eq("pedigree_imputation_candidate")
             .sum()
+        ),
+        "accepted_marker_identity_candidates": int(
+            manifest["accepted_for_new_kernel_input"].sum()
+        ),
+        "unresolved_marker_identity_candidates": int(
+            manifest["candidate_unresolved"].sum()
         ),
         "interpretation_contract": {
             "quantitative_K_G_rejection_discards_panel": (
