@@ -11,6 +11,8 @@ from server_genotype_recovery.fetch_cimmyt_dataverse_recovery import (
     dataset_file_rows,
     exact_term_pattern,
     pagination_stop_decision,
+    merge_content_hits,
+    merge_download_rows,
     repository_search_text,
     scan_file_for_terms,
     scan_file_for_indexed_terms,
@@ -239,3 +241,38 @@ def test_target_only_download_requires_explicit_ids() -> None:
         assert "requires at least one" in str(exc)
     else:
         raise AssertionError("target-only selection accepted an empty target set")
+
+
+def test_download_manifest_merge_preserves_previous_success() -> None:
+    existing = [
+        {
+            "dataset_persistent_id": "doi:test",
+            "datafile_id": "1",
+            "download_status": "DOWNLOADED",
+            "local_path": "/tmp/one.tsv",
+        }
+    ]
+    current = [
+        {
+            "dataset_persistent_id": "doi:test",
+            "datafile_id": "1",
+            "download_status": "SKIPPED",
+            "local_path": "",
+        }
+    ]
+    merged = merge_download_rows(existing, current)
+    assert merged[0]["download_status"] == "DOWNLOADED"
+    assert merged[0]["local_path"] == "/tmp/one.tsv"
+
+
+def test_content_hit_merge_deduplicates_prior_scan_rows() -> None:
+    row = {
+        "query_id": "GID1",
+        "query_kind": "sample_id",
+        "query_text": "GID1",
+        "path": "/tmp/map.tsv",
+        "archive_member": "",
+        "line_number": 2,
+        "match_excerpt": "GID1",
+    }
+    assert len(merge_content_hits([row], [dict(row)])) == 1

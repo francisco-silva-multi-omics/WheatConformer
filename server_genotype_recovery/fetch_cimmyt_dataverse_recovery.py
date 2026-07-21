@@ -216,6 +216,50 @@ def select_download_candidates(
     ]
 
 
+def merge_download_rows(
+    existing_rows: list[dict[str, object]],
+    current_rows: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    key_columns = ("dataset_persistent_id", "datafile_id")
+    merged: dict[tuple[str, str], dict[str, object]] = {}
+    for row in existing_rows:
+        key = tuple(clean(row.get(column)) for column in key_columns)
+        if all(key):
+            merged[key] = row
+    for row in current_rows:
+        key = tuple(clean(row.get(column)) for column in key_columns)
+        previous = merged.get(key)
+        previous_status = clean(previous.get("download_status")) if previous else ""
+        current_status = clean(row.get("download_status"))
+        if previous_status in {"DOWNLOADED", "REUSED"} and current_status not in {
+            "DOWNLOADED",
+            "REUSED",
+        }:
+            continue
+        merged[key] = row
+    return [merged[key] for key in sorted(merged)]
+
+
+def merge_content_hits(
+    existing_rows: list[dict[str, object]],
+    current_rows: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    columns = (
+        "query_id",
+        "query_kind",
+        "query_text",
+        "path",
+        "archive_member",
+        "line_number",
+        "match_excerpt",
+    )
+    merged: dict[tuple[str, ...], dict[str, object]] = {}
+    for row in [*existing_rows, *current_rows]:
+        key = tuple(clean(row.get(column)) for column in columns)
+        merged[key] = row
+    return [merged[key] for key in sorted(merged)]
+
+
 def response_data(payload: dict | None) -> object:
     if not isinstance(payload, dict) or payload.get("status") not in {None, "OK"}:
         return None
@@ -879,6 +923,18 @@ def main() -> None:
     downloaded_files = 0
     download_dir = out_dir / "downloads"
     download_dir.mkdir(parents=True, exist_ok=True)
+    existing_download_path = out_dir / "dataverse_downloads.tsv"
+    existing_content_path = out_dir / "dataverse_content_matches.tsv"
+    existing_downloads = (
+        read_table(existing_download_path).to_dict("records")
+        if existing_download_path.is_file()
+        else []
+    )
+    existing_content_hits = (
+        read_table(existing_content_path).to_dict("records")
+        if existing_content_path.is_file()
+        else []
+    )
     target_datafile_ids = {clean(value) for value in args.target_datafile_id if clean(value)}
     if args.download_candidates:
         candidates = select_download_candidates(
@@ -931,6 +987,8 @@ def main() -> None:
                 }
             )
 
+    downloads = merge_download_rows(existing_downloads, downloads)
+    content_hits = merge_content_hits(existing_content_hits, content_hits)
     write_tsv(downloads, out_dir / "dataverse_downloads.tsv", FILE_COLUMNS + [
         "download_status", "local_path", "detail",
     ])
@@ -974,6 +1032,21 @@ def main() -> None:
         {"metric": "target_datafile_ids_downloaded", "value": len(target_datafile_ids.intersection({clean(row["datafile_id"]) for row in downloads if row.get("download_status") in {"DOWNLOADED", "REUSED"}}))},
         {"metric": "downloaded_files", "value": downloaded_files},
         {"metric": "downloaded_bytes", "value": total_downloaded},
+        {
+            "metric": "aggregate_downloaded_files",
+            "value": sum(
+                clean(row.get("download_status")) in {"DOWNLOADED", "REUSED"}
+                for row in downloads
+            ),
+        },
+        {
+            "metric": "aggregate_downloaded_bytes",
+            "value": sum(
+                int(float(row.get("filesize") or 0))
+                for row in downloads
+                if clean(row.get("download_status")) in {"DOWNLOADED", "REUSED"}
+            ),
+        },
         {"metric": "content_match_rows", "value": len([row for row in content_hits if row["query_kind"] != "scan_error"])},
         {"metric": "matched_query_ids", "value": len({row["query_id"] for row in content_hits if row["query_id"]})},
         {"metric": "failure_rows", "value": len(failures)},
