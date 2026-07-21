@@ -408,19 +408,28 @@ def main() -> None:
                 ),
             }
         )
+    combination_has_redundancy = not high_redundancy.empty
     ablation_rows.extend(
         [
             {
                 "architecture": "existing_plus_all_supported_linear_candidates",
-                "include_disabled_kernels": ",".join(linear_candidates),
+                "include_disabled_kernels": (
+                    "" if combination_has_redundancy else ",".join(linear_candidates)
+                ),
                 "exclude_kernels": "",
                 "screen_phase": "phase_2_combination_after_individual",
                 "status": (
-                    "deferred_until_individual_candidates_selected"
+                    "deferred_requires_redundancy_resolution"
+                    if combination_has_redundancy
+                    else "deferred_until_individual_candidates_selected"
                     if linear_candidates
                     else "blocked_no_supported_candidates"
                 ),
-                "decision_note": "combine_only_inner_validation_winners;do_not_fit_redundant_candidates_together",
+                "decision_note": (
+                    "blocked_manifest_generation_until_redundant_candidates_are_resolved"
+                    if combination_has_redundancy
+                    else "combine_only_inner_validation_winners"
+                ),
             },
             {
                 "architecture": "single_step_H",
