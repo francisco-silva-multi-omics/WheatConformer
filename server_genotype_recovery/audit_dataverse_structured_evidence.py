@@ -13,6 +13,7 @@ from typing import Iterator
 
 import pandas as pd
 
+from server_genotype_recovery.archive_utils import iter_7z_members
 from server_genotype_recovery.dataverse_crop_scope import (
     AMBIGUOUS_REVIEW,
     NON_WHEAT_EXCLUDED,
@@ -242,6 +243,27 @@ def structured_parts(path: Path) -> Iterator[tuple[str, pd.DataFrame]]:
                     io.BytesIO(payload), member_lower
                 )
         return
+    if lower.endswith(".7z"):
+        for member_name, member_path in iter_7z_members(path):
+            member_lower = member_name.lower()
+            if not member_lower.endswith(
+                (
+                    ".txt",
+                    ".tsv",
+                    ".tab",
+                    ".csv",
+                    ".txt.gz",
+                    ".tsv.gz",
+                    ".csv.gz",
+                    ".xls",
+                    ".xlsx",
+                    ".xlsm",
+                )
+            ):
+                continue
+            for source_part, frame in structured_parts(member_path):
+                yield f"archive:{member_name}:{source_part}", frame
+        return
     if lower.endswith((".txt", ".tsv", ".tab", ".csv", ".txt.gz", ".tsv.gz", ".csv.gz")):
         yield "file", _read_delimited(path, lower)
         return
@@ -333,7 +355,9 @@ def scan_frame(
 
 def requires_full_structured_scan(filename: object) -> bool:
     lower = clean(filename).lower()
-    return lower.endswith((".xls", ".xls.gz", ".xlsx.gz", ".xlsm.gz"))
+    return lower.endswith(
+        (".xls", ".xls.gz", ".xlsx.gz", ".xlsm.gz", ".7z")
+    )
 
 
 def content_term_index(

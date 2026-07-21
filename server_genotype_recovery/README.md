@@ -369,6 +369,17 @@ bash "$HOME/tools/WheatConformer/scripts/run_cimmyt_dataverse_tier2_download.sh"
   /DATA2/estancias/tesis_javier/model_DATA/genotipoXambiente
 ```
 
+The selected 49th IBWSN payload is a 7z archive. Install the bounded archive
+reader in the server environment before downloading or auditing that batch:
+
+```bash
+"$HOME/tools/tf_wheat_cpu/bin/python" -m pip install py7zr
+```
+
+7z members are extracted only into a temporary directory, member paths are
+validated before extraction, and only supported structured marker/mapping files
+are parsed.
+
 The authorized plan additionally requires both an account that can access the
 restricted files and the explicit environment switch
 `CIMMYT_DATAVERSE_TIER2_CONFIRM_RESTRICTED=1`. Both runners revalidate target

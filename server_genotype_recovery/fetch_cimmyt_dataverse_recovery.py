@@ -17,6 +17,7 @@ from typing import Callable, Iterator
 
 import pandas as pd
 
+from server_genotype_recovery.archive_utils import iter_7z_members
 from server_genotype_recovery.fetch_brapi_pedigree_markers import (
     build_query_terms,
     clean,
@@ -536,6 +537,27 @@ def dataset_file_rows(payload: dict | None, persistent_id: str) -> tuple[dict[st
 
 def text_streams(path: Path) -> Iterator[tuple[str, Iterator[str]]]:
     lower = path.name.lower()
+    if lower.endswith(".7z"):
+        for member_name, member_path in iter_7z_members(path):
+            member_lower = member_name.lower()
+            if not member_lower.endswith(
+                (
+                    ".txt",
+                    ".tsv",
+                    ".tab",
+                    ".csv",
+                    ".txt.gz",
+                    ".tsv.gz",
+                    ".csv.gz",
+                    ".xls",
+                    ".xlsx",
+                    ".xlsm",
+                )
+            ):
+                continue
+            for nested_name, lines in text_streams(member_path):
+                yield f"{member_name}:{nested_name}", lines
+        return
     if lower.endswith((".zip", ".xlsx", ".xlsm")):
         archive = zipfile.ZipFile(path)
         try:
@@ -602,7 +624,7 @@ def scan_file_for_terms(
                             "match_excerpt": line.strip()[:1000],
                         }
                     )
-    except (UnicodeError, OSError, zipfile.BadZipFile) as exc:
+    except (UnicodeError, OSError, RuntimeError, ValueError, zipfile.BadZipFile) as exc:
         hits.append(
             {
                 "query_id": "",
@@ -667,7 +689,7 @@ def scan_file_for_indexed_terms(
                                 "match_excerpt": line.strip()[:1000],
                             }
                         )
-    except (UnicodeError, OSError, zipfile.BadZipFile) as exc:
+    except (UnicodeError, OSError, RuntimeError, ValueError, zipfile.BadZipFile) as exc:
         hits.append(
             {
                 "query_id": "",
