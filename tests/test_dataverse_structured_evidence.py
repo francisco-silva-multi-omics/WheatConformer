@@ -79,6 +79,43 @@ def test_download_crop_scope_uses_dataset_title_and_non_wheat_precedence() -> No
     assert scoped.loc["4", "crop_scope"] == NON_WHEAT_EXCLUDED
 
 
+def test_crop_scope_annotation_preserves_existing_dataset_name() -> None:
+    downloads = pd.DataFrame(
+        [
+            {
+                "dataset_persistent_id": "doi:existing",
+                "datafile_id": "e1",
+                "dataset_name": "Existing wheat dataset name",
+                "filename": "markers.tsv",
+                "description": "",
+            },
+            {
+                "dataset_persistent_id": "doi:search",
+                "datafile_id": "s1",
+                "dataset_name": "",
+                "filename": "markers.tsv",
+                "description": "",
+            },
+        ]
+    )
+    search = pd.DataFrame(
+        [
+            {
+                "dataset_persistent_id": "doi:search",
+                "global_id": "",
+                "dataset_name": "Search wheat dataset name",
+            }
+        ]
+    )
+
+    scoped = annotate_download_crop_scope(downloads, search).set_index("datafile_id")
+
+    assert scoped.loc["e1", "dataset_name"] == "Existing wheat dataset name"
+    assert scoped.loc["s1", "dataset_name"] == "Search wheat dataset name"
+    assert scoped.loc["e1", "crop_scope"] == WHEAT_CONFIRMED
+    assert scoped.loc["s1", "crop_scope"] == WHEAT_CONFIRMED
+
+
 def test_evidence_class_does_not_promote_family_cross_to_individual() -> None:
     assert evidence_class("selection_history", 1) == (
         "selection_history_exact_unique",

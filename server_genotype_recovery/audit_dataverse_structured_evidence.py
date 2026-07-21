@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from datetime import datetime, timezone
 import gzip
 import io
 import json
@@ -69,6 +70,11 @@ def annotate_download_crop_scope(
     search_results: pd.DataFrame,
 ) -> pd.DataFrame:
     local = downloads.copy()
+    if "dataset_name" in local.columns:
+        local["download_dataset_name"] = local["dataset_name"].fillna("")
+        local = local.drop(columns="dataset_name")
+    else:
+        local["download_dataset_name"] = ""
     if search_results.empty:
         dataset_names = pd.DataFrame(
             columns=["dataset_persistent_id", "dataset_name"]
@@ -87,7 +93,12 @@ def annotate_download_crop_scope(
             .reset_index()
         )
     local = local.merge(dataset_names, on="dataset_persistent_id", how="left")
-    local["dataset_name"] = local["dataset_name"].fillna("")
+    search_name = local["dataset_name"].fillna("")
+    existing_name = local["download_dataset_name"].fillna("")
+    local["dataset_name"] = search_name.where(
+        search_name.map(clean).ne(""), existing_name
+    )
+    local = local.drop(columns="download_dataset_name")
     crop = local.apply(
         lambda row: classify_crop_scope(
             row.get("dataset_name"), row.get("filename"), row.get("description")
@@ -462,6 +473,15 @@ def main() -> None:
     out_dir = args.out_dir or recovery_dir / "structured_evidence"
     out_dir = out_dir if out_dir.is_absolute() else root / out_dir
     out_dir.mkdir(parents=True, exist_ok=True)
+    run_status_path = out_dir / "dataverse_structured_evidence_run_status.json"
+    write_json_atomic(
+        {
+            "status": "INCOMPLETE",
+            "detail": "Audit started; prior result files may remain until completion.",
+            "started_at_utc": datetime.now(timezone.utc).isoformat(),
+        },
+        run_status_path,
+    )
     downloads_path = recovery_dir / "dataverse_downloads.tsv"
     content_matches_path = recovery_dir / "dataverse_content_matches.tsv"
     search_results_path = recovery_dir / "dataverse_search_results.tsv"
@@ -669,7 +689,13 @@ def main() -> None:
             "enabled": use_content_prefilter,
             "path": str(content_matches_path) if use_content_prefilter else "",
             "sha256": sha256_file(content_matches_path) if use_content_prefilter else "",
-            "full_scan_formats": [".xls", ".xls.gz", ".xlsx.gz", ".xlsm.gz"],
+            "full_scan_formats": [
+                ".xls",
+                ".xls.gz",
+                ".xlsx.gz",
+                ".xlsm.gz",
+                ".7z",
+            ],
         },
         "crop_selection": {
             "policy": "only WHEAT_CONFIRMED downloaded sources are parsed",
@@ -689,6 +715,18 @@ def main() -> None:
         "final_holdout_outcomes_read": False,
     }
     write_json_atomic(provenance, out_dir / "dataverse_structured_evidence_provenance.json")
+    write_json_atomic(
+        {
+            "status": "COMPLETE",
+            "completed_at_utc": datetime.now(timezone.utc).isoformat(),
+            "files_considered": len(downloads),
+            "files_parsed": int((parse_log["status"] == "PASS").sum())
+            if not parse_log.empty
+            else 0,
+            "structured_match_rows": len(evidence),
+        },
+        run_status_path,
+    )
     print(qc.to_string(index=False))
 
 
