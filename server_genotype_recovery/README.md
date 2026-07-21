@@ -481,6 +481,34 @@ panel universe. The wrapper validates the rebuilt regulatory artifact and
 writes `audit/regulatory_eligibility_reconciled.sha256` before reporting
 success.
 
+After reconciliation, materialize only accepted Seeds DArTseq identities in a
+new, disabled candidate artifact:
+
+```bash
+PYTHON="$HOME/tools/tf_wheat_cpu/bin/python" \
+WHEATCONFORMER_CODE_ROOT="$HOME/tools/WheatConformer" \
+nohup bash "$HOME/tools/WheatConformer/scripts/build_seeds_identity_recovered_kernel.sh" \
+  /DATA2/estancias/tesis_javier/model_DATA/genotipoXambiente \
+  > /DATA2/estancias/tesis_javier/model_DATA/genotipoXambiente/logs/seeds_identity_v2.nohup.log \
+  2>&1 &
+```
+
+The builder consumes only accepted mappings from the reconciled artifact. It
+verifies the raw matrix hash while streaming selected columns, rechecks the
+accepted replicate-pair evidence, materializes concordant technical replicates
+as consensus calls, and sets observed disagreements to missing. Normal sample
+and marker QC is then applied, so an accepted identity may still be excluded
+from the candidate kernel for poor genotype quality.
+
+The candidate is written under
+`genotype_panels/recovered/seeds_dartseq_identity_v2`; the current Seeds kernel
+is never overwritten. The build fails if it loses a current certified Seeds
+GID or if shared off-diagonal relationships correlate less than `0.90` with
+the current kernel. The registry fragment remains disabled by default and must
+not be selected from outer-test results. Inspect the identity recovery summary,
+baseline-kernel comparison, kernel certification and artifact checksum before
+adding the fragment to a development-only inner-validation screen.
+
 If unique selection-history evidence does not connect to marker calls, audit it
 as pedigree enrichment rather than discarding it:
 

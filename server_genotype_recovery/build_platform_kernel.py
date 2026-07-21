@@ -3,6 +3,8 @@ from __future__ import annotations
 import argparse
 import csv
 import gzip
+import hashlib
+import json
 from collections import defaultdict
 from contextlib import contextmanager
 from pathlib import Path
@@ -259,12 +261,19 @@ def parse_sample_by_marker(
 def parse_marker_by_sample(
     path: Path,
     lookup: dict[str, set[str]],
+    *,
+    expected_sha256: str | None = None,
 ) -> tuple[np.ndarray, list[str], list[str], list[str], list[str]]:
     """Stream a marker-by-sample text matrix and retain only resolved trial samples."""
+    digest = hashlib.sha256() if expected_sha256 else None
     with path.open("rb") as handle:
         header_line = handle.readline()
+        if digest is not None:
+            digest.update(header_line)
         while header_line and not header_line.startswith(b"MarkerID\t"):
             header_line = handle.readline()
+            if digest is not None:
+                digest.update(header_line)
         if not header_line:
             raise SystemExit(f"Could not find MarkerID header in {path}")
 
@@ -287,6 +296,8 @@ def parse_marker_by_sample(
         marker_vectors: list[np.ndarray] = []
 
         for line_number, line in enumerate(handle, start=2):
+            if digest is not None:
+                digest.update(line)
             stripped = line.rstrip(b"\r\n")
             if not stripped:
                 continue
@@ -339,6 +350,13 @@ def parse_marker_by_sample(
 
     if not marker_vectors:
         raise SystemExit(f"No biallelic markers were parsed from {path}")
+    if digest is not None:
+        observed_sha256 = digest.hexdigest()
+        if observed_sha256 != expected_sha256:
+            raise SystemExit(
+                "Marker matrix changed after identity adjudication: "
+                f"expected={expected_sha256}; observed={observed_sha256}; path={path}"
+            )
     return np.vstack(marker_vectors).T, gids, source_samples, marker_ids, marker_allele_values
 
 
@@ -477,6 +495,266 @@ def parse_dartag_numeric(
         source_samples,
         marker_union,
         ["numeric_0_1_2"] * len(marker_union),
+    )
+
+
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(8 * 1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def boolean_values(values: pd.Series) -> pd.Series:
+    if pd.api.types.is_bool_dtype(values):
+        return values.fillna(False).astype(bool)
+    normalized = values.fillna("").astype(str).str.strip().str.lower()
+    invalid = sorted(set(normalized) - {"", "0", "1", "false", "true", "no", "yes"})
+    if invalid:
+        raise ValueError(f"Cannot interpret boolean values: {invalid[:10]}")
+    return normalized.isin({"1", "true", "yes"})
+
+
+def load_accepted_identity_mappings(
+    *,
+    identity_dir: Path,
+    panel_ids: set[str],
+    canonical_ids: set[str],
+    matrix_path: Path,
+) -> tuple[pd.DataFrame, dict[str, set[str]], dict[str, set[str]], str, dict[str, str]]:
+    candidates_path = identity_dir / "marker_identity_candidate_paths.tsv.gz"
+    pairs_path = identity_dir / "marker_identity_pairwise_concordance.tsv.gz"
+    validation_path = identity_dir / "marker_identity_validation.tsv"
+    provenance_path = identity_dir / "marker_identity_adjudication_provenance.json"
+    required_paths = [candidates_path, pairs_path, validation_path, provenance_path]
+    missing = [str(path) for path in required_paths if not path.is_file() or path.stat().st_size == 0]
+    if missing:
+        raise SystemExit(f"Accepted identity evidence is incomplete: {missing}")
+
+    validation = pd.read_csv(validation_path, sep="\t", dtype=str)
+    if not {"check", "status"}.issubset(validation.columns):
+        raise SystemExit(f"Identity validation has an invalid schema: {validation_path}")
+    failed = validation[~validation["status"].eq("PASS")]
+    required_checks = {
+        "classification_evidence_preserved",
+        "pairwise_concordance_evidence_preserved",
+        "regulatory_overlay_is_gated",
+    }
+    observed_checks = set(validation["check"])
+    if not failed.empty or not required_checks.issubset(observed_checks):
+        raise SystemExit(
+            "Accepted identity evidence is not a reconciled PASS artifact: "
+            f"failed={failed.to_dict('records')}; missing_checks={sorted(required_checks - observed_checks)}"
+        )
+    provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
+    if (
+        provenance.get("status") != "PASS"
+        or provenance.get("classification_evidence_reused") is not True
+        or provenance.get("classification_or_concordance_modified") is not False
+        or provenance.get("marker_calls_read") is not False
+        or provenance.get("phenotype_values_read") is not False
+        or provenance.get("outer_test_metrics_read") is not False
+        or provenance.get("final_holdout_outcomes_read") is not False
+    ):
+        raise SystemExit(f"Identity reconciliation provenance contract failed: {provenance_path}")
+
+    candidates = pd.read_csv(candidates_path, sep="\t", dtype=str)
+    required_columns = {
+        "trial_gid",
+        "panel_id",
+        "sample_id",
+        "normalized_sample_id",
+        "marker_matrix_path",
+        "marker_matrix_sha256",
+        "marker_axis_match_count",
+        "classification",
+        "direct_marker_assignment_ready",
+        "existing_certified_in_panel",
+        "existing_certified_in_any_panel",
+    }
+    missing_columns = sorted(required_columns - set(candidates.columns))
+    if missing_columns:
+        raise SystemExit(f"Identity candidates are missing columns: {missing_columns}")
+    candidates["direct_marker_assignment_ready"] = boolean_values(
+        candidates["direct_marker_assignment_ready"]
+    )
+    candidates["existing_certified_in_panel"] = boolean_values(
+        candidates["existing_certified_in_panel"]
+    )
+    candidates["existing_certified_in_any_panel"] = boolean_values(
+        candidates["existing_certified_in_any_panel"]
+    )
+    accepted = candidates[
+        candidates["panel_id"].isin(panel_ids)
+        & candidates["direct_marker_assignment_ready"]
+    ].copy()
+    if accepted.empty:
+        raise SystemExit(f"No accepted marker identities found for panels {sorted(panel_ids)}")
+    accepted["trial_gid"] = accepted["trial_gid"].map(canonical_gid)
+    if accepted["trial_gid"].eq("").any():
+        raise SystemExit("Accepted identity artifact contains noncanonical trial GIDs")
+    outside_catalog = sorted(set(accepted["trial_gid"]) - canonical_ids)
+    if outside_catalog:
+        raise SystemExit(
+            f"Accepted identity artifact contains {len(outside_catalog)} GIDs outside the canonical catalog"
+        )
+    accepted["normalized_sample_id"] = accepted["normalized_sample_id"].map(
+        normalize_identifier
+    )
+    if accepted["normalized_sample_id"].eq("").any():
+        raise SystemExit("Accepted identity artifact contains empty marker sample IDs")
+    axis_matches = pd.to_numeric(accepted["marker_axis_match_count"], errors="coerce")
+    if not axis_matches.eq(1).all():
+        raise SystemExit("Accepted identities must map to exactly one marker-matrix axis")
+
+    expected_paths = {str(Path(value).resolve()) for value in accepted["marker_matrix_path"]}
+    if expected_paths != {str(matrix_path.resolve())}:
+        raise SystemExit(
+            "Accepted identities were adjudicated against a different marker matrix: "
+            f"expected={sorted(expected_paths)}; current={matrix_path.resolve()}"
+        )
+    matrix_hashes = set(accepted["marker_matrix_sha256"].fillna("").str.strip()) - {""}
+    if len(matrix_hashes) != 1:
+        raise SystemExit(f"Accepted identities do not share one marker matrix hash: {matrix_hashes}")
+    expected_matrix_sha256 = next(iter(matrix_hashes))
+
+    lookup: dict[str, set[str]] = defaultdict(set)
+    for row in accepted.itertuples(index=False):
+        lookup[str(row.normalized_sample_id).upper()].add(str(row.trial_gid))
+    ambiguous = {sample: gids for sample, gids in lookup.items() if len(gids) != 1}
+    if ambiguous:
+        raise SystemExit(f"Accepted marker samples map to multiple trial GIDs: {ambiguous}")
+
+    replicate_groups: dict[str, set[str]] = {}
+    replicate_rows = accepted[
+        accepted["classification"].eq("accepted_concordant_replicates")
+    ]
+    for gid, group in replicate_rows.groupby("trial_gid", sort=True):
+        samples = set(group["normalized_sample_id"].str.upper()) - {""}
+        if len(samples) < 2:
+            raise SystemExit(f"Accepted replicate identity has fewer than two samples: {gid}")
+        replicate_groups[gid] = samples
+
+    pairs = pd.read_csv(pairs_path, sep="\t", dtype=str)
+    pair_required = {
+        "trial_gid",
+        "panel_id",
+        "sample_id_left",
+        "sample_id_right",
+        "overlap_pass",
+        "concordance_pass",
+        "pair_status",
+    }
+    if not pair_required.issubset(pairs.columns):
+        raise SystemExit(f"Pairwise evidence is missing columns: {sorted(pair_required - set(pairs.columns))}")
+    pairs["overlap_pass"] = boolean_values(pairs["overlap_pass"])
+    pairs["concordance_pass"] = boolean_values(pairs["concordance_pass"])
+    for gid, samples in replicate_groups.items():
+        local = pairs[pairs["trial_gid"].map(canonical_gid).eq(gid) & pairs["panel_id"].isin(panel_ids)]
+        expected_pairs = len(samples) * (len(samples) - 1) // 2
+        if (
+            len(local) != expected_pairs
+            or not local["overlap_pass"].all()
+            or not local["concordance_pass"].all()
+            or not local["pair_status"].eq("PASS").all()
+        ):
+            raise SystemExit(f"Accepted replicate evidence is incomplete or nonpassing: {gid}")
+
+    input_hashes = {
+        "candidates": sha256_file(candidates_path),
+        "pairs": sha256_file(pairs_path),
+        "validation": sha256_file(validation_path),
+        "provenance": sha256_file(provenance_path),
+    }
+    return accepted, dict(lookup), replicate_groups, expected_matrix_sha256, input_hashes
+
+
+def merge_accepted_identity_lookup(
+    lookup: dict[str, set[str]], accepted_lookup: dict[str, set[str]]
+) -> None:
+    for sample, gids in accepted_lookup.items():
+        existing = lookup.get(sample, set())
+        combined = existing | gids
+        if len(combined) != 1:
+            raise SystemExit(
+                f"Accepted marker identity conflicts with an existing sample mapping: "
+                f"sample={sample}; existing={sorted(existing)}; accepted={sorted(gids)}"
+            )
+        lookup[sample] = combined
+
+
+def collapse_accepted_replicates(
+    matrix: np.ndarray,
+    gids: list[str],
+    source_samples: list[str],
+    replicate_groups: dict[str, set[str]],
+) -> tuple[np.ndarray, list[str], list[str], pd.DataFrame]:
+    if not replicate_groups:
+        return matrix, gids, source_samples, pd.DataFrame(
+            columns=[
+                "sample_id",
+                "source_samples",
+                "source_sample_count",
+                "unanimous_multisample_markers",
+                "single_observed_sample_markers",
+                "discordant_observed_markers_set_missing",
+                "all_missing_markers",
+                "collapse_status",
+            ]
+        )
+    normalized_sources = [normalize_identifier(value).upper() for value in source_samples]
+    consumed: set[int] = set()
+    consensus_rows: list[np.ndarray] = []
+    consensus_gids: list[str] = []
+    consensus_sources: list[str] = []
+    audit_rows: list[dict[str, object]] = []
+    for gid, expected_samples in sorted(replicate_groups.items()):
+        indices = [
+            index
+            for index, (local_gid, sample) in enumerate(zip(gids, normalized_sources))
+            if local_gid == gid and sample in expected_samples
+        ]
+        observed_samples = {normalized_sources[index] for index in indices}
+        if observed_samples != expected_samples or len(indices) != len(expected_samples):
+            raise SystemExit(
+                f"Accepted replicate samples were not found exactly once in the matrix: "
+                f"gid={gid}; expected={sorted(expected_samples)}; observed={sorted(observed_samples)}"
+            )
+        local = matrix[indices]
+        observed_count = (local >= 0).sum(axis=0)
+        consensus = np.full(matrix.shape[1], -1, dtype=np.int8)
+        for dosage in (0, 1, 2):
+            unanimous = (local == dosage).sum(axis=0) == observed_count
+            consensus[unanimous & (observed_count > 0)] = dosage
+        discordant = (observed_count >= 2) & (consensus < 0)
+        consumed.update(indices)
+        consensus_rows.append(consensus)
+        consensus_gids.append(gid)
+        consensus_source = "CONSENSUS:" + "|".join(sorted(expected_samples))
+        consensus_sources.append(consensus_source)
+        audit_rows.append(
+            {
+                "sample_id": gid,
+                "source_samples": ";".join(sorted(expected_samples)),
+                "source_sample_count": len(expected_samples),
+                "unanimous_multisample_markers": int(
+                    ((observed_count >= 2) & (consensus >= 0)).sum()
+                ),
+                "single_observed_sample_markers": int((observed_count == 1).sum()),
+                "discordant_observed_markers_set_missing": int(discordant.sum()),
+                "all_missing_markers": int((observed_count == 0).sum()),
+                "collapse_status": "accepted_concordant_replicates_collapsed",
+            }
+        )
+    retained = [index for index in range(len(gids)) if index not in consumed]
+    matrices = [matrix[retained]] if retained else []
+    matrices.append(np.vstack(consensus_rows))
+    return (
+        np.vstack(matrices),
+        [gids[index] for index in retained] + consensus_gids,
+        [source_samples[index] for index in retained] + consensus_sources,
+        pd.DataFrame(audit_rows),
     )
 
 
@@ -649,6 +927,173 @@ def vanraden_chunked(matrix: np.ndarray, frequency: np.ndarray, chunk_size: int)
     return (kernel / mean_diagonal).astype(np.float32), denominator
 
 
+def baseline_kernel_comparison(
+    *,
+    baseline_kernel_path: Path,
+    baseline_order_path: Path,
+    candidate_kernel: np.ndarray,
+    candidate_gids: list[str],
+    minimum_correlation: float,
+) -> pd.DataFrame:
+    if not baseline_kernel_path.is_file() or not baseline_order_path.is_file():
+        raise SystemExit(
+            "Identity-recovered kernel requires the certified baseline kernel and order: "
+            f"kernel={baseline_kernel_path}; order={baseline_order_path}"
+        )
+    baseline = np.load(baseline_kernel_path, mmap_mode="r")
+    order = pd.read_csv(baseline_order_path, sep="\t", dtype=str)
+    if "sample_id" not in order.columns:
+        raise SystemExit(f"Baseline sample order lacks sample_id: {baseline_order_path}")
+    baseline_gids = [canonical_gid(value) for value in order["sample_id"]]
+    if baseline.shape != (len(baseline_gids), len(baseline_gids)):
+        raise SystemExit(
+            f"Baseline kernel/order mismatch: shape={baseline.shape}; order={len(baseline_gids)}"
+        )
+    candidate_index = {gid: index for index, gid in enumerate(candidate_gids)}
+    missing = sorted(set(baseline_gids) - set(candidate_index))
+    if missing:
+        raise SystemExit(
+            f"Identity-recovered panel lost {len(missing)} certified baseline GIDs; "
+            f"examples={missing[:10]}"
+        )
+    candidate_positions = np.asarray([candidate_index[gid] for gid in baseline_gids], dtype=int)
+    candidate_shared = candidate_kernel[np.ix_(candidate_positions, candidate_positions)]
+    triangle = np.triu_indices(len(baseline_gids), k=1)
+    baseline_values = np.asarray(baseline[triangle], dtype=np.float64)
+    candidate_values = np.asarray(candidate_shared[triangle], dtype=np.float64)
+    finite = np.isfinite(baseline_values) & np.isfinite(candidate_values)
+    correlation = (
+        float(np.corrcoef(baseline_values[finite], candidate_values[finite])[0, 1])
+        if finite.sum() >= 2
+        else float("nan")
+    )
+    rmse = (
+        float(np.sqrt(np.mean((baseline_values[finite] - candidate_values[finite]) ** 2)))
+        if finite.any()
+        else float("nan")
+    )
+    passed = bool(np.isfinite(correlation) and correlation >= minimum_correlation)
+    result = pd.DataFrame(
+        [
+            {
+                "baseline_kernel": str(baseline_kernel_path),
+                "baseline_order": str(baseline_order_path),
+                "baseline_gid_count": len(baseline_gids),
+                "candidate_gid_count": len(candidate_gids),
+                "new_candidate_gids": len(set(candidate_gids) - set(baseline_gids)),
+                "shared_offdiagonal_finite_pairs": int(finite.sum()),
+                "shared_offdiagonal_correlation": correlation,
+                "shared_offdiagonal_rmse": rmse,
+                "minimum_required_correlation": minimum_correlation,
+                "status": "PASS" if passed else "FAIL",
+            }
+        ]
+    )
+    if not passed:
+        raise SystemExit(
+            "Identity-recovered kernel is not concordant with the certified Seeds baseline: "
+            f"correlation={correlation}; minimum={minimum_correlation}"
+        )
+    return result
+
+
+def identity_recovery_status(
+    *,
+    accepted: pd.DataFrame,
+    raw_gids: list[str],
+    raw_source_samples: list[str],
+    collapse_audit: pd.DataFrame,
+    sample_qc: pd.DataFrame,
+    final_gids: list[str],
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    raw_sources: dict[str, set[str]] = defaultdict(set)
+    for gid, source in zip(raw_gids, raw_source_samples):
+        raw_sources[gid].add(normalize_identifier(source))
+    collapsed = set(collapse_audit.get("sample_id", pd.Series(dtype=str)))
+    selected = set(final_gids)
+    rows: list[dict[str, object]] = []
+    for gid, group in accepted.groupby("trial_gid", sort=True):
+        classes = sorted(set(group["classification"]))
+        expected_samples = sorted(set(group["normalized_sample_id"]) - {""})
+        found_samples = sorted(raw_sources.get(gid, set()))
+        all_found = set(sample.upper() for sample in expected_samples).issubset(
+            {sample.upper() for sample in found_samples}
+        )
+        if not all_found:
+            raise SystemExit(
+                f"Accepted marker samples disappeared during matrix parsing: gid={gid}; "
+                f"expected={expected_samples}; found={found_samples}"
+            )
+        local_qc = sample_qc[sample_qc["sample_id"].eq(gid)]
+        included = gid in selected
+        in_panel = boolean_values(group["existing_certified_in_panel"]).all()
+        in_any = boolean_values(group["existing_certified_in_any_panel"]).all()
+        rows.append(
+            {
+                "trial_gid": gid,
+                "classification": ";".join(classes),
+                "accepted_sample_ids": ";".join(expected_samples),
+                "accepted_sample_count": len(expected_samples),
+                "matrix_sample_ids_found": ";".join(found_samples),
+                "matrix_sample_count_found": len(found_samples),
+                "all_accepted_samples_found": all_found,
+                "replicate_consensus_materialized": gid in collapsed,
+                "any_sample_passed_qc": bool(local_qc["passes_thresholds"].any()),
+                "included_in_candidate_kernel": included,
+                "existing_certified_in_reference_panel": in_panel,
+                "existing_certified_in_any_panel": in_any,
+                "panel_coverage_status": (
+                    "existing_panel_gid_recertified"
+                    if included and in_panel
+                    else "new_panel_gid_certified"
+                    if included
+                    else "identity_accepted_but_failed_genotype_qc"
+                ),
+            }
+        )
+    status = pd.DataFrame(rows)
+    included = status["included_in_candidate_kernel"]
+    summary = pd.DataFrame(
+        [
+            {"metric": "accepted_identity_gids", "value": len(status)},
+            {
+                "metric": "accepted_identity_gids_in_candidate_kernel",
+                "value": int(included.sum()),
+            },
+            {
+                "metric": "accepted_identity_gids_failed_genotype_qc",
+                "value": int((~included).sum()),
+            },
+            {
+                "metric": "accepted_new_to_reference_panel_gids",
+                "value": int((~status["existing_certified_in_reference_panel"]).sum()),
+            },
+            {
+                "metric": "certified_new_to_reference_panel_gids",
+                "value": int(
+                    (included & ~status["existing_certified_in_reference_panel"]).sum()
+                ),
+            },
+            {
+                "metric": "accepted_new_to_any_certified_panel_gids",
+                "value": int((~status["existing_certified_in_any_panel"]).sum()),
+            },
+            {
+                "metric": "certified_new_to_any_prior_panel_gids",
+                "value": int((included & ~status["existing_certified_in_any_panel"]).sum()),
+            },
+            {
+                "metric": "accepted_replicate_consensus_gids",
+                "value": int(status["replicate_consensus_materialized"].sum()),
+            },
+            {"metric": "phenotype_values_read", "value": False},
+            {"metric": "outer_test_metrics_read", "value": False},
+            {"metric": "final_holdout_outcomes_read", "value": False},
+        ]
+    )
+    return status, summary
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Build a separately certified raw-platform genomic kernel.")
     parser.add_argument("--root", type=Path, default=Path("."))
@@ -666,6 +1111,11 @@ def main() -> None:
     parser.add_argument("--chunk-size", type=int, default=1024)
     parser.add_argument("--save-dosage", action="store_true")
     parser.add_argument("--preflight-only", action="store_true")
+    parser.add_argument("--identity-adjudication-dir", type=Path)
+    parser.add_argument("--identity-panel", action="append", default=[])
+    parser.add_argument("--baseline-kernel", type=Path)
+    parser.add_argument("--baseline-order", type=Path)
+    parser.add_argument("--minimum-baseline-kernel-correlation", type=float, default=0.90)
     args = parser.parse_args()
 
     root = args.root.resolve()
@@ -696,16 +1146,56 @@ def main() -> None:
         return
     prefix = args.prefix or str(defaults["prefix"])
     out_dir = (root / (args.out_dir or Path("genotype_panels/recovered") / args.platform)).resolve()
+    identity_dir = (
+        (args.identity_adjudication_dir.resolve() if args.identity_adjudication_dir.is_absolute()
+         else (root / args.identity_adjudication_dir).resolve())
+        if args.identity_adjudication_dir
+        else None
+    )
+    if identity_dir is not None:
+        default_out = (root / "genotype_panels/recovered" / args.platform).resolve()
+        if defaults["format"] != "marker_by_sample":
+            raise SystemExit("Accepted sample-axis identity recovery currently requires marker_by_sample data")
+        if not args.identity_panel:
+            raise SystemExit("--identity-panel is required with --identity-adjudication-dir")
+        if out_dir == default_out or prefix == str(defaults["prefix"]):
+            raise SystemExit(
+                "Identity-recovered kernels must use an isolated output directory and prefix"
+            )
+        if args.baseline_kernel is None or args.baseline_order is None:
+            raise SystemExit(
+                "Identity-recovered kernels require --baseline-kernel and --baseline-order"
+            )
     out_dir.mkdir(parents=True, exist_ok=True)
     canonical_catalog_path = (root / args.canonical_catalog).resolve()
     if not canonical_catalog_path.is_file() or canonical_catalog_path.stat().st_size == 0:
         raise SystemExit(f"Canonical genotype catalog is missing or empty: {canonical_catalog_path}")
     canonical_ids, lookup = target_sample_lookup(root=root, canonical_catalog_path=canonical_catalog_path)
+    accepted_identities = pd.DataFrame()
+    accepted_replicates: dict[str, set[str]] = {}
+    expected_matrix_sha256: str | None = None
+    identity_input_hashes: dict[str, str] = {}
+    if identity_dir is not None:
+        (
+            accepted_identities,
+            accepted_lookup,
+            accepted_replicates,
+            expected_matrix_sha256,
+            identity_input_hashes,
+        ) = load_accepted_identity_mappings(
+            identity_dir=identity_dir,
+            panel_ids=set(args.identity_panel),
+            canonical_ids=canonical_ids,
+            matrix_path=matrix_paths[0],
+        )
+        merge_accepted_identity_lookup(lookup, accepted_lookup)
 
     if defaults["format"] == "sample_by_marker":
         matrix, gids, source_samples, marker_ids, allele_values = parse_sample_by_marker(matrix_paths[0], lookup)
     elif defaults["format"] == "marker_by_sample":
-        matrix, gids, source_samples, marker_ids, allele_values = parse_marker_by_sample(matrix_paths[0], lookup)
+        matrix, gids, source_samples, marker_ids, allele_values = parse_marker_by_sample(
+            matrix_paths[0], lookup, expected_sha256=expected_matrix_sha256
+        )
     elif defaults["format"] == "iwyp":
         matrix, gids, source_samples, marker_ids, allele_values = parse_iwyp(matrix_paths[0], canonical_ids)
     else:
@@ -713,7 +1203,12 @@ def main() -> None:
             matrix_paths, canonical_ids
         )
     raw_shape = matrix.shape
+    raw_gids = list(gids)
+    raw_source_samples = list(source_samples)
     duplicate_concordance = duplicate_call_concordance(matrix, gids, source_samples)
+    matrix, gids, source_samples, collapse_audit = collapse_accepted_replicates(
+        matrix, gids, source_samples, accepted_replicates
+    )
     matrix, gids, source_samples, sample_qc, duplicates = qc_samples(
         matrix,
         gids,
@@ -735,6 +1230,36 @@ def main() -> None:
     linear_qc = validate_kernel(kernel, name=f"{prefix}_LINEAR")
     rbf_qc = validate_kernel(rbf, name=f"{prefix}_RBF")
 
+    identity_status = pd.DataFrame()
+    identity_summary = pd.DataFrame()
+    baseline_comparison = pd.DataFrame()
+    if identity_dir is not None:
+        identity_status, identity_summary = identity_recovery_status(
+            accepted=accepted_identities,
+            raw_gids=raw_gids,
+            raw_source_samples=raw_source_samples,
+            collapse_audit=collapse_audit,
+            sample_qc=sample_qc,
+            final_gids=gids,
+        )
+        baseline_kernel_path = (
+            args.baseline_kernel.resolve()
+            if args.baseline_kernel.is_absolute()
+            else (root / args.baseline_kernel).resolve()
+        )
+        baseline_order_path = (
+            args.baseline_order.resolve()
+            if args.baseline_order.is_absolute()
+            else (root / args.baseline_order).resolve()
+        )
+        baseline_comparison = baseline_kernel_comparison(
+            baseline_kernel_path=baseline_kernel_path,
+            baseline_order_path=baseline_order_path,
+            candidate_kernel=kernel,
+            candidate_gids=gids,
+            minimum_correlation=args.minimum_baseline_kernel_correlation,
+        )
+
     linear_path = out_dir / f"{prefix}_LINEAR.npy"
     rbf_path = out_dir / f"{prefix}_RBF.npy"
     order_path = out_dir / f"{prefix}_sample_order.tsv"
@@ -752,6 +1277,9 @@ def main() -> None:
     duplicates.to_csv(out_dir / f"{prefix}_duplicate_gid_resolution.tsv", sep="\t", index=False)
     duplicate_concordance.to_csv(
         out_dir / f"{prefix}_duplicate_call_concordance.tsv", sep="\t", index=False
+    )
+    collapse_audit.to_csv(
+        out_dir / f"{prefix}_accepted_replicate_collapse.tsv", sep="\t", index=False
     )
     marker_qc.to_csv(out_dir / f"{prefix}_marker_qc.tsv.gz", sep="\t", index=False, compression="gzip")
     pd.DataFrame({"marker_id": retained_marker_ids}).to_csv(
@@ -789,7 +1317,19 @@ def main() -> None:
             {"metric": "rbf_gamma_median_heuristic", "value": gamma},
         ]
     )
+    if not identity_summary.empty:
+        summary = pd.concat([summary, identity_summary], ignore_index=True)
     summary.to_csv(out_dir / f"{prefix}_summary.tsv", sep="\t", index=False)
+    if identity_dir is not None:
+        identity_status.to_csv(
+            out_dir / f"{prefix}_identity_recovery_status.tsv", sep="\t", index=False
+        )
+        identity_summary.to_csv(
+            out_dir / f"{prefix}_identity_recovery_summary.tsv", sep="\t", index=False
+        )
+        baseline_comparison.to_csv(
+            out_dir / f"{prefix}_baseline_kernel_comparison.tsv", sep="\t", index=False
+        )
     registry = pd.DataFrame(
         [
             {
@@ -819,8 +1359,57 @@ def main() -> None:
         ]
     )
     registry.to_csv(out_dir / f"{prefix}_registry_fragment.tsv", sep="\t", index=False)
+    if identity_dir is not None:
+        output_artifact_hashes = {
+            path.name: sha256_file(path)
+            for path in sorted(out_dir.glob(f"{prefix}_*"))
+            if path.is_file()
+            and path.name
+            not in {
+                f"{prefix}_identity_recovery_provenance.json",
+                f"{prefix}_artifacts.sha256",
+            }
+        }
+        provenance = {
+            "status": "PASS",
+            "selection_data": "accepted_marker_identity_and_genotype_calls_only",
+            "identity_adjudication_dir": str(identity_dir),
+            "identity_panels": sorted(set(args.identity_panel)),
+            "identity_input_hashes": identity_input_hashes,
+            "marker_matrix": str(matrix_paths[0]),
+            "marker_matrix_sha256": expected_matrix_sha256,
+            "baseline_kernel": str(baseline_kernel_path),
+            "baseline_kernel_sha256": sha256_file(baseline_kernel_path),
+            "baseline_order": str(baseline_order_path),
+            "baseline_order_sha256": sha256_file(baseline_order_path),
+            "certified_baseline_artifacts_overwritten": False,
+            "candidate_kernel_enabled_default": False,
+            "builder_sha256": sha256_file(Path(__file__).resolve()),
+            "output_artifact_hashes": output_artifact_hashes,
+            "phenotype_values_read": False,
+            "outer_test_metrics_read": False,
+            "final_holdout_outcomes_read": False,
+        }
+        provenance_path = out_dir / f"{prefix}_identity_recovery_provenance.json"
+        provenance_path.write_text(
+            json.dumps(provenance, indent=2) + "\n", encoding="utf-8"
+        )
+        checksum_path = out_dir / f"{prefix}_artifacts.sha256"
+        checksum_artifacts = sorted(
+            path
+            for path in out_dir.glob(f"{prefix}_*")
+            if path.is_file() and path != checksum_path
+        )
+        checksum_path.write_text(
+            "".join(f"{sha256_file(path)}  {path.name}\n" for path in checksum_artifacts),
+            encoding="utf-8",
+        )
+        print(f"Artifact checksum manifest: {checksum_path}")
     print(summary.to_string(index=False))
     print(certification.to_string(index=False))
+    if not baseline_comparison.empty:
+        print("\n=== BASELINE KERNEL COMPARISON ===")
+        print(baseline_comparison.to_string(index=False))
 
 
 if __name__ == "__main__":
