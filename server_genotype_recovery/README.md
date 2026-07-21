@@ -477,7 +477,9 @@ The reconciler reads completed reports and certified sample orders only; it
 does not read marker calls, phenotype values or evaluation outcomes and does
 not modify any kernel. It fails closed if any declared certified sample order
 is absent, because global novelty cannot be established from an incomplete
-panel universe.
+panel universe. The wrapper validates the rebuilt regulatory artifact and
+writes `audit/regulatory_eligibility_reconciled.sha256` before reporting
+success.
 
 If unique selection-history evidence does not connect to marker calls, audit it
 as pedigree enrichment rather than discarding it:
