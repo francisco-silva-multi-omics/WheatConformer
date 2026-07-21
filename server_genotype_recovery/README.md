@@ -331,6 +331,25 @@ alias to marker-matrix row or column. Ambiguous aliases and interior matrix-cell
 matches remain non-identifying; even a unique sample-axis candidate requires
 marker-call concordance before it can become a direct genotype assignment.
 
+If unique selection-history evidence does not connect to marker calls, audit it
+as pedigree enrichment rather than discarding it:
+
+```bash
+PYTHON="$HOME/tools/tf_wheat_cpu/bin/python" \
+WHEATCONFORMER_CODE_ROOT="$HOME/tools/WheatConformer" \
+bash "$HOME/tools/WheatConformer/scripts/audit_cimmyt_dataverse_pedigree_enrichment.sh" \
+  /DATA2/estancias/tesis_javier/model_DATA/genotipoXambiente
+```
+
+The pedigree-enrichment audit reports multiple external GIDs or lineages,
+candidate aliases, explicit or conservatively parsed parent edges, unresolved
+tokens from complex pedigrees, prospective nodes/edges beyond the current K_A,
+and affected model rows by trait. It reads only sample, trait and environment
+identifiers from the model ledger. Every recovered alias and relationship is
+review-only: the audit never modifies K_A, never treats complex slash notation
+as a resolved two-parent cross, and requires canonical parent curation plus the
+existing conflict/cycle gate before an isolated replacement K_A can be built.
+
 Selection histories are decomposed into a BCID and developmental-stage tokens.
 The BCID, GID, cross and named parents are germplasm queries, but only the GID
 and BCID are used as direct sample/callset names. Stage suffixes such as `0Y`
