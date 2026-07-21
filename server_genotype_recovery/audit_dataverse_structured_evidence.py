@@ -116,10 +116,40 @@ def _read_delimited(source: object, suffix: str) -> pd.DataFrame:
         )
 
 
+def _excel_engine(filename: str) -> str:
+    lower = filename.lower()
+    if lower.endswith(".gz"):
+        lower = lower[:-3]
+    if lower.endswith(".xls"):
+        return "xlrd"
+    if lower.endswith((".xlsx", ".xlsm")):
+        return "openpyxl"
+    raise ValueError(f"unsupported Excel format: {filename}")
+
+
+def _read_excel_sheets(path: Path) -> dict[str, pd.DataFrame]:
+    lower = path.name.lower()
+    engine = _excel_engine(lower)
+    if lower.endswith(".gz"):
+        with gzip.open(path, "rb") as handle:
+            source: object = io.BytesIO(handle.read())
+    else:
+        source = path
+    return pd.read_excel(
+        source,
+        sheet_name=None,
+        header=None,
+        dtype=str,
+        engine=engine,
+    )
+
+
 def structured_parts(path: Path) -> Iterator[tuple[str, pd.DataFrame]]:
     lower = path.name.lower()
-    if lower.endswith((".xlsx", ".xlsm")):
-        sheets = pd.read_excel(path, sheet_name=None, header=None, dtype=str)
+    if lower.endswith(
+        (".xlsx", ".xlsm", ".xls", ".xlsx.gz", ".xlsm.gz", ".xls.gz")
+    ):
+        sheets = _read_excel_sheets(path)
         for name, frame in sheets.items():
             yield f"sheet:{name}", frame
         return
