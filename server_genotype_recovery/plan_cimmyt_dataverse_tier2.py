@@ -630,14 +630,51 @@ def annotate_evidence_crop(
             "crop_scope_evidence",
         ]
     ].drop_duplicates(["dataset_persistent_id", "datafile_id"])
-    local = evidence.merge(
+    mapping = mapping.rename(
+        columns={
+            "crop_scope": "inventory_crop_scope",
+            "crop_scope_evidence": "inventory_crop_scope_evidence",
+        }
+    )
+    local = evidence.copy()
+    if "crop_scope" in local.columns:
+        local = local.rename(
+            columns={
+                "crop_scope": "evidence_crop_scope",
+                "crop_scope_evidence": "evidence_crop_scope_evidence",
+            }
+        )
+    else:
+        local["evidence_crop_scope"] = ""
+        if "crop_scope_evidence" in local.columns:
+            local = local.rename(
+                columns={"crop_scope_evidence": "evidence_crop_scope_evidence"}
+            )
+        else:
+            local["evidence_crop_scope_evidence"] = ""
+    if "evidence_crop_scope_evidence" not in local.columns:
+        local["evidence_crop_scope_evidence"] = ""
+    local = local.merge(
         mapping,
         on=["dataset_persistent_id", "datafile_id"],
         how="left",
     )
-    local["crop_scope"] = local["crop_scope"].fillna(AMBIGUOUS_REVIEW)
-    local["crop_scope_evidence"] = local["crop_scope_evidence"].fillna(
-        "file_not_present_in_candidate_inventory"
+    evidence_scope = local["evidence_crop_scope"].fillna("").map(clean)
+    inventory_scope = local["inventory_crop_scope"].fillna("").map(clean)
+    local["crop_scope"] = inventory_scope.where(
+        inventory_scope.ne(""), evidence_scope
+    ).replace("", AMBIGUOUS_REVIEW)
+    local["crop_scope_evidence"] = local[
+        "inventory_crop_scope_evidence"
+    ].fillna("")
+    missing_inventory = inventory_scope.eq("")
+    local.loc[missing_inventory, "crop_scope_evidence"] = local.loc[
+        missing_inventory, "evidence_crop_scope_evidence"
+    ].replace("", "file_not_present_in_candidate_inventory")
+    local["crop_scope_disagreement"] = (
+        evidence_scope.ne("")
+        & inventory_scope.ne("")
+        & evidence_scope.ne(inventory_scope)
     )
     return local
 
@@ -830,6 +867,7 @@ def main() -> None:
             {"metric": "ambiguous_crop_files", "value": int(inventory["crop_scope"].eq(AMBIGUOUS_REVIEW).sum())},
             {"metric": "non_wheat_structured_evidence_rows", "value": len(non_wheat_evidence)},
             {"metric": "non_wheat_structured_query_ids", "value": non_wheat_evidence["query_id"].nunique()},
+            {"metric": "crop_scope_disagreement_rows", "value": int(annotated_evidence["crop_scope_disagreement"].sum())},
             {"metric": "unrestricted_selected_files", "value": len(selected_unrestricted)},
             {"metric": "unrestricted_selected_bytes", "value": int(selected_unrestricted["filesize"].sum())},
             {"metric": "authorized_selected_files", "value": len(selected_authorized)},

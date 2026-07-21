@@ -224,3 +224,34 @@ def test_verified_or_probable_local_files_are_not_selected() -> None:
     assert plan.loc["a-snp", "plan_status"] == (
         "DEFERRED_LOCAL_EQUIVALENCE_REVIEW"
     )
+
+
+def test_crop_annotation_accepts_already_gated_structured_evidence() -> None:
+    evidence = pd.DataFrame(
+        [
+            {
+                "dataset_persistent_id": "doi:wheat",
+                "datafile_id": "file-1",
+                "query_id": "GID1",
+                "evidence_class": "selection_history_exact_unique",
+                "crop_scope": WHEAT_CONFIRMED,
+                "crop_scope_evidence": "title_wheat=wheat",
+            }
+        ]
+    )
+    inventory = pd.DataFrame(
+        [
+            {
+                "dataset_persistent_id": "doi:wheat",
+                "datafile_id": "file-1",
+                "crop_scope": WHEAT_CONFIRMED,
+                "crop_scope_evidence": "title_wheat=wheat",
+            }
+        ]
+    )
+
+    annotated = evidence_crop_summary(evidence, inventory)
+
+    assert len(annotated) == 1
+    assert annotated.loc[0, "crop_scope"] == WHEAT_CONFIRMED
+    assert int(annotated.loc[0, "evidence_rows"]) == 1
