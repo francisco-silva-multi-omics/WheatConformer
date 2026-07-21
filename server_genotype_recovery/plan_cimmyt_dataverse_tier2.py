@@ -92,6 +92,13 @@ def tier2_file_class(row: pd.Series | dict[str, object]) -> str:
             "meanval",
             "envdata",
             "combined.pdf",
+            "md5sum",
+            "checksum",
+            "sha256sum",
+            "access agreement",
+            "request access",
+            "terms of access",
+            "terms of use",
         )
     )
     mapping = any(

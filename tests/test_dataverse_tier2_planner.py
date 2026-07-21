@@ -72,6 +72,12 @@ def test_tier2_classification_separates_matrix_mapping_and_low_value() -> None:
     assert tier2_file_class(candidate("d", "3", "genotyping_readme.txt")) == (
         "excluded_low_relevance"
     )
+    assert tier2_file_class(candidate("d", "3b", "md5sum_hash.txt")) == (
+        "excluded_low_relevance"
+    )
+    assert tier2_file_class(
+        candidate("d", "3c", "wheat_request_fastq_file_access_agreement.txt")
+    ) == "excluded_low_relevance"
     assert tier2_file_class(
         candidate("d", "4", "curated_pedigree.ped", role="pedigree")
     ) == "pedigree_metadata"
