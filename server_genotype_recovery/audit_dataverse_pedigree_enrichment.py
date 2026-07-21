@@ -130,13 +130,47 @@ def resolve(root: Path, path: Path) -> Path:
 
 
 def normalized_values(values: pd.Series) -> list[str]:
+    return distinct_values(values, normalized_identifier)
+
+
+def distinct_values(values: pd.Series, normalizer) -> list[str]:
     observed: dict[str, str] = {}
     for value in values:
         text = clean(value)
-        key = normalized_identifier(text)
+        key = normalizer(text)
         if key and key not in observed:
             observed[key] = text
-    return sorted(observed.values(), key=lambda value: normalized_identifier(value))
+    return sorted(observed.values(), key=lambda value: normalizer(value))
+
+
+def canonical_cimmyt_gid(value: object) -> str:
+    text = clean(value).upper()
+    numeric = re.fullmatch(r"(?:GID)?([0-9]+)(?:\.0+)?", text)
+    if numeric:
+        return f"GID{int(numeric.group(1))}"
+    return normalized_identifier(text)
+
+
+def lineage_display_key(value: object) -> str:
+    text = clean(value).upper()
+    local_check = re.fullmatch(r"LOCAL\s+CHECK\s*\((.+)\)", text)
+    if local_check:
+        text = local_check.group(1)
+    text = re.sub(
+        r"\s*\((?:LOCAL\s+CHECK|CHECK|PADRE|PARENT|FATHER|MOTHER)\)\s*$",
+        "",
+        text,
+    )
+    return normalized_identifier(text)
+
+
+def lineage_kind(value: object) -> str:
+    text = clean(value)
+    return (
+        "pedigree_expression"
+        if re.search(r"/|\\|\*|\s+[Xx]\s+", text)
+        else "designation"
+    )
 
 
 def joined(values: list[str]) -> str:
@@ -294,8 +328,13 @@ def summarize_conflicts(
     rows: list[dict[str, object]] = []
     for query_id in sorted(selected_ids):
         group = records[records["query_id"].eq(query_id)]
-        external_gids = normalized_values(group["external_gid"])
-        external_lineages = normalized_values(group["external_lineage"])
+        external_gids = distinct_values(
+            group["external_gid"], canonical_cimmyt_gid
+        )
+        external_lineage_literals = normalized_values(group["external_lineage"])
+        external_lineages = distinct_values(
+            group["external_lineage"], lineage_display_key
+        )
         external_parent_pairs = normalized_values(
             group["external_parent1"].map(clean)
             + "|"
@@ -322,12 +361,22 @@ def summarize_conflicts(
             ]
             if p1 or p2:
                 trial_parent_pairs = [f"{a}|{b}" for a in (p1 or [""]) for b in (p2 or [""])]
-        external_lineage_keys = {normalized_identifier(value) for value in external_lineages}
-        trial_lineage_keys = {normalized_identifier(value) for value in trial_crosses}
+        external_lineage_keys = {lineage_display_key(value) for value in external_lineages}
+        trial_lineage_keys = {lineage_display_key(value) for value in trial_crosses}
+        comparable_lineages = [
+            (external, trial_value)
+            for external in external_lineages
+            for trial_value in trial_crosses
+            if lineage_kind(external) == lineage_kind(trial_value)
+        ]
         lineage_disagreement = bool(
+            comparable_lineages
+            and external_lineage_keys.isdisjoint(trial_lineage_keys)
+        )
+        lineage_not_comparable = bool(
             external_lineage_keys
             and trial_lineage_keys
-            and external_lineage_keys.isdisjoint(trial_lineage_keys)
+            and not comparable_lineages
         )
         external_pair_keys = {normalized_identifier(value) for value in external_parent_pairs}
         trial_pair_keys = {normalized_identifier(value) for value in trial_parent_pairs}
@@ -347,6 +396,16 @@ def summarize_conflicts(
             reasons.append("external_vs_trial_lineage_disagreement")
         if parent_disagreement:
             reasons.append("external_vs_trial_parent_disagreement")
+        review_reasons = list(reasons)
+        if lineage_not_comparable:
+            review_reasons.append("external_designation_vs_trial_pedigree_not_comparable")
+        conflict_status = (
+            "CONFLICT_REQUIRES_REVIEW"
+            if reasons
+            else "NONCOMPARABLE_LINEAGE_REQUIRES_REVIEW"
+            if lineage_not_comparable
+            else "NO_DETECTED_CONFLICT"
+        )
         rows.append(
             {
                 "query_id": query_id,
@@ -354,6 +413,8 @@ def summarize_conflicts(
                 "external_source_file_count": group["filename"].nunique(),
                 "external_gid_count": len(external_gids),
                 "external_gids": joined(external_gids),
+                "external_lineage_literal_count": len(external_lineage_literals),
+                "external_lineage_literals": joined(external_lineage_literals),
                 "external_lineage_count": len(external_lineages),
                 "external_lineages": joined(external_lineages),
                 "external_parent_pair_count": len(external_parent_pairs),
@@ -364,9 +425,10 @@ def summarize_conflicts(
                 "multiple_external_lineage": len(external_lineages) > 1,
                 "multiple_external_parent_pair": len(external_parent_pairs) > 1,
                 "external_vs_trial_lineage_disagreement": lineage_disagreement,
+                "external_designation_vs_trial_pedigree_not_comparable": lineage_not_comparable,
                 "external_vs_trial_parent_disagreement": parent_disagreement,
-                "conflict_status": "CONFLICT_REQUIRES_REVIEW" if reasons else "NO_DETECTED_CONFLICT",
-                "conflict_reasons": ";".join(reasons),
+                "conflict_status": conflict_status,
+                "conflict_reasons": ";".join(review_reasons),
                 "automatic_pedigree_update_ready": False,
             }
         )
@@ -382,11 +444,13 @@ def build_alias_candidates(
     rows: list[dict[str, object]] = []
     selected = records[records["external_gid"].map(clean).ne("")]
     for (query_id, normalized_gid), group in selected.assign(
-        normalized_external_gid=selected["external_gid"].map(normalized_identifier)
+        normalized_external_gid=selected["external_gid"].map(canonical_cimmyt_gid)
     ).groupby(["query_id", "normalized_external_gid"], sort=True):
-        external_gids = normalized_values(group["external_gid"])
+        external_gids = distinct_values(
+            group["external_gid"], canonical_cimmyt_gid
+        )
         conflict = status.loc[query_id, "conflict_status"] != "NO_DETECTED_CONFLICT"
-        same_id = normalized_identifier(query_id) == normalized_gid
+        same_id = canonical_cimmyt_gid(query_id) == normalized_gid
         rows.append(
             {
                 "query_id": query_id,
@@ -397,10 +461,10 @@ def build_alias_candidates(
                 "source_file_count": group["filename"].nunique(),
                 "source_files": joined(sorted(set(group["filename"].map(clean)) - {""})),
                 "alias_review_status": (
-                    "blocked_by_record_conflict"
-                    if conflict
-                    else "same_identifier_review"
+                    "exact_canonical_gid_match"
                     if same_id
+                    else "blocked_by_record_conflict"
+                    if conflict
                     else "candidate_alias_requires_identity_review"
                 ),
                 "direct_marker_assignment_ready": False,
@@ -416,6 +480,8 @@ def split_lineage(value: object) -> tuple[list[tuple[str, str]], list[str], str]
         return [], [], "no_lineage"
     complex_slash = bool(re.search(r"/{2,}|\\{2,}", text))
     delimiter_count = len(re.findall(r"/|\\|\*|\s+[Xx]\s+", text))
+    if delimiter_count == 0:
+        return [], [], "lineage_designation_no_parent_structure"
     tokens = [
         clean(token)
         for token in re.split(r"/{1,}|\\{1,}|\*+|\s+[Xx]\s+", text)
@@ -813,7 +879,15 @@ def main() -> None:
         },
         {
             "metric": "gids_with_detected_conflicts",
-            "value": int(conflicts["conflict_status"].ne("NO_DETECTED_CONFLICT").sum()),
+            "value": int(conflicts["conflict_status"].eq("CONFLICT_REQUIRES_REVIEW").sum()),
+        },
+        {
+            "metric": "gids_with_noncomparable_lineage_fields",
+            "value": int(
+                conflicts["conflict_status"].eq(
+                    "NONCOMPARABLE_LINEAGE_REQUIRES_REVIEW"
+                ).sum()
+            ),
         },
         {
             "metric": "gids_with_multiple_external_gids",
@@ -824,6 +898,14 @@ def main() -> None:
             "value": int(conflicts["multiple_external_lineage"].sum()),
         },
         {"metric": "candidate_alias_rows", "value": len(aliases)},
+        {
+            "metric": "external_gid_exact_canonical_matches",
+            "value": int(aliases["same_as_trial_gid"].sum()),
+        },
+        {
+            "metric": "external_gid_aliases_requiring_identity_review",
+            "value": int((~aliases["same_as_trial_gid"]).sum()),
+        },
         {
             "metric": "candidate_parent_or_ancestor_nodes",
             "value": len(unique_nodes),

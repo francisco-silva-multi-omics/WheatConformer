@@ -4,8 +4,10 @@ import pandas as pd
 
 from server_genotype_recovery.audit_dataverse_pedigree_enrichment import (
     build_alias_candidates,
+    canonical_cimmyt_gid,
     candidate_relationships,
     extract_external_records,
+    lineage_display_key,
     phenotype_impact,
     resolver_lineage,
     split_lineage,
@@ -122,6 +124,58 @@ def test_split_lineage_only_assigns_roles_for_simple_crosses() -> None:
     assert parents == []
     assert tokens == ["PARENT_A", "PARENT_B", "PARENT_C"]
     assert status == "complex_lineage_tokens_unresolved"
+
+    parents, tokens, status = split_lineage("WEEBILL1")
+    assert parents == []
+    assert tokens == []
+    assert status == "lineage_designation_no_parent_structure"
+
+
+def test_numeric_and_prefixed_cimmyt_gids_are_the_same_identifier() -> None:
+    assert canonical_cimmyt_gid("1673085") == "GID1673085"
+    assert canonical_cimmyt_gid("GID1673085") == "GID1673085"
+    assert canonical_cimmyt_gid("1673085.0") == "GID1673085"
+
+
+def test_display_annotations_do_not_create_lineage_conflicts() -> None:
+    assert lineage_display_key("SOKOLL") == lineage_display_key(
+        "Local check (SOKOLL)"
+    )
+    assert lineage_display_key("NAVOJOA M2007") == lineage_display_key(
+        "NAVOJOA M2007 (PADRE)"
+    )
+
+
+def test_designation_and_pedigree_are_reported_as_noncomparable() -> None:
+    records = pd.DataFrame(
+        {
+            "query_id": ["GID1"],
+            "external_gid": ["1"],
+            "external_lineage": ["BECARD"],
+            "external_parent1": [""],
+            "external_parent2": [""],
+            "filename": ["germplasm.tsv"],
+        }
+    )
+    resolver = pd.DataFrame(
+        {
+            "sample_id": ["GID1"],
+            "selection_history": ["SEL-1"],
+            "cross_name": ["WBLL1*2/KIRITATI"],
+            "parent1": [""],
+            "parent2": [""],
+        }
+    )
+    conflicts = summarize_conflicts(
+        records, resolver_lineage(resolver), {"GID1"}
+    )
+    row = conflicts.iloc[0]
+    assert row["conflict_status"] == "NONCOMPARABLE_LINEAGE_REQUIRES_REVIEW"
+    assert not row["external_vs_trial_lineage_disagreement"]
+
+    aliases = build_alias_candidates(records, conflicts)
+    assert aliases.iloc[0]["same_as_trial_gid"]
+    assert aliases.iloc[0]["alias_review_status"] == "exact_canonical_gid_match"
 
 
 def test_phenotype_impact_counts_identifiers_without_outcomes() -> None:
