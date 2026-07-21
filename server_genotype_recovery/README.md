@@ -509,6 +509,21 @@ not be selected from outer-test results. Inspect the identity recovery summary,
 baseline-kernel comparison, kernel certification and artifact checksum before
 adding the fragment to a development-only inner-validation screen.
 
+Before registry screening, summarize the accepted identities lost to genotype
+QC without rescanning the marker matrix:
+
+```bash
+PYTHON="$HOME/tools/tf_wheat_cpu/bin/python" \
+WHEATCONFORMER_CODE_ROOT="$HOME/tools/WheatConformer" \
+bash "$HOME/tools/WheatConformer/scripts/audit_seeds_identity_recovered_qc.sh" \
+  /DATA2/estancias/tesis_javier/model_DATA/genotipoXambiente
+```
+
+This reads only the saved identity and genotype-QC tables. It reports failure
+causes, coverage cohorts and missingness-threshold sensitivity without reading
+phenotypes, outer-test metrics or final-holdout outcomes. The sensitivity table
+is diagnostic and does not by itself authorize relaxing genotype QC.
+
 If unique selection-history evidence does not connect to marker calls, audit it
 as pedigree enrichment rather than discarding it:
 
