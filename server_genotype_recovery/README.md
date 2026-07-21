@@ -524,6 +524,23 @@ causes, coverage cohorts and missingness-threshold sensitivity without reading
 phenotypes, outer-test metrics or final-holdout outcomes. The sensitivity table
 is diagnostic and does not by itself authorize relaxing genotype QC.
 
+When a revised threshold has been justified from genotype QC alone, build it
+under a new candidate name so the 20% reference remains immutable. For example:
+
+```bash
+SEEDS_IDENTITY_SAMPLE_MISSING_MAX=0.40 \
+SEEDS_IDENTITY_KERNEL_OUT=genotype_panels/recovered/seeds_dartseq_identity_v3_miss40 \
+SEEDS_IDENTITY_KERNEL_PREFIX=K_G_SEEDS_DARTSEQ_IDENTITY_V3_MISS40 \
+PYTHON="$HOME/tools/tf_wheat_cpu/bin/python" \
+WHEATCONFORMER_CODE_ROOT="$HOME/tools/WheatConformer" \
+bash "$HOME/tools/WheatConformer/scripts/build_seeds_identity_recovered_kernel.sh" \
+  /DATA2/estancias/tesis_javier/model_DATA/genotipoXambiente
+```
+
+The threshold, output directory and prefix are recorded independently. A
+relaxed candidate still requires baseline-concordance, kernel certification,
+fold-support and inner-validation checks before use.
+
 If unique selection-history evidence does not connect to marker calls, audit it
 as pedigree enrichment rather than discarding it:
 

@@ -12,6 +12,7 @@ CATALOG="${SEEDS_IDENTITY_CANONICAL_CATALOG:-audit/genotypic_recovery/canonical_
 BASELINE_DIR="${SEEDS_IDENTITY_BASELINE_DIR:-genotype_panels/recovered/seeds_dartseq}"
 BASELINE_PREFIX="${SEEDS_IDENTITY_BASELINE_PREFIX:-K_G_SEEDS_DARTSEQ}"
 MINIMUM_CORRELATION="${SEEDS_IDENTITY_MINIMUM_BASELINE_CORRELATION:-0.90}"
+SAMPLE_MISSING_MAX="${SEEDS_IDENTITY_SAMPLE_MISSING_MAX:-0.20}"
 
 export PYTHONPATH="$CODE_ROOT${PYTHONPATH:+:$PYTHONPATH}"
 export PYTHONSAFEPATH=1
@@ -27,6 +28,7 @@ echo "[$(date '+%F %T')] START isolated accepted-identity Seeds DArTseq kernel"
   --baseline-kernel "$BASELINE_DIR/${BASELINE_PREFIX}_LINEAR.npy" \
   --baseline-order "$BASELINE_DIR/${BASELINE_PREFIX}_sample_order.tsv" \
   --minimum-baseline-kernel-correlation "$MINIMUM_CORRELATION" \
+  --sample-missing-max "$SAMPLE_MISSING_MAX" \
   --out-dir "$OUT_DIR" \
   --prefix "$PREFIX" \
   --save-dosage
@@ -40,5 +42,6 @@ echo "[$(date '+%F %T')] START verify isolated artifact checksums"
 echo "[$(date '+%F %T')] DONE verify isolated artifact checksums"
 
 echo "Identity recovery summary: $OUT_DIR/${PREFIX}_identity_recovery_summary.tsv"
+echo "Sample missingness maximum: $SAMPLE_MISSING_MAX"
 echo "Baseline comparison: $OUT_DIR/${PREFIX}_baseline_kernel_comparison.tsv"
 echo "Kernel certification: $OUT_DIR/${PREFIX}_kernel_certification.tsv"
