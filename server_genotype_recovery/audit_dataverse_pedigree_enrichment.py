@@ -871,6 +871,74 @@ def main() -> None:
         if not nodes.empty
         else nodes
     )
+    distinct_nodes = (
+        unique_nodes.drop_duplicates(["candidate_node"])
+        if not unique_nodes.empty
+        else unique_nodes
+    )
+    if unique_nodes.empty:
+        node_summary = pd.DataFrame(
+            columns=[
+                "node_role",
+                "derivation",
+                "query_ids",
+                "query_node_pairs",
+                "distinct_node_ids",
+                "distinct_prospective_new_K_A_node_ids",
+            ]
+        )
+    else:
+        node_summary = (
+            unique_nodes.groupby(["node_role", "derivation"], dropna=False)
+            .agg(
+                query_ids=("query_id", "nunique"),
+                query_node_pairs=("candidate_node", "size"),
+                distinct_node_ids=("candidate_node", "nunique"),
+                distinct_prospective_new_K_A_node_ids=(
+                    "candidate_node",
+                    lambda values: values[
+                        unique_nodes.loc[values.index, "prospective_new_K_A_node"]
+                    ].nunique(),
+                ),
+            )
+            .reset_index()
+        )
+    if unique_edges.empty:
+        edge_summary = pd.DataFrame(
+            columns=["edge_review_status", "child_ids", "parent_ids", "edges"]
+        )
+    else:
+        edge_summary = (
+            unique_edges.groupby("edge_review_status", dropna=False)
+            .agg(
+                child_ids=("child_id", "nunique"),
+                parent_ids=("parent_id", "nunique"),
+                edges=("child_id", "size"),
+            )
+            .reset_index()
+        )
+    node_summary.to_csv(
+        out_dir / "dataverse_pedigree_candidate_node_summary.tsv",
+        sep="\t",
+        index=False,
+    )
+    edge_summary.to_csv(
+        out_dir / "dataverse_pedigree_edge_status_summary.tsv",
+        sep="\t",
+        index=False,
+    )
+    direct_nodes = unique_nodes[
+        unique_nodes["node_role"].eq("direct_parent_candidate")
+    ]
+    unresolved_nodes = unique_nodes[
+        unique_nodes["node_role"].eq("unresolved_ancestor_token")
+    ]
+    prospective_nodes = distinct_nodes[
+        distinct_nodes["prospective_new_K_A_node"]
+    ]
+    prospective_direct_nodes = direct_nodes[
+        direct_nodes["prospective_new_K_A_node"]
+    ].drop_duplicates(["candidate_node"])
     qc_rows = [
         {"metric": "structured_unique_selection_gids", "value": len(selected_ids)},
         {"metric": "downloaded_files_considered", "value": len(downloads)},
@@ -921,17 +989,33 @@ def main() -> None:
             "metric": "external_gid_aliases_requiring_identity_review",
             "value": int((~aliases["same_as_trial_gid"]).sum()),
         },
+        {"metric": "candidate_parent_or_ancestor_query_node_pairs", "value": len(unique_nodes)},
+        {"metric": "distinct_candidate_parent_or_ancestor_nodes", "value": len(distinct_nodes)},
         {
-            "metric": "candidate_parent_or_ancestor_nodes",
-            "value": len(unique_nodes),
-        },
-        {
-            "metric": "prospective_new_K_A_nodes",
+            "metric": "prospective_new_K_A_query_node_pairs",
             "value": int(unique_nodes["prospective_new_K_A_node"].sum())
             if not unique_nodes.empty
             else 0,
         },
+        {"metric": "distinct_prospective_new_K_A_nodes", "value": len(prospective_nodes)},
+        {"metric": "direct_parent_candidate_query_node_pairs", "value": len(direct_nodes)},
+        {"metric": "distinct_direct_parent_candidate_nodes", "value": direct_nodes["candidate_node"].nunique() if not direct_nodes.empty else 0},
+        {"metric": "distinct_prospective_new_direct_parent_nodes", "value": len(prospective_direct_nodes)},
+        {"metric": "unresolved_ancestor_query_node_pairs", "value": len(unresolved_nodes)},
+        {"metric": "distinct_unresolved_ancestor_tokens", "value": unresolved_nodes["candidate_node"].nunique() if not unresolved_nodes.empty else 0},
         {"metric": "candidate_parent_edges", "value": len(unique_edges)},
+        {
+            "metric": "new_canonical_edge_candidates",
+            "value": int(unique_edges["edge_review_status"].eq("NEW_CANONICAL_EDGE_CANDIDATE").sum()) if not unique_edges.empty else 0,
+        },
+        {
+            "metric": "new_noncanonical_edges_requiring_parent_registry",
+            "value": int(unique_edges["edge_review_status"].eq("NEW_NONCANONICAL_EDGE_REQUIRES_PARENT_REGISTRY").sum()) if not unique_edges.empty else 0,
+        },
+        {
+            "metric": "edges_blocked_by_conflict",
+            "value": int(unique_edges["edge_review_status"].isin(["BLOCKED_BY_EXTERNAL_RECORD_CONFLICT", "CONFLICTS_EXISTING_COMPLETE_PARENT_PAIR"]).sum()) if not unique_edges.empty else 0,
+        },
         {
             "metric": "edges_already_present",
             "value": int(unique_edges["edge_already_in_current_pedigree"].sum())
@@ -978,6 +1062,12 @@ def main() -> None:
             for name, path in paths.items()
         },
         "selected_evidence_class": "selection_history_exact_unique",
+        "node_count_semantics": {
+            "query_node_pairs": "unique trial GID and lineage-token pairs",
+            "distinct_nodes": "globally distinct lineage-token strings",
+            "direct_parent_candidate": "parent role resolved from explicit columns or a simple two-parent cross",
+            "unresolved_ancestor_token": "token from complex lineage without an assigned parent role",
+        },
         "automatic_K_A_update_ready": False,
         "required_next_step": (
             "curate conflicts and canonical parent aliases, then rerun the existing "

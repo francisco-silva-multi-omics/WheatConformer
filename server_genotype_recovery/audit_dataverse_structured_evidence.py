@@ -113,6 +113,8 @@ def _read_delimited(source: object, suffix: str) -> pd.DataFrame:
             on_bad_lines="skip",
         )
     except (UnicodeDecodeError, pd.errors.ParserError):
+        if hasattr(source, "seek"):
+            source.seek(0)
         return pd.read_csv(
             source,
             sep="\t",
@@ -138,11 +140,25 @@ def _excel_engine(filename: str) -> str:
 def _read_excel_sheets(path: Path) -> dict[str, pd.DataFrame]:
     lower = path.name.lower()
     engine = _excel_engine(lower)
+    payload: bytes | None = None
     if lower.endswith(".gz"):
         with gzip.open(path, "rb") as handle:
-            source: object = io.BytesIO(handle.read())
+            payload = handle.read()
+            source: object = io.BytesIO(payload)
     else:
         source = path
+        if engine == "xlrd":
+            payload = path.read_bytes()
+    if engine == "xlrd" and payload is not None:
+        ole_header = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
+        sample = payload[:8192]
+        text_like = b"\x00" not in sample and any(
+            delimiter in sample for delimiter in (b"\t", b",", b";")
+        )
+        if not payload.startswith(ole_header) and text_like:
+            return {
+                "text_fallback": _read_delimited(io.BytesIO(payload), ".txt")
+            }
     return pd.read_excel(
         source,
         sheet_name=None,

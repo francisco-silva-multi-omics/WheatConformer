@@ -122,3 +122,19 @@ def test_content_index_limits_terms_but_binary_workbooks_require_full_scan() -> 
     assert requires_full_structured_scan("legacy.xls")
     assert requires_full_structured_scan("mapping.xlsx.gz")
     assert not requires_full_structured_scan("mapping.xlsx")
+
+
+def test_mislabeled_text_xls_uses_delimited_fallback(tmp_path) -> None:
+    path = tmp_path / "trial.xls"
+    path.write_text(
+        "Trial name\tGID\tSelection History\nSAWYT\t123\tSEL-1\n",
+        encoding="utf-8",
+    )
+
+    parts = list(structured_parts(path))
+
+    assert len(parts) == 1
+    part_name, frame = parts[0]
+    assert part_name == "sheet:text_fallback"
+    assert frame.iloc[0].tolist() == ["Trial name", "GID", "Selection History"]
+    assert frame.iloc[1].tolist() == ["SAWYT", "123", "SEL-1"]
