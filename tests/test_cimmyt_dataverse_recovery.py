@@ -14,6 +14,7 @@ from server_genotype_recovery.fetch_cimmyt_dataverse_recovery import (
     repository_search_text,
     scan_file_for_terms,
     scan_file_for_indexed_terms,
+    select_download_candidates,
 )
 
 
@@ -220,3 +221,21 @@ def test_pagination_marks_failed_request_incomplete() -> None:
     assert stop
     assert not complete
     assert reason == "request_failed"
+
+
+def test_target_only_download_selection_never_fills_with_generic_files() -> None:
+    rows = [
+        {"datafile_id": "target", "candidate_role": "pedigree"},
+        {"datafile_id": "generic", "candidate_role": "marker"},
+    ]
+    selected = select_download_candidates(rows, {"target"}, target_only=True)
+    assert [row["datafile_id"] for row in selected] == ["target"]
+
+
+def test_target_only_download_requires_explicit_ids() -> None:
+    try:
+        select_download_candidates([], set(), target_only=True)
+    except ValueError as exc:
+        assert "requires at least one" in str(exc)
+    else:
+        raise AssertionError("target-only selection accepted an empty target set")

@@ -194,6 +194,28 @@ def candidate_download_sort_key(
     )
 
 
+def select_download_candidates(
+    file_rows: list[dict[str, object]],
+    target_datafile_ids: set[str],
+    *,
+    target_only: bool,
+) -> list[dict[str, object]]:
+    if target_only:
+        if not target_datafile_ids:
+            raise ValueError("--target-only requires at least one --target-datafile-id")
+        return [
+            row
+            for row in file_rows
+            if clean(row.get("datafile_id")) in target_datafile_ids
+        ]
+    return [
+        row
+        for row in file_rows
+        if row["candidate_role"] != "none"
+        or clean(row.get("datafile_id")) in target_datafile_ids
+    ]
+
+
 def response_data(payload: dict | None) -> object:
     if not isinstance(payload, dict) or payload.get("status") not in {None, "OK"}:
         return None
@@ -637,6 +659,11 @@ def main() -> None:
     parser.add_argument("--scan-all-resolver-terms", action="store_true")
     parser.add_argument("--include-restricted", action="store_true")
     parser.add_argument("--target-datafile-id", action="append", default=[])
+    parser.add_argument(
+        "--target-only",
+        action="store_true",
+        help="Download only explicitly targeted datafile IDs.",
+    )
     parser.add_argument("--max-download-files", type=int, default=10)
     parser.add_argument("--max-file-bytes", type=int, default=25 * 1024 * 1024)
     parser.add_argument("--max-total-download-bytes", type=int, default=100 * 1024 * 1024)
@@ -854,12 +881,9 @@ def main() -> None:
     download_dir.mkdir(parents=True, exist_ok=True)
     target_datafile_ids = {clean(value) for value in args.target_datafile_id if clean(value)}
     if args.download_candidates:
-        candidates = [
-            row
-            for row in file_rows
-            if row["candidate_role"] != "none"
-            or clean(row["datafile_id"]) in target_datafile_ids
-        ]
+        candidates = select_download_candidates(
+            file_rows, target_datafile_ids, target_only=args.target_only
+        )
         candidates.sort(
             key=lambda row: candidate_download_sort_key(
                 row, target_datafile_ids, args.include_restricted
@@ -945,6 +969,7 @@ def main() -> None:
         {"metric": "candidate_marker_files", "value": sum(row["candidate_role"] in {"marker", "marker_and_pedigree"} for row in file_rows)},
         {"metric": "candidate_pedigree_files", "value": sum(row["candidate_role"] in {"pedigree", "marker_and_pedigree"} for row in file_rows)},
         {"metric": "target_datafile_ids_requested", "value": len(target_datafile_ids)},
+        {"metric": "target_only_download", "value": args.target_only},
         {"metric": "target_datafile_ids_found", "value": len(target_datafile_ids.intersection({clean(row["datafile_id"]) for row in file_rows}))},
         {"metric": "target_datafile_ids_downloaded", "value": len(target_datafile_ids.intersection({clean(row["datafile_id"]) for row in downloads if row.get("download_status") in {"DOWNLOADED", "REUSED"}}))},
         {"metric": "downloaded_files", "value": downloaded_files},
@@ -977,6 +1002,7 @@ def main() -> None:
             "scan_all_resolver_terms": args.scan_all_resolver_terms,
             "include_restricted": args.include_restricted,
             "target_datafile_ids": sorted(target_datafile_ids),
+            "target_only": args.target_only,
             "max_download_files": args.max_download_files,
             "max_file_bytes": args.max_file_bytes,
             "max_total_download_bytes": args.max_total_download_bytes,

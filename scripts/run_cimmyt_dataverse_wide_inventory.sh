@@ -15,6 +15,8 @@ INCLUDE_RESTRICTED="${CIMMYT_DATAVERSE_INCLUDE_RESTRICTED:-0}"
 MAX_FILES="${CIMMYT_DATAVERSE_MAX_DOWNLOAD_FILES:-250}"
 MAX_FILE_BYTES="${CIMMYT_DATAVERSE_MAX_FILE_BYTES:-104857600}"
 MAX_TOTAL_BYTES="${CIMMYT_DATAVERSE_MAX_TOTAL_BYTES:-2147483648}"
+TARGET_DATAFILE_IDS="${CIMMYT_DATAVERSE_TARGET_DATAFILE_IDS:-}"
+TARGET_ONLY="${CIMMYT_DATAVERSE_TARGET_ONLY:-0}"
 
 if [[ -z "${CIMMYT_DATAVERSE_TOKEN:-}" ]]; then
   echo "ERROR: CIMMYT_DATAVERSE_TOKEN is not set" >&2
@@ -65,6 +67,15 @@ if [[ "$DOWNLOAD" == "1" ]]; then
 fi
 if [[ "$INCLUDE_RESTRICTED" == "1" ]]; then
   args+=(--include-restricted)
+fi
+if [[ -n "$TARGET_DATAFILE_IDS" ]]; then
+  IFS=',' read -r -a target_ids <<< "$TARGET_DATAFILE_IDS"
+  for datafile_id in "${target_ids[@]}"; do
+    [[ -n "$datafile_id" ]] && args+=(--target-datafile-id "$datafile_id")
+  done
+fi
+if [[ "$TARGET_ONLY" == "1" ]]; then
+  args+=(--target-only)
 fi
 
 echo "[$(date '+%F %T')] START wide CIMMYT Dataverse inventory"
