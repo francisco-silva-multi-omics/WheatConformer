@@ -14,6 +14,9 @@ from server_genotype_recovery.plan_cimmyt_dataverse_tier2 import (
     build_inventory,
     evidence_crop_summary,
     local_reuse_manifest,
+    remaining_candidate_inventory,
+    remaining_candidate_summary,
+    remaining_dataset_bundles,
     tier2_file_class,
 )
 
@@ -86,7 +89,12 @@ def test_crop_scope_requires_explicit_wheat_and_rejects_maize() -> None:
 def test_plans_require_dataset_local_mapping_and_explicit_restricted_access() -> None:
     files = pd.DataFrame(
         [
-            candidate("doi:a", "a-map", "SampleIDvsGID.txt", role="marker_and_pedigree"),
+            candidate(
+                "doi:a",
+                "a-map",
+                "SampleIDvsGID.txt",
+                role="marker_and_pedigree",
+            ),
             candidate("doi:a", "a-snp", "wheat_80K_SNP_calls.vcf.gz", filesize=500),
             candidate("doi:b", "b-map", "germplasm_list.xlsx", role="pedigree"),
             candidate(
@@ -122,8 +130,16 @@ def test_plans_require_dataset_local_mapping_and_explicit_restricted_access() ->
     )
     search = pd.DataFrame(
         [
-            {"dataset_persistent_id": "doi:a", "global_id": "", "dataset_name": "Wheat 80K genotyping"},
-            {"dataset_persistent_id": "doi:b", "global_id": "", "dataset_name": "HiBAP wheat 35K"},
+            {
+                "dataset_persistent_id": "doi:a",
+                "global_id": "",
+                "dataset_name": "Wheat 80K genotyping",
+            },
+            {
+                "dataset_persistent_id": "doi:b",
+                "global_id": "",
+                "dataset_name": "HiBAP wheat 35K",
+            },
             {"dataset_persistent_id": "doi:c", "global_id": "", "dataset_name": "Wheat DArTseq calls"},
             {"dataset_persistent_id": "doi:d", "global_id": "", "dataset_name": "CIMMYT Maize Line SNPs"},
         ]
@@ -225,6 +241,74 @@ def test_verified_or_probable_local_files_are_not_selected() -> None:
     assert plan.loc["a-snp", "plan_status"] == (
         "DEFERRED_LOCAL_EQUIVALENCE_REVIEW"
     )
+
+
+def test_remaining_candidate_reports_join_both_plan_dispositions() -> None:
+    files = pd.DataFrame(
+        [
+            candidate("doi:a", "a-map", "SampleIDvsGID.txt", role="marker_and_pedigree"),
+            candidate("doi:a", "a-snp", "wheat_80K_SNP_calls.vcf.gz", filesize=500),
+            candidate(
+                "doi:b",
+                "b-map",
+                "germplasm_list.xlsx",
+                role="pedigree",
+            ),
+            candidate(
+                "doi:b",
+                "b-snp",
+                "HiBAP_35K_SNP_calls.txt",
+                restricted=True,
+                filesize=700,
+            ),
+        ]
+    )
+    search = pd.DataFrame(
+        [
+            {"dataset_persistent_id": "doi:a", "global_id": "", "dataset_name": "Wheat 80K genotyping"},
+            {"dataset_persistent_id": "doi:b", "global_id": "", "dataset_name": "HiBAP wheat 35K"},
+        ]
+    )
+    inventory = build_inventory(
+        files,
+        pd.DataFrame(columns=["dataset_persistent_id", "datafile_id"]),
+        pd.DataFrame(columns=["dataset_persistent_id", "query_id", "evidence_class"]),
+        search,
+    )
+    inventory["local_reconciliation_status"] = "NO_LOCAL_MATCH"
+    inventory["local_reuse_verified"] = False
+    inventory["local_equivalence_review_required"] = False
+    inventory = apply_local_availability(inventory)
+    kwargs = dict(
+        max_files=10,
+        max_file_bytes=10_000,
+        max_total_bytes=10_000,
+        marker_files_per_dataset=2,
+        mapping_files_per_dataset=2,
+    )
+    unrestricted = build_download_plan(
+        inventory, include_restricted=False, **kwargs
+    )
+    authorized = build_download_plan(
+        inventory, include_restricted=True, **kwargs
+    )
+
+    remaining = remaining_candidate_inventory(
+        inventory, unrestricted, authorized
+    )
+    by_id = remaining.set_index("datafile_id")
+    assert by_id.loc["b-snp", "unrestricted_plan_status"] == (
+        "AUTHORIZATION_REQUIRED"
+    )
+    assert by_id.loc["b-snp", "authorized_plan_status"] == "SELECTED"
+    summary = remaining_candidate_summary(remaining)
+    bundles = remaining_dataset_bundles(remaining).set_index(
+        "dataset_persistent_id"
+    )
+    assert int(summary["candidate_files"].sum()) == 4
+    assert int(bundles.loc["doi:a", "marker_files"]) == 1
+    assert int(bundles.loc["doi:a", "sample_mapping_files"]) == 1
+    assert int(bundles.loc["doi:b", "restricted_files"]) == 1
 
 
 def test_crop_annotation_accepts_already_gated_structured_evidence() -> None:

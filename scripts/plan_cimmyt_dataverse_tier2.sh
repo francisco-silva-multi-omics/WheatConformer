@@ -10,6 +10,7 @@ OUT_DIR="${CIMMYT_DATAVERSE_TIER2_OUT_DIR:-$RECOVERY_DIR/tier2_inventory}"
 MAX_FILES="${CIMMYT_DATAVERSE_TIER2_MAX_FILES:-20}"
 MAX_FILE_BYTES="${CIMMYT_DATAVERSE_TIER2_MAX_FILE_BYTES:-2147483648}"
 MAX_TOTAL_BYTES="${CIMMYT_DATAVERSE_TIER2_MAX_TOTAL_BYTES:-10737418240}"
+MAX_LOCAL_HASH_BYTES="${CIMMYT_DATAVERSE_TIER2_MAX_LOCAL_HASH_BYTES:-2147483648}"
 MARKER_FILES_PER_DATASET="${CIMMYT_DATAVERSE_TIER2_MARKER_FILES_PER_DATASET:-1}"
 MAPPING_FILES_PER_DATASET="${CIMMYT_DATAVERSE_TIER2_MAPPING_FILES_PER_DATASET:-2}"
 
@@ -23,9 +24,12 @@ cd "$ROOT"
   --max-files "$MAX_FILES" \
   --max-file-bytes "$MAX_FILE_BYTES" \
   --max-total-bytes "$MAX_TOTAL_BYTES" \
+  --max-local-hash-bytes "$MAX_LOCAL_HASH_BYTES" \
   --marker-files-per-dataset "$MARKER_FILES_PER_DATASET" \
   --mapping-files-per-dataset "$MAPPING_FILES_PER_DATASET"
 
 echo "Tier-2 inventory: $OUT_DIR/dataverse_tier2_file_inventory.tsv"
+echo "Remaining candidates: $OUT_DIR/dataverse_tier2_remaining_candidate_files.tsv"
+echo "Remaining dataset bundles: $OUT_DIR/dataverse_tier2_remaining_dataset_bundles.tsv"
 echo "Unrestricted targets: $OUT_DIR/dataverse_tier2_unrestricted_target_datafile_ids.txt"
 echo "Authorized targets: $OUT_DIR/dataverse_tier2_authorized_target_datafile_ids.txt"

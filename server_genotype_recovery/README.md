@@ -346,8 +346,14 @@ only when a sample mapping exists in the same dataset or has already been
 downloaded. Only files with explicit wheat, Triticum or recognized wheat-trial
 evidence can be selected; maize and other crops are excluded, while ambiguous
 datasets require manual review. Defaults are 20 files, 2 GiB per file and 10 GiB
-total; files beyond those limits remain explicitly deferred. The structured
-evidence audit applies the same wheat-only gate before pedigree evidence is
+total; files beyond those limits remain explicitly deferred. The remaining-file
+review is written to `dataverse_tier2_remaining_candidate_files.tsv`, with both
+unrestricted and authorized dispositions, and to
+`dataverse_tier2_remaining_dataset_bundles.tsv`, which aggregates remaining
+marker and sample-mapping files by dataset, restriction, size, platform and
+local-equivalence status. `CIMMYT_DATAVERSE_TIER2_MAX_LOCAL_HASH_BYTES` controls
+local checksum work independently from the prospective download-file limit.
+The structured evidence audit applies the same wheat-only gate before pedigree evidence is
 created and imports only checksum-certified entries from
 `dataverse_tier2_local_reuse_manifest.tsv`. The planner reads file metadata and
 bytes needed for checksums, but no phenotype values or evaluation outcomes, and

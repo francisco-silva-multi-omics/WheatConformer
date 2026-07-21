@@ -402,7 +402,7 @@ def apply_local_availability(inventory: pd.DataFrame) -> pd.DataFrame:
         .gt(0)
     )
     local["dataset_has_available_wheat_sample_mapping"] = (
-        local["dataset_persistent_id"].map(available_wheat_mapping).fillna(False)
+        local["dataset_persistent_id"].map(available_wheat_mapping).eq(True)
     )
     local["mapping_support_status"] = "missing_sample_mapping"
     local.loc[
@@ -618,6 +618,175 @@ def dataset_summary(inventory: pd.DataFrame) -> pd.DataFrame:
     )
 
 
+def _join_unique(values: pd.Series) -> str:
+    return ";".join(sorted({clean(value) for value in values if clean(value)}))
+
+
+def remaining_candidate_inventory(
+    inventory: pd.DataFrame,
+    unrestricted_plan: pd.DataFrame,
+    authorized_plan: pd.DataFrame,
+) -> pd.DataFrame:
+    remaining = inventory[
+        inventory["tier2_file_class"].isin(MARKER_CLASSES | MAPPING_CLASSES)
+        & ~inventory["already_available"].map(as_bool)
+    ].copy()
+    plan_columns = [
+        "dataset_persistent_id",
+        "datafile_id",
+        "plan_status",
+        "plan_reason",
+        "selection_order",
+    ]
+    for label, plan in (
+        ("unrestricted", unrestricted_plan),
+        ("authorized", authorized_plan),
+    ):
+        dispositions = plan[plan_columns].rename(
+            columns={
+                "plan_status": f"{label}_plan_status",
+                "plan_reason": f"{label}_plan_reason",
+                "selection_order": f"{label}_selection_order",
+            }
+        )
+        remaining = remaining.merge(
+            dispositions,
+            on=["dataset_persistent_id", "datafile_id"],
+            how="left",
+            validate="one_to_one",
+        )
+    return remaining.sort_values(
+        [
+            "tier2_priority_score",
+            "dataset_persistent_id",
+            "tier2_file_class",
+            "filesize",
+        ],
+        ascending=[False, True, True, True],
+        kind="stable",
+    )
+
+
+def remaining_candidate_summary(remaining: pd.DataFrame) -> pd.DataFrame:
+    group_columns = [
+        "dataset_persistent_id",
+        "dataset_name",
+        "crop_scope",
+        "restricted",
+        "size_tier",
+        "tier2_file_class",
+        "local_reconciliation_status",
+        "unrestricted_plan_status",
+        "authorized_plan_status",
+    ]
+    if remaining.empty:
+        return pd.DataFrame(
+            columns=group_columns
+            + [
+                "candidate_files",
+                "candidate_bytes",
+                "platform_labels",
+                "max_priority_score",
+                "structured_matched_query_ids",
+                "structured_unique_selection_query_ids",
+            ]
+        )
+    return (
+        remaining.groupby(group_columns, dropna=False)
+        .agg(
+            candidate_files=("datafile_id", "nunique"),
+            candidate_bytes=("filesize", "sum"),
+            platform_labels=("platform_labels", _join_unique),
+            max_priority_score=("tier2_priority_score", "max"),
+            structured_matched_query_ids=("structured_matched_query_ids", "max"),
+            structured_unique_selection_query_ids=(
+                "structured_unique_selection_query_ids",
+                "max",
+            ),
+        )
+        .reset_index()
+        .sort_values(
+            ["max_priority_score", "candidate_bytes", "dataset_persistent_id"],
+            ascending=[False, True, True],
+            kind="stable",
+        )
+    )
+
+
+def remaining_dataset_bundles(remaining: pd.DataFrame) -> pd.DataFrame:
+    if remaining.empty:
+        return pd.DataFrame(
+            columns=[
+                "dataset_persistent_id",
+                "dataset_name",
+                "crop_scope",
+                "candidate_files",
+                "candidate_bytes",
+                "marker_files",
+                "marker_bytes",
+                "sample_mapping_files",
+                "sample_mapping_bytes",
+                "restricted_files",
+                "local_equivalence_review_files",
+                "size_tiers",
+                "platform_labels",
+                "unrestricted_plan_statuses",
+                "authorized_plan_statuses",
+                "max_priority_score",
+                "structured_unique_selection_query_ids",
+            ]
+        )
+    marker_mask = remaining["tier2_file_class"].isin(MARKER_CLASSES)
+    mapping_mask = remaining["tier2_file_class"].isin(MAPPING_CLASSES)
+    local_review_mask = remaining["local_equivalence_review_required"].map(as_bool)
+    return (
+        remaining.groupby(
+            ["dataset_persistent_id", "dataset_name", "crop_scope"],
+            dropna=False,
+        )
+        .agg(
+            candidate_files=("datafile_id", "nunique"),
+            candidate_bytes=("filesize", "sum"),
+            marker_files=(
+                "datafile_id",
+                lambda values: values[marker_mask.loc[values.index]].nunique(),
+            ),
+            marker_bytes=(
+                "filesize",
+                lambda values: int(values[marker_mask.loc[values.index]].sum()),
+            ),
+            sample_mapping_files=(
+                "datafile_id",
+                lambda values: values[mapping_mask.loc[values.index]].nunique(),
+            ),
+            sample_mapping_bytes=(
+                "filesize",
+                lambda values: int(values[mapping_mask.loc[values.index]].sum()),
+            ),
+            restricted_files=("restricted", "sum"),
+            local_equivalence_review_files=(
+                "datafile_id",
+                lambda values: values[local_review_mask.loc[values.index]].nunique(),
+            ),
+            size_tiers=("size_tier", _join_unique),
+            platform_labels=("platform_labels", _join_unique),
+            unrestricted_plan_statuses=("unrestricted_plan_status", _join_unique),
+            authorized_plan_statuses=("authorized_plan_status", _join_unique),
+            max_priority_score=("tier2_priority_score", "max"),
+            structured_unique_selection_query_ids=(
+                "structured_unique_selection_query_ids",
+                "max",
+            ),
+        )
+        .reset_index()
+        .sort_values(
+            ["max_priority_score", "marker_files", "candidate_bytes"],
+            ascending=[False, False, True],
+            kind="stable",
+        )
+    )
+
+
 def annotate_evidence_crop(
     evidence: pd.DataFrame,
     inventory: pd.DataFrame,
@@ -758,6 +927,12 @@ def main() -> None:
     parser.add_argument("--max-files", type=int, default=20)
     parser.add_argument("--max-file-bytes", type=int, default=2 * 1024**3)
     parser.add_argument("--max-total-bytes", type=int, default=10 * 1024**3)
+    parser.add_argument(
+        "--max-local-hash-bytes",
+        type=int,
+        default=2 * 1024**3,
+        help="Maximum local file size hashed during exact-copy reconciliation.",
+    )
     parser.add_argument("--marker-files-per-dataset", type=int, default=1)
     parser.add_argument("--mapping-files-per-dataset", type=int, default=2)
     parser.add_argument(
@@ -810,7 +985,7 @@ def main() -> None:
     inventory, local_file_inventory = reconcile_local_files(
         inventory,
         local_data_roots,
-        max_hash_bytes=args.max_file_bytes,
+        max_hash_bytes=args.max_local_hash_bytes,
     )
     inventory = apply_local_availability(inventory)
     summary = dataset_summary(inventory)
@@ -834,6 +1009,9 @@ def main() -> None:
         marker_files_per_dataset=args.marker_files_per_dataset,
         mapping_files_per_dataset=args.mapping_files_per_dataset,
     )
+    remaining = remaining_candidate_inventory(inventory, unrestricted, authorized)
+    remaining_summary = remaining_candidate_summary(remaining)
+    remaining_bundles = remaining_dataset_bundles(remaining)
     inventory.to_csv(
         out_dir / "dataverse_tier2_file_inventory.tsv", sep="\t", index=False
     )
@@ -851,6 +1029,21 @@ def main() -> None:
     )
     summary.to_csv(
         out_dir / "dataverse_tier2_dataset_summary.tsv", sep="\t", index=False
+    )
+    remaining.to_csv(
+        out_dir / "dataverse_tier2_remaining_candidate_files.tsv",
+        sep="\t",
+        index=False,
+    )
+    remaining_summary.to_csv(
+        out_dir / "dataverse_tier2_remaining_candidate_summary.tsv",
+        sep="\t",
+        index=False,
+    )
+    remaining_bundles.to_csv(
+        out_dir / "dataverse_tier2_remaining_dataset_bundles.tsv",
+        sep="\t",
+        index=False,
     )
     crop_evidence.to_csv(
         out_dir / "dataverse_tier2_structured_evidence_crop_audit.tsv",
@@ -877,6 +1070,9 @@ def main() -> None:
             {"metric": "local_exact_checksum_reuses", "value": int(inventory["local_reuse_verified"].sum())},
             {"metric": "local_structured_evidence_reuses", "value": len(reuse)},
             {"metric": "local_equivalence_reviews", "value": int(inventory["local_equivalence_review_required"].sum())},
+            {"metric": "remaining_marker_or_mapping_files", "value": len(remaining)},
+            {"metric": "remaining_marker_or_mapping_bytes", "value": int(remaining["filesize"].sum())},
+            {"metric": "remaining_candidate_datasets", "value": remaining["dataset_persistent_id"].nunique()},
             {"metric": "wheat_confirmed_files", "value": int(inventory["crop_scope"].eq(WHEAT_CONFIRMED).sum())},
             {"metric": "non_wheat_excluded_files", "value": int(inventory["crop_scope"].eq(NON_WHEAT_EXCLUDED).sum())},
             {"metric": "ambiguous_crop_files", "value": int(inventory["crop_scope"].eq(AMBIGUOUS_REVIEW).sum())},
@@ -904,6 +1100,7 @@ def main() -> None:
             "max_files": args.max_files,
             "max_file_bytes": args.max_file_bytes,
             "max_total_bytes": args.max_total_bytes,
+            "max_local_hash_bytes": args.max_local_hash_bytes,
             "marker_files_per_dataset": args.marker_files_per_dataset,
             "mapping_files_per_dataset": args.mapping_files_per_dataset,
         },
