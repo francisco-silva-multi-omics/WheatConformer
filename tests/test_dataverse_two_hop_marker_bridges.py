@@ -5,6 +5,8 @@ import pandas as pd
 from server_genotype_recovery.audit_dataverse_two_hop_marker_bridges import (
     bridge_confidence,
     build_bridges,
+    canonical_gid,
+    collect_direct_gid_mapping_aliases,
     infer_mapping_headers,
     infer_marker_sample_header_row,
     marker_axis_candidate,
@@ -133,7 +135,7 @@ def test_two_hop_file_selection_is_dataset_local() -> None:
         ]
     )
 
-    selected, mapping_parts, marker_paths = select_two_hop_downloads(
+    selected, mapping_parts, direct_mapping_paths, marker_paths = select_two_hop_downloads(
         downloads, evidence
     )
 
@@ -142,4 +144,36 @@ def test_two_hop_file_selection_is_dataset_local() -> None:
         "/data/a_calls.txt",
     }
     assert mapping_parts == {("/data/a_mapping.xlsx", "sheet:lines")}
+    assert direct_mapping_paths == {"/data/a_mapping.xlsx"}
     assert marker_paths == {"/data/a_calls.txt"}
+
+
+def test_direct_numeric_gid_mapping_recovers_sample_alias() -> None:
+    downloads = pd.DataFrame(
+        [
+            {
+                "dataset_persistent_id": "doi:a",
+                "filename": "SampleIDvsGID_45610samples.txt",
+                "description": "sample mapping",
+                "local_path": "/data/SampleIDvsGID.txt",
+            }
+        ]
+    )
+    frames = {
+        ("/data/SampleIDvsGID.txt", "file"): pd.DataFrame(
+            [
+                ["SampleID", "GID"],
+                ["SEEDSynt979", "4025994"],
+                ["SEEDSynt1048", "916212"],
+            ]
+        )
+    }
+
+    aliases = collect_direct_gid_mapping_aliases(
+        {"GID4025994"}, downloads, frames
+    )
+
+    assert canonical_gid("004025994") == "GID4025994"
+    assert len(aliases) == 1
+    assert aliases.iloc[0]["query_id"] == "GID4025994"
+    assert aliases.iloc[0]["external_alias"] == "SEEDSynt979"

@@ -19,6 +19,10 @@ from server_genotype_recovery.fetch_brapi_pedigree_markers import (
     write_json_atomic,
 )
 
+MAPPING_IDENTITY_CLASSES = {
+    "direct_gid_exact",
+    "selection_history_exact_unique",
+}
 
 BRIDGE_COLUMNS = [
     "query_id",
@@ -119,6 +123,7 @@ def infer_mapping_headers(frame: pd.DataFrame) -> tuple[int | None, dict[int, st
         "SELECTIONHISTORY",
         "ORIGIN",
         "SAMPLE35K",
+        "SAMPLEID",
     }
     best_row: int | None = None
     best_score = 0
@@ -200,9 +205,9 @@ def load_frames(
 def select_two_hop_downloads(
     downloads: pd.DataFrame,
     evidence: pd.DataFrame,
-) -> tuple[pd.DataFrame, set[tuple[str, str]], set[str]]:
+) -> tuple[pd.DataFrame, set[tuple[str, str]], set[str], set[str]]:
     mapping = evidence[
-        evidence["evidence_class"].eq("selection_history_exact_unique")
+        evidence["evidence_class"].isin(MAPPING_IDENTITY_CLASSES)
         & evidence["source_subtype"].eq("germplasm_or_sample_mapping")
     ]
     mapping_parts = {
@@ -210,19 +215,37 @@ def select_two_hop_downloads(
         for row in mapping[["local_path", "source_part"]].to_dict("records")
         if clean(row["local_path"]) and clean(row["source_part"])
     }
-    mapping_datasets = set(mapping["dataset_persistent_id"].map(clean)) - {""}
-    marker_mask = downloads.apply(
-        lambda row: (
-            clean(row.get("dataset_persistent_id")) in mapping_datasets
-            and source_subtype(row.get("filename"), row.get("description"))
-            == "marker_matrix_candidate"
-        ),
+    subtype = downloads.apply(
+        lambda row: source_subtype(row.get("filename"), row.get("description")),
         axis=1,
     )
+    mapping_candidate_mask = subtype.eq("germplasm_or_sample_mapping")
+    marker_candidate_mask = subtype.eq("marker_matrix_candidate")
+    mapping_datasets = set(mapping["dataset_persistent_id"].map(clean)) - {""}
+    explicit_mapping_datasets = set(
+        downloads.loc[mapping_candidate_mask, "dataset_persistent_id"].map(clean)
+    )
+    marker_datasets = set(
+        downloads.loc[marker_candidate_mask, "dataset_persistent_id"].map(clean)
+    )
+    bridge_datasets = (mapping_datasets | explicit_mapping_datasets) & marker_datasets
+    marker_mask = marker_candidate_mask & downloads["dataset_persistent_id"].map(
+        clean
+    ).isin(bridge_datasets)
+    direct_mapping_mask = mapping_candidate_mask & downloads[
+        "dataset_persistent_id"
+    ].map(clean).isin(bridge_datasets)
     marker_paths = set(downloads.loc[marker_mask, "local_path"].map(clean)) - {""}
-    required_paths = {path for path, _ in mapping_parts} | marker_paths
+    direct_mapping_paths = set(
+        downloads.loc[direct_mapping_mask, "local_path"].map(clean)
+    ) - {""}
+    required_paths = (
+        {path for path, _ in mapping_parts}
+        | direct_mapping_paths
+        | marker_paths
+    )
     selected = downloads[downloads["local_path"].map(clean).isin(required_paths)].copy()
-    return selected, mapping_parts, marker_paths
+    return selected, mapping_parts, direct_mapping_paths, marker_paths
 
 
 def collect_mapping_aliases(
@@ -230,7 +253,7 @@ def collect_mapping_aliases(
     frames: dict[tuple[str, str], pd.DataFrame],
 ) -> pd.DataFrame:
     selected = evidence[
-        (evidence["evidence_class"] == "selection_history_exact_unique")
+        evidence["evidence_class"].isin(MAPPING_IDENTITY_CLASSES)
         & (evidence["source_subtype"] == "germplasm_or_sample_mapping")
     ].copy()
     rows: list[dict[str, object]] = []
@@ -280,6 +303,106 @@ def collect_mapping_aliases(
             "mapping_header_row",
         ])
     return pd.DataFrame(rows).drop_duplicates()
+
+
+def canonical_gid(value: object) -> str:
+    normalized = normalized_identifier(value)
+    match = re.fullmatch(r"(?:GID)?0*([1-9][0-9]*)", normalized)
+    return f"GID{match.group(1)}" if match else ""
+
+
+def collect_direct_gid_mapping_aliases(
+    resolver_gids: set[str],
+    downloads: pd.DataFrame,
+    frames: dict[tuple[str, str], pd.DataFrame],
+) -> pd.DataFrame:
+    rows: list[dict[str, object]] = []
+    mapping_downloads = downloads[
+        downloads.apply(
+            lambda row: source_subtype(row.get("filename"), row.get("description"))
+            == "germplasm_or_sample_mapping",
+            axis=1,
+        )
+    ]
+    by_path = {
+        clean(row["local_path"]): row for row in mapping_downloads.to_dict("records")
+    }
+    for (path, part), frame in frames.items():
+        source = by_path.get(path)
+        if source is None:
+            continue
+        header_row, headers = infer_mapping_headers(frame)
+        if header_row is None:
+            continue
+        normalized_headers = {
+            column: normalized_identifier(header) for column, header in headers.items()
+        }
+        gid_columns = [
+            column
+            for column, header in normalized_headers.items()
+            if header in {"GID", "CIMMYTGID", "GENERALIDENTIFIER"}
+        ]
+        alias_columns = [
+            column
+            for column, header in normalized_headers.items()
+            if header in {"SAMPLEID", "SAMPLE35K", "DNAID", "DARTSAMPLEID"}
+        ]
+        if not gid_columns or not alias_columns:
+            continue
+        for row_number in range(header_row + 1, len(frame)):
+            values = frame.iloc[row_number].tolist()
+            gids = {
+                canonical_gid(values[column])
+                for column in gid_columns
+                if column < len(values)
+            } & resolver_gids
+            if not gids:
+                continue
+            for alias_column in alias_columns:
+                if alias_column >= len(values):
+                    continue
+                alias = clean(values[alias_column])
+                normalized_alias = normalized_identifier(alias)
+                if not plausible_external_alias(
+                    alias, headers.get(alias_column, "")
+                ):
+                    continue
+                for gid in gids:
+                    rows.append(
+                        {
+                            "query_id": gid,
+                            "query_text": gid,
+                            "dataset_persistent_id": source.get(
+                                "dataset_persistent_id", ""
+                            ),
+                            "external_alias": alias,
+                            "normalized_external_alias": normalized_alias,
+                            "mapping_filename": source.get("filename", ""),
+                            "mapping_source_part": part,
+                            "mapping_source_row": row_number,
+                            "mapping_source_column": alias_column,
+                            "mapping_column_header": headers.get(alias_column, ""),
+                            "mapping_header_row": header_row,
+                        }
+                    )
+    columns = [
+        "query_id",
+        "query_text",
+        "dataset_persistent_id",
+        "external_alias",
+        "normalized_external_alias",
+        "mapping_filename",
+        "mapping_source_part",
+        "mapping_source_row",
+        "mapping_source_column",
+        "mapping_column_header",
+        "mapping_header_row",
+    ]
+    return (
+        pd.DataFrame(rows, columns=columns).drop_duplicates()
+        if rows
+        else pd.DataFrame(columns=columns)
+    )
 
 
 def collect_marker_locations(
@@ -387,6 +510,11 @@ def main() -> None:
         type=Path,
         default=Path("genotype_panels/cimmyt_dataverse_recovery_v1/batch_00000_00010_ranked"),
     )
+    parser.add_argument(
+        "--resolver-query",
+        type=Path,
+        default=Path("genotype_panels/germplasm_resolver/germplasm_cross_query.tsv"),
+    )
     parser.add_argument("--out-dir", type=Path, default=None)
     args = parser.parse_args()
 
@@ -398,11 +526,69 @@ def main() -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     downloads_path = recovery_dir / "dataverse_downloads.tsv"
     evidence_path = structured_dir / "dataverse_structured_evidence.tsv.gz"
-    if not downloads_path.is_file() or not evidence_path.is_file():
-        raise FileNotFoundError("Structured evidence and Dataverse downloads are required")
+    source_manifest_path = structured_dir / "dataverse_structured_source_crop_scope.tsv"
+    run_status_path = structured_dir / "dataverse_structured_evidence_run_status.json"
+    local_reuse_path = (
+        recovery_dir / "tier2_inventory/dataverse_tier2_local_reuse_manifest.tsv"
+    )
+    resolver_path = (
+        args.resolver_query
+        if args.resolver_query.is_absolute()
+        else root / args.resolver_query
+    )
+    required = [
+        downloads_path,
+        evidence_path,
+        source_manifest_path,
+        run_status_path,
+        resolver_path,
+    ]
+    missing = [str(path) for path in required if not path.is_file()]
+    if missing:
+        raise FileNotFoundError(
+            f"Completed structured evidence inputs are required: {missing}"
+        )
+    run_status = json.loads(run_status_path.read_text(encoding="utf-8"))
+    if run_status.get("status") != "COMPLETE":
+        raise ValueError(
+            "Structured evidence is incomplete; rerun it before the two-hop audit"
+        )
 
-    downloads = read_table(downloads_path)
-    downloads = downloads[downloads["download_status"].isin(["DOWNLOADED", "REUSED"])].copy()
+    source_manifest = read_table(source_manifest_path)
+    if not source_manifest["crop_scope"].eq("WHEAT_CONFIRMED").all():
+        source_manifest = source_manifest[
+            source_manifest["crop_scope"].eq("WHEAT_CONFIRMED")
+        ].copy()
+    metadata = read_table(downloads_path)
+    metadata = metadata[
+        metadata["download_status"].isin(["DOWNLOADED", "REUSED"])
+    ].copy()
+    if local_reuse_path.is_file():
+        metadata = pd.concat(
+            [metadata, read_table(local_reuse_path)], ignore_index=True
+        )
+    for column in ("description", "candidate_role"):
+        if column not in metadata.columns:
+            metadata[column] = ""
+    metadata = metadata.drop_duplicates(
+        ["dataset_persistent_id", "datafile_id"], keep="last"
+    )
+    downloads = source_manifest.merge(
+        metadata[
+            [
+                "dataset_persistent_id",
+                "datafile_id",
+                "description",
+                "candidate_role",
+            ]
+        ],
+        on=["dataset_persistent_id", "datafile_id"],
+        how="left",
+        validate="one_to_one",
+    )
+    downloads[["description", "candidate_role"]] = downloads[
+        ["description", "candidate_role"]
+    ].fillna("")
     evidence = pd.read_csv(evidence_path, sep="\t", dtype=str)
     if "crop_scope" not in evidence.columns:
         raise ValueError(
@@ -416,16 +602,46 @@ def main() -> None:
             "wheat-gated structured evidence audit"
         )
     evidence["source_row"] = pd.to_numeric(evidence["source_row"], errors="coerce").fillna(-1).astype(int)
-    selected_downloads, mapping_parts, marker_paths = select_two_hop_downloads(
-        downloads, evidence
-    )
+    resolver = read_table(resolver_path)
+    resolver_gid_columns = [
+        column
+        for column in (
+            "sample_id",
+            "query_id",
+            "panel_sample_id_expected",
+            "gid",
+        )
+        if column in resolver.columns
+    ]
+    resolver_gids = {
+        canonical_gid(value)
+        for column in resolver_gid_columns
+        for value in resolver[column]
+        if canonical_gid(value)
+    }
+    if not resolver_gids:
+        raise ValueError("No canonical GIDs were found in the resolver query")
+    (
+        selected_downloads,
+        mapping_parts,
+        direct_mapping_paths,
+        marker_paths,
+    ) = select_two_hop_downloads(downloads, evidence)
     frames, parse_log = load_frames(
         selected_downloads,
         required_parts=mapping_parts,
-        all_parts_paths=marker_paths,
+        all_parts_paths=direct_mapping_paths | marker_paths,
         progress=True,
     )
-    aliases = collect_mapping_aliases(evidence, frames)
+    evidence_aliases = collect_mapping_aliases(evidence, frames)
+    direct_gid_aliases = collect_direct_gid_mapping_aliases(
+        resolver_gids,
+        selected_downloads,
+        frames,
+    )
+    aliases = pd.concat(
+        [evidence_aliases, direct_gid_aliases], ignore_index=True
+    ).drop_duplicates()
     locations = collect_marker_locations(
         set(aliases["normalized_external_alias"]) if not aliases.empty else set(),
         selected_downloads,
@@ -450,8 +666,11 @@ def main() -> None:
     qc = pd.DataFrame(
         [
             {"metric": "structured_unique_selection_gids", "value": evidence.loc[evidence["evidence_class"] == "selection_history_exact_unique", "query_id"].nunique()},
-            {"metric": "downloaded_files_considered", "value": len(downloads)},
+            {"metric": "resolver_canonical_gids", "value": len(resolver_gids)},
+            {"metric": "structured_source_files_considered", "value": len(downloads)},
+            {"metric": "certified_local_reuse_files_considered", "value": int(downloads["source_origin"].eq("certified_local_reuse").sum()) if "source_origin" in downloads.columns else 0},
             {"metric": "dataset_local_files_parsed", "value": len(selected_downloads)},
+            {"metric": "direct_gid_mapping_alias_rows", "value": len(direct_gid_aliases)},
             {"metric": "mapping_alias_candidate_rows", "value": len(aliases)},
             {"metric": "marker_alias_location_rows", "value": len(locations)},
             {"metric": "two_hop_bridge_rows", "value": len(bridges)},
@@ -468,7 +687,10 @@ def main() -> None:
         "status": "complete",
         "selection_data": "downloaded_repository_identifiers_only",
         "downloads_manifest_sha256": sha256_file(downloads_path),
+        "structured_source_manifest_sha256": sha256_file(source_manifest_path),
+        "structured_run_status_sha256": sha256_file(run_status_path),
         "structured_evidence_sha256": sha256_file(evidence_path),
+        "resolver_query_sha256": sha256_file(resolver_path),
         "direct_marker_assignment_ready": False,
         "required_next_certification": "marker_sample_axis_and_call_concordance",
         "phenotype_values_read": False,
