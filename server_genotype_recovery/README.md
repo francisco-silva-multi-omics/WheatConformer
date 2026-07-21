@@ -300,6 +300,30 @@ BCIDs, crosses and parents. Restricted or oversized files remain in the
 candidate manifest with an explicit skip reason. Repository evidence is never
 merged into dosage matrices or pedigree kernels automatically.
 
+The ten-row run is a pilot, not a repository-wide conclusion. Before declaring
+API recovery exhausted, run the discovery-first wide inventory:
+
+```bash
+PYTHON="$HOME/tools/tf_wheat_cpu/bin/python" \
+WHEATCONFORMER_CODE_ROOT="$HOME/tools/WheatConformer" \
+bash "$HOME/tools/WheatConformer/scripts/run_cimmyt_dataverse_wide_inventory.sh" \
+  /DATA2/estancias/tesis_javier/model_DATA/genotipoXambiente
+```
+
+This mode performs no resolver-specific API searches and downloads nothing by
+default. It paginates broad wheat/Triticum genotype, marker, germplasm and
+pedigree queries, inventories every discovered dataset/file, and writes
+`dataverse_search_coverage.tsv`. Every row must have `search_complete=True`
+before discovery is called complete. It still builds the full 12,711-row local
+resolver term catalog for the later content scan.
+
+Review the complete candidate manifest before enabling downloads. A second run
+in the same directory with `CIMMYT_DATAVERSE_WIDE_DOWNLOAD_CANDIDATES=1` reuses
+cached API responses and downloads ranked, unrestricted candidates within the
+configured file and byte budgets. Large or restricted marker files should be
+targeted explicitly after reviewing their dataset, sample map and authorization
+rather than increasing global budgets blindly.
+
 Candidate downloads are ranked by resolver-linked search evidence, file role,
 machine readability and GID/pedigree relevance. Restricted files remain opt-in;
 set `CIMMYT_DATAVERSE_INCLUDE_RESTRICTED=1` only when the account is authorized

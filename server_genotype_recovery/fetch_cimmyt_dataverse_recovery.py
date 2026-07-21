@@ -46,6 +46,18 @@ SEARCH_COLUMNS = [
     "published_at",
     "raw_json",
 ]
+SEARCH_COVERAGE_COLUMNS = [
+    "query_scope",
+    "query_id",
+    "query_kind",
+    "query_text",
+    "repository_query_text",
+    "pages_requested",
+    "returned_rows",
+    "reported_total_count",
+    "search_complete",
+    "stopped_reason",
+]
 FILE_COLUMNS = [
     "dataset_persistent_id",
     "dataset_version",
@@ -608,6 +620,9 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    if args.per_page <= 0 or args.max_pages <= 0:
+        raise ValueError("--per-page and --max-pages must both be positive")
+
     token = os.environ.get(args.token_env, "").strip()
     if not token:
         raise RuntimeError(
@@ -658,6 +673,7 @@ def main() -> None:
         raise RuntimeError("CIMMYT Dataverse token validation failed; see dataverse_failures.tsv")
 
     search_rows: list[dict[str, object]] = []
+    search_coverage_rows: list[dict[str, object]] = []
     query_specs = [
         ("resolver", str(term["query_id"]), str(term["query_kind"]), str(term["query_text"]))
         for term in terms
@@ -672,7 +688,13 @@ def main() -> None:
             f"kind={query_kind} query_id={query_id}",
             flush=True,
         )
+        pages_requested = 0
+        returned_rows = 0
+        reported_total_count: int | None = None
+        search_complete = False
+        stopped_reason = "max_pages_reached"
         for page in range(args.max_pages):
+            pages_requested += 1
             payload = client.request_json(
                 "api/search",
                 [
@@ -686,8 +708,15 @@ def main() -> None:
             )
             data = response_data(payload)
             items = data.get("items") if isinstance(data, dict) else []
+            if isinstance(data, dict):
+                raw_total = data.get("total_count", data.get("totalCount"))
+                try:
+                    reported_total_count = int(raw_total)
+                except (TypeError, ValueError):
+                    pass
             for item in items or []:
                 if isinstance(item, dict):
+                    returned_rows += 1
                     search_rows.append(
                         normalize_search_item(
                             item,
@@ -698,11 +727,42 @@ def main() -> None:
                             repository_query,
                         )
                     )
-            if not items or len(items) < args.per_page:
+            if not items:
+                search_complete = True
+                stopped_reason = "no_more_results"
                 break
+            if reported_total_count is not None and returned_rows >= reported_total_count:
+                search_complete = True
+                stopped_reason = "reported_total_reached"
+                break
+            if len(items) < args.per_page:
+                search_complete = True
+                stopped_reason = "short_final_page"
+                break
+        search_coverage_rows.append(
+            {
+                "query_scope": scope,
+                "query_id": query_id,
+                "query_kind": query_kind,
+                "query_text": query_text,
+                "repository_query_text": repository_query,
+                "pages_requested": pages_requested,
+                "returned_rows": returned_rows,
+                "reported_total_count": (
+                    reported_total_count if reported_total_count is not None else ""
+                ),
+                "search_complete": search_complete,
+                "stopped_reason": stopped_reason,
+            }
+        )
         time.sleep(args.sleep)
 
     write_tsv(search_rows, out_dir / "dataverse_search_results.tsv", SEARCH_COLUMNS)
+    write_tsv(
+        search_coverage_rows,
+        out_dir / "dataverse_search_coverage.tsv",
+        SEARCH_COVERAGE_COLUMNS,
+    )
     persistent_ids = {
         clean(row["global_id"])
         for row in search_rows
@@ -840,6 +900,19 @@ def main() -> None:
         {"metric": "content_scan_resolver_rows", "value": len(resolver_frame) if args.scan_all_resolver_terms else len(selected)},
         {"metric": "content_scan_terms", "value": len(scan_terms)},
         {"metric": "discovery_queries", "value": len(discovery)},
+        {"metric": "search_queries_total", "value": len(search_coverage_rows)},
+        {
+            "metric": "search_queries_complete",
+            "value": sum(bool(row["search_complete"]) for row in search_coverage_rows),
+        },
+        {
+            "metric": "search_queries_truncated",
+            "value": sum(not bool(row["search_complete"]) for row in search_coverage_rows),
+        },
+        {
+            "metric": "all_search_queries_complete",
+            "value": all(bool(row["search_complete"]) for row in search_coverage_rows),
+        },
         {"metric": "search_result_rows", "value": len(search_rows)},
         {"metric": "datasets_resolved", "value": len(dataset_rows)},
         {"metric": "dataset_file_rows", "value": len(file_rows)},
@@ -873,6 +946,7 @@ def main() -> None:
             "offset": args.offset,
             "per_page": args.per_page,
             "max_pages": args.max_pages,
+            "discovery_queries": discovery,
             "download_candidates": args.download_candidates,
             "scan_all_resolver_terms": args.scan_all_resolver_terms,
             "include_restricted": args.include_restricted,

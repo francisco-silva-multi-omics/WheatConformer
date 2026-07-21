@@ -9,10 +9,13 @@ OUT_DIR="${CIMMYT_DATAVERSE_OUT_DIR:-genotype_panels/cimmyt_dataverse_recovery_v
 LIMIT="${CIMMYT_DATAVERSE_LIMIT:-10}"
 OFFSET="${CIMMYT_DATAVERSE_OFFSET:-0}"
 TIMEOUT="${CIMMYT_DATAVERSE_TIMEOUT:-60}"
+PER_PAGE="${CIMMYT_DATAVERSE_PER_PAGE:-25}"
+MAX_PAGES="${CIMMYT_DATAVERSE_MAX_PAGES:-1}"
 DOWNLOAD="${CIMMYT_DATAVERSE_DOWNLOAD_CANDIDATES:-1}"
 INCLUDE_RESTRICTED="${CIMMYT_DATAVERSE_INCLUDE_RESTRICTED:-0}"
 SCAN_ALL_RESOLVER_TERMS="${CIMMYT_DATAVERSE_SCAN_ALL_RESOLVER_TERMS:-1}"
 TARGET_DATAFILE_IDS="${CIMMYT_DATAVERSE_TARGET_DATAFILE_IDS:-}"
+DISCOVERY_QUERIES="${CIMMYT_DATAVERSE_DISCOVERY_QUERIES:-}"
 MAX_FILES="${CIMMYT_DATAVERSE_MAX_DOWNLOAD_FILES:-10}"
 MAX_FILE_BYTES="${CIMMYT_DATAVERSE_MAX_FILE_BYTES:-26214400}"
 MAX_TOTAL_BYTES="${CIMMYT_DATAVERSE_MAX_TOTAL_BYTES:-104857600}"
@@ -32,6 +35,8 @@ args=(
   --limit "$LIMIT"
   --offset "$OFFSET"
   --timeout "$TIMEOUT"
+  --per-page "$PER_PAGE"
+  --max-pages "$MAX_PAGES"
   --max-download-files "$MAX_FILES"
   --max-file-bytes "$MAX_FILE_BYTES"
   --max-total-download-bytes "$MAX_TOTAL_BYTES"
@@ -49,6 +54,12 @@ if [[ -n "$TARGET_DATAFILE_IDS" ]]; then
   IFS=',' read -r -a target_ids <<< "$TARGET_DATAFILE_IDS"
   for datafile_id in "${target_ids[@]}"; do
     [[ -n "$datafile_id" ]] && args+=(--target-datafile-id "$datafile_id")
+  done
+fi
+if [[ -n "$DISCOVERY_QUERIES" ]]; then
+  IFS='|' read -r -a discovery_queries <<< "$DISCOVERY_QUERIES"
+  for query in "${discovery_queries[@]}"; do
+    [[ -n "$query" ]] && args+=(--discovery-query "$query")
   done
 fi
 
