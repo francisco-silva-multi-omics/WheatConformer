@@ -120,9 +120,11 @@ def test_end_to_end_candidate_adjudication_is_fail_closed(tmp_path: Path) -> Non
         matrix_path=matrix,
         matrix_sha256=sha256_file(matrix),
         panel_id="TEST_PANEL",
+        certified_panel_reference="TEST_PANEL",
         minimum_shared_markers=3,
         minimum_call_concordance=0.995,
-        existing_certified_ids=set(),
+        existing_panel_certified_ids=set(),
+        any_panel_certified_ids=set(),
     )
     by_gid = candidates.groupby("trial_gid")["classification"].first()
     assert by_gid["GID1"] == "accepted_unique_identity"
@@ -143,12 +145,14 @@ def test_regulatory_overlay_preserves_mixed_panel_status() -> None:
                 "panel_id": "PANEL_ACCEPTED",
                 "classification": "accepted_unique_identity",
                 "direct_marker_assignment_ready": True,
+                "existing_certified_in_panel": False,
             },
             {
                 "trial_gid": "GID1",
                 "panel_id": "PANEL_REVIEW",
                 "classification": "requires_metadata_review",
                 "direct_marker_assignment_ready": False,
+                "existing_certified_in_panel": False,
             },
         ]
     )

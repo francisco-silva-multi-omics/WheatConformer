@@ -16,6 +16,7 @@
   ],
   "new_candidate_panel": {
     "panel_id": "SEEDS_DARTSEQ_DATAVERSE_RECOVERY",
+    "certified_panel_reference": "SEEDS_DARTSEQ",
     "canonical_matrix_path": "GENOTYPIC_DATA/Seeds_of_Discovery_-_MasAgro_Biodiversidad_Wheat_DArTseq-Derived_SNP_Data_Beta_Recall_Results_From_2011-2014/SEQ_SNPs_Extract_45610samples_102474markers.txt",
     "matrix_format": "marker_by_sample",
     "delimiter": "tab",

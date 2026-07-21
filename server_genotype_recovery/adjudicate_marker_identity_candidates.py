@@ -60,7 +60,9 @@ CANDIDATE_COLUMNS = [
     "external_record_count",
     "pedigree_conflict_status",
     "pedigree_conflict_reasons",
-    "existing_certified_gid",
+    "certified_panel_reference",
+    "existing_certified_in_panel",
+    "existing_certified_in_any_panel",
     "classification",
     "classification_reasons",
     "direct_marker_assignment_ready",
@@ -440,6 +442,43 @@ def _conflict_lookup(conflicts: pd.DataFrame) -> dict[str, dict[str, str]]:
     return output
 
 
+def load_certified_panel_ids(
+    root: Path,
+    policy: dict[str, object],
+    *,
+    require_all_orders: bool = False,
+) -> dict[str, set[str]]:
+    panel_paths: dict[str, Path] = {}
+    for spec in policy.get("existing_panel_artifacts", []):
+        artifact_dir = resolve(root, str(spec["artifact_dir"]))
+        panel_paths[str(spec["panel_id"])] = artifact_dir / (
+            f"{spec['prefix']}_sample_order.tsv"
+        )
+    for spec in policy.get("direct_certified_panel_orders", []):
+        panel_paths[str(spec["panel_id"])] = resolve(
+            root, str(spec["sample_order_path"])
+        )
+    output: dict[str, set[str]] = {}
+    missing_paths: list[str] = []
+    for panel_id, path in sorted(panel_paths.items()):
+        gids: set[str] = set()
+        if path.is_file():
+            order = read_table(path)
+            if "sample_id" not in order.columns:
+                raise ValueError(f"Certified panel order lacks sample_id: {path}")
+            gids = {canonical_gid(value) for value in order["sample_id"]}
+            gids.discard("")
+        else:
+            missing_paths.append(f"{panel_id}={path}")
+        output[panel_id] = gids
+    if require_all_orders and missing_paths:
+        raise FileNotFoundError(
+            "Cannot calculate global marker-panel novelty because certified sample "
+            f"orders are missing: {missing_paths}"
+        )
+    return output
+
+
 def adjudicate_new_candidates(
     *,
     bridges: pd.DataFrame,
@@ -449,9 +488,11 @@ def adjudicate_new_candidates(
     matrix_path: Path,
     matrix_sha256: str,
     panel_id: str,
+    certified_panel_reference: str,
     minimum_shared_markers: int,
     minimum_call_concordance: float,
-    existing_certified_ids: set[str],
+    existing_panel_certified_ids: set[str],
+    any_panel_certified_ids: set[str],
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     axis, _ = marker_by_sample_axis(matrix_path)
     resolver_lookup = resolver_summary.set_index("trial_gid").to_dict("index")
@@ -561,7 +602,13 @@ def adjudicate_new_candidates(
                     ),
                     "pedigree_conflict_status": conflict.get("status", ""),
                     "pedigree_conflict_reasons": conflict.get("reasons", ""),
-                    "existing_certified_gid": trial_gid in existing_certified_ids,
+                    "certified_panel_reference": certified_panel_reference,
+                    "existing_certified_in_panel": (
+                        trial_gid in existing_panel_certified_ids
+                    ),
+                    "existing_certified_in_any_panel": (
+                        trial_gid in any_panel_certified_ids
+                    ),
                     "classification": preliminary,
                     "classification_reasons": ";".join(reasons),
                     "direct_marker_assignment_ready": preliminary
@@ -611,6 +658,7 @@ def load_existing_panel_candidates(
     panel_specs: list[dict[str, object]],
     resolver_summary: pd.DataFrame,
     minimum_call_concordance: float,
+    any_panel_certified_ids: set[str],
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     resolver_lookup = resolver_summary.set_index("trial_gid").to_dict("index")
     candidate_frames: list[pd.DataFrame] = []
@@ -745,7 +793,11 @@ def load_existing_panel_candidates(
                         "external_record_count": 1,
                         "pedigree_conflict_status": "DIRECT_CANONICAL_GID",
                         "pedigree_conflict_reasons": "",
-                        "existing_certified_gid": trial_gid in certified_ids,
+                        "certified_panel_reference": panel_id,
+                        "existing_certified_in_panel": trial_gid in certified_ids,
+                        "existing_certified_in_any_panel": (
+                            trial_gid in any_panel_certified_ids
+                        ),
                         "classification": classification,
                         "classification_reasons": ";".join(reasons),
                         "direct_marker_assignment_ready": classification in {
@@ -829,7 +881,8 @@ def classification_summary(candidates: pd.DataFrame) -> pd.DataFrame:
                 "classification",
                 "candidate_gids",
                 "sample_rows",
-                "new_candidate_gids",
+                "not_in_panel_certified_order_gids",
+                "not_in_any_certified_panel_gids",
             ]
         )
     rows: list[dict[str, object]] = []
@@ -840,8 +893,11 @@ def classification_summary(candidates: pd.DataFrame) -> pd.DataFrame:
                 **dict(zip(keys, values)),
                 "candidate_gids": group["trial_gid"].nunique(),
                 "sample_rows": len(group),
-                "new_candidate_gids": group.loc[
-                    ~group["existing_certified_gid"].astype(bool), "trial_gid"
+                "not_in_panel_certified_order_gids": group.loc[
+                    ~group["existing_certified_in_panel"].astype(bool), "trial_gid"
+                ].nunique(),
+                "not_in_any_certified_panel_gids": group.loc[
+                    ~group["existing_certified_in_any_panel"].astype(bool), "trial_gid"
                 ].nunique(),
             }
         )
@@ -858,10 +914,18 @@ def regulatory_overlay(candidates: pd.DataFrame) -> pd.DataFrame:
         classes = sorted(set(group["classification"]))
         panels = sorted(set(group["panel_id"]) - {""})
         accepted_panels = sorted(set(accepted["panel_id"]) - {""})
-        if not accepted.empty and not unresolved_group.empty:
+        new_kernel_input = accepted[
+            ~accepted["existing_certified_in_panel"].astype(bool)
+        ]
+        new_panels = sorted(set(new_kernel_input["panel_id"]) - {""})
+        if not new_kernel_input.empty and not unresolved_group.empty:
             status = "accepted_identity_and_candidate_unresolved"
-        elif not accepted.empty:
+        elif not new_kernel_input.empty:
             status = "accepted_identity_marker_qc_pending"
+        elif not accepted.empty and not unresolved_group.empty:
+            status = "already_certified_and_candidate_unresolved"
+        elif not accepted.empty:
+            status = "already_certified_identity"
         else:
             status = "candidate_unresolved"
         rows.append(
@@ -871,15 +935,19 @@ def regulatory_overlay(candidates: pd.DataFrame) -> pd.DataFrame:
                 "marker_identity_classes": ";".join(classes),
                 "candidate_marker_panels": ";".join(panels),
                 "accepted_marker_panels": ";".join(accepted_panels),
+                "newly_accepted_marker_panels": ";".join(new_panels),
                 "candidate_unresolved": not unresolved_group.empty,
-                "accepted_for_new_kernel_input": not accepted.empty,
+                "identity_accepted": not accepted.empty,
+                "accepted_for_new_kernel_input": not new_kernel_input.empty,
                 "eligible_for_K_G": False,
                 "eligible_for_K_z": False,
                 "eligible_for_genotype_specific_sequence": False,
                 "next_required_action": (
                     "build_and_certify_panel_specific_genotype_artifact"
-                    if not accepted.empty
+                    if not new_kernel_input.empty
                     else "resolve_identity_or_marker_sample_conflict"
+                    if not unresolved_group.empty
+                    else "already_present_in_certified_panel_order"
                 ),
             }
         )
@@ -899,6 +967,7 @@ def accepted_entities(candidates: pd.DataFrame) -> pd.DataFrame:
         if not samples:
             raise ValueError(f"Accepted identity has no marker sample: {trial_gid}/{panel_id}")
         classification = classes[0]
+        already_certified = group["existing_certified_in_panel"].astype(bool).all()
         rows.append(
             {
                 "trial_gid": trial_gid,
@@ -913,7 +982,16 @@ def accepted_entities(candidates: pd.DataFrame) -> pd.DataFrame:
                     else "not_required_unique_sample"
                 ),
                 "collapse_materialized": False,
-                "kernel_input_status": "panel_specific_qc_and_matrix_rebuild_required",
+                "existing_certified_in_panel": already_certified,
+                "existing_certified_in_any_panel": group[
+                    "existing_certified_in_any_panel"
+                ].astype(bool).all(),
+                "new_kernel_input_required": not already_certified,
+                "kernel_input_status": (
+                    "already_present_in_certified_panel_order"
+                    if already_certified
+                    else "panel_specific_qc_and_matrix_rebuild_required"
+                ),
             }
         )
     return pd.DataFrame(rows)
@@ -990,6 +1068,81 @@ def validation_checks(
         f"overlay_rows={len(overlay)}",
     )
     return pd.DataFrame(checks)
+
+
+def adjudication_qc(
+    candidates: pd.DataFrame,
+    *,
+    protocol_version: str = "marker_identity_concordance_v1",
+) -> pd.DataFrame:
+    accepted = candidates[candidates["direct_marker_assignment_ready"].astype(bool)]
+    unresolved = candidates[
+        candidates["classification"].isin(
+            {"requires_metadata_review", "family_only_not_assignable"}
+        )
+    ]
+    conflicting = candidates[
+        candidates["classification"].eq("conflicting_marker_samples")
+    ]
+    two_hop = candidates["candidate_scope"].eq("new_dataverse_two_hop")
+    accepted_two_hop = accepted["candidate_scope"].eq("new_dataverse_two_hop")
+    reference_panels = sorted(
+        set(candidates.loc[two_hop, "certified_panel_reference"].astype(str)) - {""}
+    )
+    return pd.DataFrame(
+        [
+            {"metric": "run_status", "value": "PASS"},
+            {
+                "metric": "protocol_version",
+                "value": protocol_version,
+            },
+            {"metric": "candidate_gids", "value": candidates["trial_gid"].nunique()},
+            {
+                "metric": "new_two_hop_candidate_gids",
+                "value": candidates.loc[two_hop, "trial_gid"].nunique(),
+            },
+            {
+                "metric": "accepted_candidate_gids",
+                "value": accepted["trial_gid"].nunique(),
+            },
+            {
+                "metric": "accepted_two_hop_candidate_gids",
+                "value": accepted.loc[accepted_two_hop, "trial_gid"].nunique(),
+            },
+            {
+                "metric": "new_two_hop_certified_panel_reference",
+                "value": ";".join(reference_panels),
+            },
+            {
+                "metric": "accepted_two_hop_new_to_certified_reference_panel_gids",
+                "value": accepted.loc[
+                    accepted_two_hop
+                    & ~accepted["existing_certified_in_panel"].astype(bool),
+                    "trial_gid",
+                ].nunique(),
+            },
+            {
+                "metric": "accepted_two_hop_new_to_any_certified_panel_gids",
+                "value": accepted.loc[
+                    accepted_two_hop
+                    & ~accepted["existing_certified_in_any_panel"].astype(bool),
+                    "trial_gid",
+                ].nunique(),
+            },
+            {
+                "metric": "unresolved_candidate_gids",
+                "value": unresolved["trial_gid"].nunique(),
+            },
+            {
+                "metric": "conflicting_candidate_gids",
+                "value": conflicting["trial_gid"].nunique(),
+            },
+            {"metric": "phenotype_values_read", "value": False},
+            {"metric": "outer_test_metrics_read", "value": False},
+            {"metric": "final_holdout_outcomes_read", "value": False},
+            {"metric": "kernels_modified", "value": False},
+        ]
+    )
 
 
 def main() -> None:
@@ -1078,17 +1231,11 @@ def main() -> None:
     print(f"Hashing canonical marker matrix: {matrix_path}", flush=True)
     matrix_sha256 = sha256_file_with_progress(matrix_path)
     print(f"Canonical marker matrix SHA256: {matrix_sha256}", flush=True)
-    existing_seed_order = (
-        root
-        / "genotype_panels/recovered/seeds_dartseq/"
-        "K_G_SEEDS_DARTSEQ_sample_order.tsv"
+    certified_ids = load_certified_panel_ids(root, policy, require_all_orders=True)
+    any_panel_certified_ids = set().union(*certified_ids.values())
+    certified_panel_reference = str(
+        new_spec.get("certified_panel_reference", new_spec["panel_id"])
     )
-    existing_ids = set()
-    if existing_seed_order.is_file():
-        order = read_table(existing_seed_order)
-        if "sample_id" in order.columns:
-            existing_ids = {canonical_gid(value) for value in order["sample_id"]}
-            existing_ids.discard("")
     candidates, pairs = adjudicate_new_candidates(
         bridges=bridges,
         resolver_summary=resolver_summary,
@@ -1097,6 +1244,7 @@ def main() -> None:
         matrix_path=matrix_path,
         matrix_sha256=matrix_sha256,
         panel_id=str(new_spec["panel_id"]),
+        certified_panel_reference=certified_panel_reference,
         minimum_shared_markers=int(
             new_spec.get(
                 "minimum_shared_markers", policy["minimum_shared_markers_default"]
@@ -1105,7 +1253,10 @@ def main() -> None:
         minimum_call_concordance=float(
             policy["minimum_pairwise_call_concordance"]
         ),
-        existing_certified_ids=existing_ids,
+        existing_panel_certified_ids=certified_ids.get(
+            certified_panel_reference, set()
+        ),
+        any_panel_certified_ids=any_panel_certified_ids,
     )
     inventory = pd.DataFrame(
         [
@@ -1129,6 +1280,7 @@ def main() -> None:
             minimum_call_concordance=float(
                 policy["minimum_pairwise_call_concordance"]
             ),
+            any_panel_certified_ids=any_panel_certified_ids,
         )
         candidates = pd.concat([candidates, existing_candidates], ignore_index=True)
         pairs = pd.concat([pairs, existing_pairs], ignore_index=True)
@@ -1183,21 +1335,8 @@ def main() -> None:
     summary.to_csv(out_dir / "marker_identity_classification_summary.tsv", sep="\t", index=False)
     inventory.to_csv(out_dir / "marker_identity_panel_inventory.tsv", sep="\t", index=False)
     checks.to_csv(out_dir / "marker_identity_validation.tsv", sep="\t", index=False)
-    qc = pd.DataFrame(
-        [
-            {"metric": "run_status", "value": "PASS"},
-            {"metric": "protocol_version", "value": policy["protocol_version"]},
-            {"metric": "candidate_gids", "value": candidates["trial_gid"].nunique()},
-            {"metric": "new_two_hop_candidate_gids", "value": bridges["query_id"].map(canonical_gid).nunique()},
-            {"metric": "accepted_candidate_gids", "value": accepted["trial_gid"].nunique()},
-            {"metric": "accepted_new_candidate_gids", "value": accepted.loc[~accepted["existing_certified_gid"].astype(bool), "trial_gid"].nunique()},
-            {"metric": "unresolved_candidate_gids", "value": unresolved["trial_gid"].nunique()},
-            {"metric": "conflicting_candidate_gids", "value": conflicting["trial_gid"].nunique()},
-            {"metric": "phenotype_values_read", "value": False},
-            {"metric": "outer_test_metrics_read", "value": False},
-            {"metric": "final_holdout_outcomes_read", "value": False},
-            {"metric": "kernels_modified", "value": False},
-        ]
+    qc = adjudication_qc(
+        candidates, protocol_version=str(policy["protocol_version"])
     )
     qc.to_csv(out_dir / "marker_identity_adjudication_qc.tsv", sep="\t", index=False)
     provenance = {

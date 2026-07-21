@@ -451,6 +451,34 @@ DArTAG and haplotype artifacts are re-audited from their sample-QC and duplicate
 concordance files; missing panel artifacts are reported rather than silently
 treated as absent biology.
 
+The reports distinguish two different meanings of a recovered identity:
+`not_in_panel_certified_order_gids` means that the GID would require a rebuild
+of that platform-specific genotype artifact, while
+`not_in_any_certified_panel_gids` means that the GID adds identity coverage not
+already present in any certified marker panel. Do not describe the first count
+as globally new marker coverage.
+
+Adjudications produced before those two fields were separated can be reconciled
+without hashing or scanning the large marker matrices again. The reconciliation
+is isolated from the source artifacts, preserves a hash of every classification
+and concordance decision, and rebuilds the regulatory overlay:
+
+```bash
+PYTHON="$HOME/tools/tf_wheat_cpu/bin/python" \
+WHEATCONFORMER_CODE_ROOT="$HOME/tools/WheatConformer" \
+bash "$HOME/tools/WheatConformer/scripts/reconcile_marker_identity_reporting.sh" \
+  /DATA2/estancias/tesis_javier/model_DATA/genotipoXambiente
+```
+
+The corrected outputs are written to
+`genotype_panels/marker_identity_adjudication_v1_reconciled` and the associated
+regulatory manifest to `model_kernels/regulatory_eligibility_v1_reconciled`.
+The reconciler reads completed reports and certified sample orders only; it
+does not read marker calls, phenotype values or evaluation outcomes and does
+not modify any kernel. It fails closed if any declared certified sample order
+is absent, because global novelty cannot be established from an incomplete
+panel universe.
+
 If unique selection-history evidence does not connect to marker calls, audit it
 as pedigree enrichment rather than discarding it:
 

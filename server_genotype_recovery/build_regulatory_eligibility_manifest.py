@@ -467,7 +467,9 @@ def load_marker_identity_overlay(path: Path) -> pd.DataFrame:
         "marker_identity_classes",
         "candidate_marker_panels",
         "accepted_marker_panels",
+        "newly_accepted_marker_panels",
         "candidate_unresolved",
+        "identity_accepted",
         "accepted_for_new_kernel_input",
         "eligible_for_K_G",
         "eligible_for_K_z",
@@ -488,6 +490,7 @@ def load_marker_identity_overlay(path: Path) -> pd.DataFrame:
         raise ValueError(f"Marker identity overlay contains duplicate GIDs: {path}")
     for column in (
         "candidate_unresolved",
+        "identity_accepted",
         "accepted_for_new_kernel_input",
         "eligible_for_K_G",
         "eligible_for_K_z",
@@ -504,11 +507,22 @@ def load_marker_identity_overlay(path: Path) -> pd.DataFrame:
             "Uncertified marker identity candidates cannot be eligible for K_G, K_z, "
             "or genotype-specific sequence"
         )
-    accepted = overlay["accepted_for_new_kernel_input"]
+    accepted = overlay["identity_accepted"]
     unresolved = overlay["candidate_unresolved"]
     if (~(accepted | unresolved)).any():
         raise ValueError(
             "Every marker identity overlay row must contain an accepted or unresolved candidate"
+        )
+    new_input = overlay["accepted_for_new_kernel_input"]
+    if (new_input & ~accepted).any():
+        raise ValueError(
+            "A marker identity cannot require new kernel input unless its identity is accepted"
+        )
+    named_new_panel = overlay["newly_accepted_marker_panels"].fillna("").str.strip().ne("")
+    if not named_new_panel.eq(new_input).all():
+        raise ValueError(
+            "newly_accepted_marker_panels must be populated exactly for identities "
+            "requiring new panel-specific kernel input"
         )
     return overlay
 
@@ -522,7 +536,9 @@ def apply_marker_identity_overlay(
         output["marker_identity_classes"] = ""
         output["candidate_marker_panels"] = ""
         output["accepted_marker_panels"] = ""
+        output["newly_accepted_marker_panels"] = ""
         output["candidate_unresolved"] = False
+        output["identity_accepted"] = False
         output["accepted_for_new_kernel_input"] = False
         output["candidate_eligible_for_K_G"] = False
         output["candidate_eligible_for_K_z"] = False
@@ -551,12 +567,14 @@ def apply_marker_identity_overlay(
         "marker_identity_classes": "",
         "candidate_marker_panels": "",
         "accepted_marker_panels": "",
+        "newly_accepted_marker_panels": "",
         "marker_identity_next_required_action": "not_applicable",
     }
     for column, default in text_defaults.items():
         output[column] = output[column].fillna(default)
     for column in (
         "candidate_unresolved",
+        "identity_accepted",
         "accepted_for_new_kernel_input",
         "candidate_eligible_for_K_G",
         "candidate_eligible_for_K_z",
@@ -935,6 +953,9 @@ def main() -> None:
             .sum()
         ),
         "accepted_marker_identity_candidates": int(
+            manifest["identity_accepted"].sum()
+        ),
+        "marker_identity_candidates_requiring_new_kernel_input": int(
             manifest["accepted_for_new_kernel_input"].sum()
         ),
         "unresolved_marker_identity_candidates": int(
