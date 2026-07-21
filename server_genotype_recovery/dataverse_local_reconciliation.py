@@ -36,27 +36,49 @@ GENERIC_DATASET_TOKENS = {
     "genotypic",
     "genotyping",
     "germplasm",
+    "high",
+    "international",
     "marker",
     "markers",
     "panel",
+    "nursery",
     "results",
+    "screening",
+    "selection",
+    "semi",
+    "spring",
     "snp",
     "snps",
     "the",
+    "trial",
     "wheat",
+    "yield",
 }
 STRONG_DATASET_TOKENS = {
     "35k",
     "80k",
     "90k",
     "dartag",
-    "dartseq",
     "hibap",
-    "ibwsn",
     "iwyp",
     "masagro",
-    "sawsn",
     "seeds",
+}
+
+TRIAL_FAMILY_PATTERNS = {
+    "IBWSN": (
+        r"(?<![a-z])ibwsn(?![a-z])",
+        r"international\s+bread\s+wheat\s+screening\s+nursery",
+    ),
+    "SAWSN": (r"(?<![a-z])sawsn(?![a-z])", r"semi[- ]arid\s+wheat\s+screening\s+nursery"),
+    "SAWYT": (r"(?<![a-z])sawyt(?![a-z])", r"semi[- ]arid\s+wheat\s+yield\s+trial"),
+    "ESWYT": (r"(?<![a-z])eswyt(?![a-z])", r"elite\s+spring\s+wheat\s+yield\s+trial"),
+    "HTWYT": (
+        r"(?<![a-z])(?:htwyt|thwyt)(?![a-z])",
+        r"high\s+temperature\s+wheat\s+yield\s+trial",
+    ),
+    "HRWYT": (r"(?<![a-z])hrwyt(?![a-z])", r"high\s+rainfall\s+wheat\s+yield\s+trial"),
+    "IDSN": (r"(?<![a-z])idsn(?![a-z])", r"international\s+durum\s+screening\s+nursery"),
 }
 
 
@@ -85,13 +107,82 @@ def _tokens(value: object) -> set[str]:
     }
 
 
+def _trial_numbers(value: object) -> set[int]:
+    text = clean(value).lower().replace("_", " ")
+    numbers: set[int] = set()
+    for start, finish in re.findall(
+        r"(?<![a-z0-9])(\d{1,3})(?:st|nd|rd|th)?\s*(?:to|-)\s*"
+        r"(\d{1,3})(?:st|nd|rd|th)?(?![a-z0-9])",
+        text,
+    ):
+        lower, upper = sorted((int(start), int(finish)))
+        numbers.update(range(lower, upper + 1))
+    numbers.update(
+        int(value)
+        for value in re.findall(
+            r"(?<![a-z0-9])(\d{1,3})(?:st|nd|rd|th)(?![a-z0-9])", text
+        )
+    )
+    numbers.update(
+        int(value)
+        for value in re.findall(
+            r"(?<![a-z0-9])(?:c)?(\d{1,3})(?=(?:ibwsn|sawsn|sawyt|eswyt|"
+            r"htwyt|thwyt|hrwyt|idsn)\b)",
+            text,
+        )
+    )
+    return numbers
+
+
+def _trial_families(value: object) -> set[str]:
+    text = re.sub(r"[_]+", " ", clean(value).lower())
+    return {
+        family
+        for family, patterns in TRIAL_FAMILY_PATTERNS.items()
+        if any(re.search(pattern, text) for pattern in patterns)
+    }
+
+
+def _compact_phrase(value: object) -> str:
+    return re.sub(r"[^a-z0-9]+", "", clean(value).lower())
+
+
 def dataset_directory_match(dataset_name: object, relative_parent: object) -> bool:
+    dataset_name = clean(dataset_name)
+    relative_parent = clean(relative_parent)
+    if not dataset_name or not relative_parent:
+        return False
+    dataset_numbers = _trial_numbers(dataset_name)
+    parent_numbers = _trial_numbers(relative_parent)
+    if dataset_numbers and parent_numbers and dataset_numbers.isdisjoint(parent_numbers):
+        return False
+    dataset_families = _trial_families(dataset_name)
+    parent_families = _trial_families(relative_parent)
+    if (
+        dataset_families
+        and parent_families
+        and dataset_families.isdisjoint(parent_families)
+    ):
+        return False
+    if (
+        dataset_numbers & parent_numbers
+        and dataset_families & parent_families
+    ):
+        return True
+
+    dataset_phrase = _compact_phrase(dataset_name)
+    parent_phrase = _compact_phrase(relative_parent)
+    if len(dataset_phrase) >= 12 and (
+        dataset_phrase in parent_phrase or parent_phrase in dataset_phrase
+    ):
+        return True
+
     dataset_tokens = _tokens(dataset_name)
     parent_tokens = _tokens(relative_parent)
     shared = dataset_tokens & parent_tokens
     if shared & STRONG_DATASET_TOKENS:
         return True
-    return len(shared) >= 2 and len(shared) / max(1, len(dataset_tokens)) >= 0.5
+    return len(shared) >= 2 and len(shared) / max(1, len(dataset_tokens)) >= 0.6
 
 
 def inventory_local_files(local_roots: list[Path]) -> pd.DataFrame:

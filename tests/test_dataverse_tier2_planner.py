@@ -13,6 +13,7 @@ from server_genotype_recovery.plan_cimmyt_dataverse_tier2 import (
     build_download_plan,
     build_inventory,
     evidence_crop_summary,
+    local_reuse_manifest,
     tier2_file_class,
 )
 
@@ -255,3 +256,38 @@ def test_crop_annotation_accepts_already_gated_structured_evidence() -> None:
     assert len(annotated) == 1
     assert annotated.loc[0, "crop_scope"] == WHEAT_CONFIRMED
     assert int(annotated.loc[0, "evidence_rows"]) == 1
+
+
+def test_local_reuse_manifest_excludes_trial_phenotype_files() -> None:
+    inventory = pd.DataFrame(
+        [
+            {
+                "datafile_id": "trial-yield",
+                "tier2_file_class": "other",
+                "local_match_paths": "/data/TRIALS_AND_NURSERIES/17SAWYT_GrnYld.xls",
+            },
+            {
+                "datafile_id": "trial-genotypes",
+                "tier2_file_class": "marker_metadata_or_uncertain",
+                "local_match_paths": "/data/TRIALS_AND_NURSERIES/17SAWYT_Genotypes_Data.xls",
+            },
+            {
+                "datafile_id": "genotypic-results",
+                "tier2_file_class": "other",
+                "local_match_paths": "/data/GENOTYPIC_DATA/58IBWSN_results.xlsx",
+            },
+            {
+                "datafile_id": "phenotype",
+                "tier2_file_class": "excluded_low_relevance",
+                "local_match_paths": "/data/GENOTYPIC_DATA/EYT-Phenotype.xlsx",
+            },
+        ]
+    )
+    inventory["local_reconciliation_status"] = "LOCAL_EXACT_CHECKSUM"
+    inventory["crop_scope"] = WHEAT_CONFIRMED
+    inventory["already_downloaded"] = False
+    inventory["filename"] = inventory["datafile_id"] + ".txt"
+
+    reuse = local_reuse_manifest(inventory)
+
+    assert set(reuse["datafile_id"]) == {"trial-genotypes", "genotypic-results"}

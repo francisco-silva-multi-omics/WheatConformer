@@ -715,10 +715,24 @@ def write_plan(
 
 
 def local_reuse_manifest(inventory: pd.DataFrame) -> pd.DataFrame:
+    structured_evidence_classes = MARKER_CLASSES | MAPPING_CLASSES | {
+        "marker_metadata_or_uncertain",
+        "pedigree_metadata",
+    }
+    local_genotypic_file = inventory["local_match_paths"].str.contains(
+        r"(?:^|[/\\])GENOTYPIC_DATA(?:[/\\])", case=False, regex=True, na=False
+    )
+    evidence_relevant = inventory["tier2_file_class"].isin(
+        structured_evidence_classes
+    ) | (
+        local_genotypic_file
+        & ~inventory["tier2_file_class"].eq("excluded_low_relevance")
+    )
     verified = inventory[
         inventory["local_reconciliation_status"].eq(LOCAL_EXACT_CHECKSUM)
         & inventory["crop_scope"].eq(WHEAT_CONFIRMED)
         & ~inventory["already_downloaded"]
+        & evidence_relevant
     ].copy()
     verified["download_status"] = "REUSED"
     verified["local_path"] = verified["local_match_paths"].map(
@@ -861,6 +875,7 @@ def main() -> None:
             {"metric": "already_downloaded_files", "value": int(inventory["already_downloaded"].sum())},
             {"metric": "local_files_inventoried", "value": len(local_file_inventory)},
             {"metric": "local_exact_checksum_reuses", "value": int(inventory["local_reuse_verified"].sum())},
+            {"metric": "local_structured_evidence_reuses", "value": len(reuse)},
             {"metric": "local_equivalence_reviews", "value": int(inventory["local_equivalence_review_required"].sum())},
             {"metric": "wheat_confirmed_files", "value": int(inventory["crop_scope"].eq(WHEAT_CONFIRMED).sum())},
             {"metric": "non_wheat_excluded_files", "value": int(inventory["crop_scope"].eq(NON_WHEAT_EXCLUDED).sum())},

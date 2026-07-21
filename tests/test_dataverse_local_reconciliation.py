@@ -89,3 +89,23 @@ def test_dataset_directory_match_requires_specific_shared_evidence() -> None:
         "Generic wheat genotyping data",
         "Another_wheat_genotyping_dataset",
     )
+    assert not dataset_directory_match(
+        "46th International Bread Wheat Screening Nursery",
+        "45th_International_Bread_Wheat_Screening_Nursery",
+    )
+    assert not dataset_directory_match(
+        "47th International Bread Wheat Screening Nursery",
+        "24th_to_35th_International_Bread_Wheat_Screening_Nursery",
+    )
+    assert not dataset_directory_match(
+        "C45IBWSN genotyped with Australia DArTSeq",
+        "DArTseq-derived_SNPs_for_wheat_Mexican_landrace_accessions",
+    )
+    assert not dataset_directory_match(
+        "15th High Temperature Wheat Yield Trial",
+        "15th_Semi-Arid_Wheat_Yield_Trial",
+    )
+    assert dataset_directory_match(
+        "30th Elite Spring Wheat Yield Trial",
+        "24th_to_35th_Elite_Spring_Wheat_Yield_Trial",
+    )
