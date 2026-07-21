@@ -200,6 +200,33 @@ def response_data(payload: dict | None) -> object:
     return payload.get("data")
 
 
+def pagination_stop_decision(
+    *,
+    response_valid: bool,
+    item_count: int,
+    returned_rows: int,
+    reported_total_count: int | None,
+    per_page: int,
+) -> tuple[bool, bool, str]:
+    if not response_valid:
+        return True, False, "request_failed"
+    total_not_reached = (
+        reported_total_count is not None
+        and returned_rows < reported_total_count
+    )
+    if item_count == 0:
+        if total_not_reached:
+            return True, False, "no_results_before_reported_total"
+        return True, True, "no_more_results"
+    if reported_total_count is not None and returned_rows >= reported_total_count:
+        return True, True, "reported_total_reached"
+    if item_count < per_page:
+        if total_not_reached:
+            return True, False, "short_page_before_reported_total"
+        return True, True, "short_final_page"
+    return False, False, "continue"
+
+
 JsonTransport = Callable[[str, str, dict[str, str], int], dict]
 
 
@@ -727,17 +754,16 @@ def main() -> None:
                             repository_query,
                         )
                     )
-            if not items:
-                search_complete = True
-                stopped_reason = "no_more_results"
-                break
-            if reported_total_count is not None and returned_rows >= reported_total_count:
-                search_complete = True
-                stopped_reason = "reported_total_reached"
-                break
-            if len(items) < args.per_page:
-                search_complete = True
-                stopped_reason = "short_final_page"
+            should_stop, page_complete, page_reason = pagination_stop_decision(
+                response_valid=isinstance(data, dict),
+                item_count=len(items or []),
+                returned_rows=returned_rows,
+                reported_total_count=reported_total_count,
+                per_page=args.per_page,
+            )
+            if should_stop:
+                search_complete = page_complete
+                stopped_reason = page_reason
                 break
         search_coverage_rows.append(
             {

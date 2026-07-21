@@ -10,6 +10,7 @@ from server_genotype_recovery.fetch_cimmyt_dataverse_recovery import (
     classify_candidate_file,
     dataset_file_rows,
     exact_term_pattern,
+    pagination_stop_decision,
     repository_search_text,
     scan_file_for_terms,
     scan_file_for_indexed_terms,
@@ -180,3 +181,42 @@ def test_targeted_datafile_sorts_before_higher_generic_priority() -> None:
     assert candidate_download_sort_key(targeted, target_ids, False) < (
         candidate_download_sort_key(generic, target_ids, False)
     )
+
+
+def test_pagination_does_not_accept_empty_page_before_reported_total() -> None:
+    stop, complete, reason = pagination_stop_decision(
+        response_valid=True,
+        item_count=0,
+        returned_rows=600,
+        reported_total_count=1086,
+        per_page=100,
+    )
+    assert stop
+    assert not complete
+    assert reason == "no_results_before_reported_total"
+
+
+def test_pagination_marks_reported_total_as_complete() -> None:
+    stop, complete, reason = pagination_stop_decision(
+        response_valid=True,
+        item_count=86,
+        returned_rows=1086,
+        reported_total_count=1086,
+        per_page=100,
+    )
+    assert stop
+    assert complete
+    assert reason == "reported_total_reached"
+
+
+def test_pagination_marks_failed_request_incomplete() -> None:
+    stop, complete, reason = pagination_stop_decision(
+        response_valid=False,
+        item_count=0,
+        returned_rows=600,
+        reported_total_count=1086,
+        per_page=100,
+    )
+    assert stop
+    assert not complete
+    assert reason == "request_failed"
