@@ -337,11 +337,11 @@ def test_identity_recovered_builder_writes_isolated_gated_artifact(
     matrix_path = tmp_path / "GENOTYPIC_DATA/seeds/matrix.tsv"
     matrix_path.parent.mkdir(parents=True)
     matrix_path.write_text(
-        "MarkerID\tGID1\tGID2\tGID3\tS&4\n"
-        "m1:A>G\tA\tA\tG\tG\n"
-        "m2:A>G\tA\tG\tG\tA\n"
-        "m3:A>G\tG\tG\tA\tA\n"
-        "m4:A>G\tA\tG\tA\tG\n",
+        "MarkerID\tGID1\tGID2\tGID3\tS&4\tGID5\n"
+        "m1:A>G\tA\tA\tG\tG\tA\n"
+        "m2:A>G\tA\tG\tG\tA\tG\n"
+        "m3:A>G\tG\tG\tA\tA\tA\n"
+        "m4:A>G\tA\tG\tA\tG\tG\n",
         encoding="utf-8",
     )
     import hashlib
@@ -349,7 +349,7 @@ def test_identity_recovered_builder_writes_isolated_gated_artifact(
     matrix_hash = hashlib.sha256(matrix_path.read_bytes()).hexdigest()
     catalog_path = tmp_path / "audit/genotypic_recovery/canonical_genotype_catalog.csv"
     catalog_path.parent.mkdir(parents=True)
-    pd.DataFrame({"canonical_gid": ["GID1", "GID2", "GID3", "GID4"]}).to_csv(
+    pd.DataFrame({"canonical_gid": ["GID1", "GID2", "GID3", "GID4", "GID5"]}).to_csv(
         catalog_path, index=False
     )
     identity_dir = tmp_path / "identity"
@@ -468,6 +468,11 @@ def test_identity_recovered_builder_writes_isolated_gated_artifact(
         out_dir / f"{prefix}_identity_recovery_summary.tsv", sep="\t"
     ).set_index("metric")["value"]
     assert int(summary["certified_new_to_any_prior_panel_gids"]) == 1
+    assert int(summary["candidate_scope_unexpected_new_gids"]) == 0
+    assert (
+        summary["candidate_scope_certification"]
+        == "PASS_exact_baseline_union_accepted_qc_passing_identities"
+    )
     registry = pd.read_csv(out_dir / f"{prefix}_registry_fragment.tsv", sep="\t")
     assert not registry["enabled_default"].any()
     assert (out_dir / f"{prefix}_artifacts.sha256").is_file()

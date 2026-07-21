@@ -265,6 +265,7 @@ def parse_marker_by_sample(
     *,
     expected_sha256: str | None = None,
     forced_sample_columns: dict[int, tuple[str, str, str]] | None = None,
+    allowed_gids: set[str] | None = None,
 ) -> tuple[np.ndarray, list[str], list[str], list[str], list[str]]:
     """Stream a marker-by-sample text matrix and retain only resolved trial samples."""
     digest = hashlib.sha256() if expected_sha256 else None
@@ -309,7 +310,9 @@ def parse_marker_by_sample(
                 selected.append((field_index, forced_gid, sample))
                 observed_forced.add(field_index)
             elif len(candidates) == 1:
-                selected.append((field_index, next(iter(candidates)), sample))
+                candidate_gid = next(iter(candidates))
+                if allowed_gids is None or candidate_gid in allowed_gids:
+                    selected.append((field_index, candidate_gid, sample))
         missing_forced = sorted(set(forced) - observed_forced)
         if missing_forced:
             raise SystemExit(
@@ -1040,6 +1043,51 @@ def baseline_kernel_comparison(
     return result
 
 
+def kernel_order_gids(path: Path) -> list[str]:
+    order = pd.read_csv(path, sep="\t", dtype=str)
+    if "sample_id" not in order.columns:
+        raise SystemExit(f"Kernel sample order lacks sample_id: {path}")
+    gids = [canonical_gid(value) for value in order["sample_id"]]
+    if any(not gid for gid in gids):
+        raise SystemExit(f"Kernel sample order contains empty or invalid GIDs: {path}")
+    if len(gids) != len(set(gids)):
+        raise SystemExit(f"Kernel sample order contains duplicate GIDs: {path}")
+    return gids
+
+
+def certify_identity_candidate_scope(
+    *,
+    identity_status: pd.DataFrame,
+    baseline_gids: set[str],
+    candidate_gids: set[str],
+) -> pd.DataFrame:
+    included = boolean_values(identity_status["included_in_candidate_kernel"])
+    existing = boolean_values(identity_status["existing_certified_in_reference_panel"])
+    expected_new = set(identity_status.loc[included & ~existing, "trial_gid"])
+    observed_new = candidate_gids - baseline_gids
+    unexpected = sorted(observed_new - expected_new)
+    missing = sorted(expected_new - observed_new)
+    if unexpected or missing:
+        raise SystemExit(
+            "Identity-recovered candidate membership does not equal the certified scope: "
+            f"unexpected_new={len(unexpected)} examples={unexpected[:10]}; "
+            f"missing_accepted_new={len(missing)} examples={missing[:10]}"
+        )
+    return pd.DataFrame(
+        [
+            {"metric": "candidate_scope_baseline_gids", "value": len(baseline_gids)},
+            {"metric": "candidate_scope_expected_accepted_new_gids", "value": len(expected_new)},
+            {"metric": "candidate_scope_observed_new_gids", "value": len(observed_new)},
+            {"metric": "candidate_scope_unexpected_new_gids", "value": 0},
+            {"metric": "candidate_scope_missing_accepted_new_gids", "value": 0},
+            {
+                "metric": "candidate_scope_certification",
+                "value": "PASS_exact_baseline_union_accepted_qc_passing_identities",
+            },
+        ]
+    )
+
+
 def identity_recovery_status(
     *,
     accepted: pd.DataFrame,
@@ -1219,6 +1267,10 @@ def main() -> None:
     accepted_replicates: dict[str, set[str]] = {}
     expected_matrix_sha256: str | None = None
     identity_input_hashes: dict[str, str] = {}
+    baseline_kernel_path: Path | None = None
+    baseline_order_path: Path | None = None
+    baseline_gids: list[str] = []
+    allowed_identity_gids: set[str] | None = None
     if identity_dir is not None:
         (
             accepted_identities,
@@ -1232,6 +1284,18 @@ def main() -> None:
             canonical_ids=canonical_ids,
             matrix_path=matrix_paths[0],
         )
+        baseline_kernel_path = (
+            args.baseline_kernel.resolve()
+            if args.baseline_kernel.is_absolute()
+            else (root / args.baseline_kernel).resolve()
+        )
+        baseline_order_path = (
+            args.baseline_order.resolve()
+            if args.baseline_order.is_absolute()
+            else (root / args.baseline_order).resolve()
+        )
+        baseline_gids = kernel_order_gids(baseline_order_path)
+        allowed_identity_gids = set(baseline_gids) | set(accepted_identities["trial_gid"])
 
     if defaults["format"] == "sample_by_marker":
         matrix, gids, source_samples, marker_ids, allele_values = parse_sample_by_marker(matrix_paths[0], lookup)
@@ -1241,6 +1305,7 @@ def main() -> None:
             lookup,
             expected_sha256=expected_matrix_sha256,
             forced_sample_columns=accepted_sample_columns,
+            allowed_gids=allowed_identity_gids,
         )
     elif defaults["format"] == "iwyp":
         matrix, gids, source_samples, marker_ids, allele_values = parse_iwyp(matrix_paths[0], canonical_ids)
@@ -1288,16 +1353,8 @@ def main() -> None:
             sample_qc=sample_qc,
             final_gids=gids,
         )
-        baseline_kernel_path = (
-            args.baseline_kernel.resolve()
-            if args.baseline_kernel.is_absolute()
-            else (root / args.baseline_kernel).resolve()
-        )
-        baseline_order_path = (
-            args.baseline_order.resolve()
-            if args.baseline_order.is_absolute()
-            else (root / args.baseline_order).resolve()
-        )
+        assert baseline_kernel_path is not None
+        assert baseline_order_path is not None
         baseline_comparison = baseline_kernel_comparison(
             baseline_kernel_path=baseline_kernel_path,
             baseline_order_path=baseline_order_path,
@@ -1305,6 +1362,12 @@ def main() -> None:
             candidate_gids=gids,
             minimum_correlation=args.minimum_baseline_kernel_correlation,
         )
+        scope_summary = certify_identity_candidate_scope(
+            identity_status=identity_status,
+            baseline_gids=set(baseline_gids),
+            candidate_gids=set(gids),
+        )
+        identity_summary = pd.concat([identity_summary, scope_summary], ignore_index=True)
 
     linear_path = out_dir / f"{prefix}_LINEAR.npy"
     rbf_path = out_dir / f"{prefix}_RBF.npy"
@@ -1435,6 +1498,7 @@ def main() -> None:
             "phenotype_values_read": False,
             "outer_test_metrics_read": False,
             "final_holdout_outcomes_read": False,
+            "candidate_scope": "baseline_order_union_accepted_identity_manifest",
         }
         provenance_path = out_dir / f"{prefix}_identity_recovery_provenance.json"
         provenance_path.write_text(
