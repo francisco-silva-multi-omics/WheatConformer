@@ -43,7 +43,14 @@ import pandas as pd
 plan_path, target_path, mode = Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3]
 max_files, max_file_bytes, max_total_bytes = map(int, sys.argv[4:7])
 plan = pd.read_csv(plan_path, sep="\t", dtype=str)
-required = {"datafile_id", "filesize", "restricted", "plan_status", "crop_scope"}
+required = {
+    "datafile_id",
+    "filesize",
+    "restricted",
+    "plan_status",
+    "crop_scope",
+    "local_reconciliation_status",
+}
 missing = sorted(required - set(plan.columns))
 if missing:
     raise SystemExit(f"Plan is stale or incomplete; missing columns: {missing}")
@@ -67,6 +74,12 @@ if not selected["crop_scope"].eq("WHEAT_CONFIRMED").all():
         ["datafile_id", "filename", "crop_scope"],
     ]
     raise SystemExit(f"Selected plan contains non-wheat or ambiguous files:\n{bad}")
+if not selected["local_reconciliation_status"].eq("NO_LOCAL_MATCH").all():
+    bad = selected.loc[
+        ~selected["local_reconciliation_status"].eq("NO_LOCAL_MATCH"),
+        ["datafile_id", "filename", "local_reconciliation_status"],
+    ]
+    raise SystemExit(f"Selected plan contains unresolved local equivalents:\n{bad}")
 print(f"PASS plan={mode}; files={len(targets)}; bytes={int(selected['filesize'].sum())}")
 PY
 

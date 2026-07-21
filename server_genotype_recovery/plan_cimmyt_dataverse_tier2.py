@@ -14,6 +14,12 @@ from server_genotype_recovery.dataverse_crop_scope import (
     WHEAT_CONFIRMED,
     classify_crop_scope,
 )
+from server_genotype_recovery.dataverse_local_reconciliation import (
+    LOCAL_EXACT_CHECKSUM,
+    LOCAL_REVIEW_STATUSES,
+    NO_LOCAL_MATCH,
+    reconcile_local_files,
+)
 from server_genotype_recovery.fetch_brapi_pedigree_markers import (
     clean,
     read_table,
@@ -201,10 +207,11 @@ def build_inventory(
         "local_path",
         "detail",
     ]
-    available_download_columns = [
-        column for column in download_columns if column in downloads.columns
-    ]
-    download_state = downloads[available_download_columns].drop_duplicates(
+    download_state = downloads.copy()
+    for column in download_columns:
+        if column not in download_state.columns:
+            download_state[column] = ""
+    download_state = download_state[download_columns].drop_duplicates(
         ["dataset_persistent_id", "datafile_id"], keep="last"
     )
     inventory = inventory.merge(
@@ -244,7 +251,9 @@ def build_inventory(
         "structured_matched_query_ids",
         "structured_unique_selection_query_ids",
     ):
-        inventory[column] = inventory[column].fillna(0).astype(int)
+        inventory[column] = (
+            pd.to_numeric(inventory[column], errors="coerce").fillna(0).astype(int)
+        )
 
     if search_results.empty:
         dataset_names = pd.DataFrame(
@@ -367,6 +376,45 @@ def build_inventory(
     return inventory
 
 
+def apply_local_availability(inventory: pd.DataFrame) -> pd.DataFrame:
+    local = inventory.copy()
+    if "local_reuse_verified" not in local.columns:
+        local["local_reuse_verified"] = False
+    if "local_equivalence_review_required" not in local.columns:
+        local["local_equivalence_review_required"] = False
+    if "local_reconciliation_status" not in local.columns:
+        local["local_reconciliation_status"] = NO_LOCAL_MATCH
+    local["local_reuse_verified"] = local["local_reuse_verified"].map(as_bool)
+    local["local_equivalence_review_required"] = local[
+        "local_equivalence_review_required"
+    ].map(as_bool)
+    local["already_available"] = (
+        local["already_downloaded"] | local["local_reuse_verified"]
+    )
+    available_wheat_mapping = (
+        local[
+            local["tier2_file_class"].isin(MAPPING_CLASSES)
+            & local["crop_scope"].eq(WHEAT_CONFIRMED)
+            & local["already_available"]
+        ]
+        .groupby("dataset_persistent_id")
+        .size()
+        .gt(0)
+    )
+    local["dataset_has_available_wheat_sample_mapping"] = (
+        local["dataset_persistent_id"].map(available_wheat_mapping).fillna(False)
+    )
+    local["mapping_support_status"] = "missing_sample_mapping"
+    local.loc[
+        local["dataset_has_wheat_sample_mapping"], "mapping_support_status"
+    ] = "mapping_candidate_available"
+    local.loc[
+        local["dataset_has_available_wheat_sample_mapping"],
+        "mapping_support_status",
+    ] = "mapping_already_available"
+    return local
+
+
 def build_download_plan(
     inventory: pd.DataFrame,
     *,
@@ -389,6 +437,39 @@ def build_download_plan(
     relevant["plan_status"] = "DEFERRED_NOT_SELECTED"
     relevant["plan_reason"] = "lower_priority_or_budget"
     relevant["selection_order"] = pd.NA
+    if "already_available" not in relevant.columns:
+        relevant["already_available"] = relevant["already_downloaded"]
+    if "local_reconciliation_status" not in relevant.columns:
+        relevant["local_reconciliation_status"] = NO_LOCAL_MATCH
+    if "local_reuse_verified" not in relevant.columns:
+        relevant["local_reuse_verified"] = False
+    if "local_equivalence_review_required" not in relevant.columns:
+        relevant["local_equivalence_review_required"] = False
+    if "dataset_has_available_wheat_sample_mapping" not in relevant.columns:
+        relevant["dataset_has_available_wheat_sample_mapping"] = relevant[
+            "dataset_has_downloaded_wheat_sample_mapping"
+        ]
+    available_manifest = relevant["already_downloaded"].map(as_bool)
+    local_verified = relevant["local_reuse_verified"].map(as_bool)
+    local_review = relevant["local_equivalence_review_required"].map(as_bool)
+    relevant.loc[available_manifest, ["plan_status", "plan_reason"]] = [
+        "AVAILABLE_RECOVERY_MANIFEST",
+        "already downloaded or reused in the Dataverse recovery manifest",
+    ]
+    relevant.loc[
+        ~available_manifest & local_verified,
+        ["plan_status", "plan_reason"],
+    ] = [
+        "AVAILABLE_LOCAL_VERIFIED",
+        "canonical local file matches Dataverse checksum and byte size",
+    ]
+    relevant.loc[
+        ~available_manifest & ~local_verified & local_review,
+        ["plan_status", "plan_reason"],
+    ] = [
+        "DEFERRED_LOCAL_EQUIVALENCE_REVIEW",
+        "possible local equivalent requires explicit review",
+    ]
     non_wheat = relevant["crop_scope"].eq(NON_WHEAT_EXCLUDED)
     ambiguous = relevant["crop_scope"].eq(AMBIGUOUS_REVIEW)
     relevant.loc[non_wheat, ["plan_status", "plan_reason"]] = [
@@ -399,7 +480,11 @@ def build_download_plan(
         "DEFERRED_AMBIGUOUS_CROP",
         "no explicit wheat evidence; manual crop review required",
     ]
-    eligible = relevant["crop_scope"].eq(WHEAT_CONFIRMED)
+    eligible = (
+        relevant["crop_scope"].eq(WHEAT_CONFIRMED)
+        & ~relevant["already_available"].map(as_bool)
+        & relevant["local_reconciliation_status"].eq(NO_LOCAL_MATCH)
+    )
 
     selected_count = 0
     selected_bytes = 0
@@ -414,7 +499,10 @@ def build_download_plan(
             relevant["dataset_persistent_id"].eq(dataset_id)
             & relevant["crop_scope"].eq(WHEAT_CONFIRMED)
         ]
-        pending = group[~group["already_downloaded"]].copy()
+        pending = group[
+            ~group["already_available"].map(as_bool)
+            & group["local_reconciliation_status"].eq(NO_LOCAL_MATCH)
+        ].copy()
         mappings = pending[pending["tier2_file_class"].isin(MAPPING_CLASSES)].head(
             mapping_files_per_dataset
         )
@@ -424,7 +512,7 @@ def build_download_plan(
         if markers.empty:
             continue
         mapping_ready = bool(
-            group["dataset_has_downloaded_wheat_sample_mapping"].any()
+            group["dataset_has_available_wheat_sample_mapping"].any()
         )
         accessible_mappings = mappings[
             include_restricted | ~mappings["restricted"]
@@ -507,6 +595,14 @@ def dataset_summary(inventory: pd.DataFrame) -> pd.DataFrame:
             ambiguous_crop_files=(
                 "crop_scope", lambda values: values.eq(AMBIGUOUS_REVIEW).sum()
             ),
+            local_exact_checksum_files=(
+                "local_reconciliation_status",
+                lambda values: values.eq(LOCAL_EXACT_CHECKSUM).sum(),
+            ),
+            local_equivalence_review_files=(
+                "local_reconciliation_status",
+                lambda values: values.isin(LOCAL_REVIEW_STATUSES).sum(),
+            ),
             structured_matched_query_ids=("structured_matched_query_ids", "max"),
             structured_unique_selection_query_ids=(
                 "structured_unique_selection_query_ids", "max"
@@ -581,6 +677,20 @@ def write_plan(
     )
 
 
+def local_reuse_manifest(inventory: pd.DataFrame) -> pd.DataFrame:
+    verified = inventory[
+        inventory["local_reconciliation_status"].eq(LOCAL_EXACT_CHECKSUM)
+        & inventory["crop_scope"].eq(WHEAT_CONFIRMED)
+        & ~inventory["already_downloaded"]
+    ].copy()
+    verified["download_status"] = "REUSED"
+    verified["local_path"] = verified["local_match_paths"].map(
+        lambda value: clean(value).split(";", maxsplit=1)[0]
+    )
+    verified["detail"] = "canonical local file verified against Dataverse checksum"
+    return verified
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Plan controlled Tier-2 CIMMYT Dataverse marker and sample-map downloads."
@@ -599,6 +709,13 @@ def main() -> None:
     parser.add_argument("--max-total-bytes", type=int, default=10 * 1024**3)
     parser.add_argument("--marker-files-per-dataset", type=int, default=1)
     parser.add_argument("--mapping-files-per-dataset", type=int, default=2)
+    parser.add_argument(
+        "--local-data-root",
+        action="append",
+        type=Path,
+        default=[],
+        help="Canonical local data directory to reconcile before planning downloads.",
+    )
     args = parser.parse_args()
 
     root = args.root.resolve()
@@ -621,6 +738,17 @@ def main() -> None:
     if missing:
         raise FileNotFoundError(f"Tier-2 planning inputs are missing: {missing}")
 
+    local_data_roots = args.local_data_root or [
+        Path("GENOTYPIC_DATA"),
+        Path("TRIALS_AND_NURSERIES"),
+        Path("TRIALS_AND_NURSERIES_DATA"),
+    ]
+    local_data_roots = [
+        path.resolve() if path.is_absolute() else (root / path).resolve()
+        for path in local_data_roots
+    ]
+    local_data_roots = [path for path in local_data_roots if path.is_dir()]
+
     evidence = pd.read_csv(paths["evidence"], sep="\t", dtype=str)
     inventory = build_inventory(
         read_table(paths["candidate_files"]),
@@ -628,6 +756,12 @@ def main() -> None:
         evidence,
         read_table(paths["search_results"]),
     )
+    inventory, local_file_inventory = reconcile_local_files(
+        inventory,
+        local_data_roots,
+        max_hash_bytes=args.max_file_bytes,
+    )
+    inventory = apply_local_availability(inventory)
     summary = dataset_summary(inventory)
     annotated_evidence = annotate_evidence_crop(evidence, inventory)
     crop_evidence = evidence_crop_summary(evidence, inventory)
@@ -651,6 +785,18 @@ def main() -> None:
     )
     inventory.to_csv(
         out_dir / "dataverse_tier2_file_inventory.tsv", sep="\t", index=False
+    )
+    local_file_inventory.to_csv(
+        out_dir / "dataverse_tier2_local_file_inventory.tsv", sep="\t", index=False
+    )
+    reuse = local_reuse_manifest(inventory)
+    reuse.to_csv(
+        out_dir / "dataverse_tier2_local_reuse_manifest.tsv", sep="\t", index=False
+    )
+    inventory[inventory["local_equivalence_review_required"]].to_csv(
+        out_dir / "dataverse_tier2_local_equivalence_review.tsv",
+        sep="\t",
+        index=False,
     )
     summary.to_csv(
         out_dir / "dataverse_tier2_dataset_summary.tsv", sep="\t", index=False
@@ -676,6 +822,9 @@ def main() -> None:
             {"metric": "sample_mapping_files", "value": int(inventory["tier2_file_class"].isin(MAPPING_CLASSES).sum())},
             {"metric": "restricted_files", "value": int(inventory["restricted"].sum())},
             {"metric": "already_downloaded_files", "value": int(inventory["already_downloaded"].sum())},
+            {"metric": "local_files_inventoried", "value": len(local_file_inventory)},
+            {"metric": "local_exact_checksum_reuses", "value": int(inventory["local_reuse_verified"].sum())},
+            {"metric": "local_equivalence_reviews", "value": int(inventory["local_equivalence_review_required"].sum())},
             {"metric": "wheat_confirmed_files", "value": int(inventory["crop_scope"].eq(WHEAT_CONFIRMED).sum())},
             {"metric": "non_wheat_excluded_files", "value": int(inventory["crop_scope"].eq(NON_WHEAT_EXCLUDED).sum())},
             {"metric": "ambiguous_crop_files", "value": int(inventory["crop_scope"].eq(AMBIGUOUS_REVIEW).sum())},
@@ -707,6 +856,19 @@ def main() -> None:
         },
         "restricted_plan_requires_explicit_authorization": True,
         "crop_selection_policy": "only WHEAT_CONFIRMED rows may be selected",
+        "local_reconciliation": {
+            "roots": [str(path) for path in local_data_roots],
+            "automatic_reuse": "exact checksum and byte-size matches only",
+            "derived_or_filename_matches": "deferred for explicit review",
+            "local_file_inventory": str(out_dir / "dataverse_tier2_local_file_inventory.tsv"),
+            "local_file_inventory_sha256": sha256_file(
+                out_dir / "dataverse_tier2_local_file_inventory.tsv"
+            ),
+            "local_reuse_manifest": str(out_dir / "dataverse_tier2_local_reuse_manifest.tsv"),
+            "local_reuse_manifest_sha256": sha256_file(
+                out_dir / "dataverse_tier2_local_reuse_manifest.tsv"
+            ),
+        },
         "automatic_download_performed": False,
         "phenotype_values_read": False,
         "outer_test_metrics_read": False,

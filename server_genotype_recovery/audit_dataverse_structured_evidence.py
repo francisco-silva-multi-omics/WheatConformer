@@ -441,6 +441,9 @@ def main() -> None:
     downloads_path = recovery_dir / "dataverse_downloads.tsv"
     content_matches_path = recovery_dir / "dataverse_content_matches.tsv"
     search_results_path = recovery_dir / "dataverse_search_results.tsv"
+    local_reuse_path = (
+        recovery_dir / "tier2_inventory/dataverse_tier2_local_reuse_manifest.tsv"
+    )
     if not downloads_path.is_file():
         raise FileNotFoundError(downloads_path)
     if not resolver_path.is_file():
@@ -450,6 +453,42 @@ def main() -> None:
     term_index, term_count = term_index_from_resolver(resolver)
     downloads = read_table(downloads_path)
     downloads = downloads[downloads["download_status"].isin(["DOWNLOADED", "REUSED"])].copy()
+    local_reuse_count = 0
+    if local_reuse_path.is_file():
+        local_reuse = read_table(local_reuse_path)
+        required_reuse_columns = {
+            "dataset_persistent_id",
+            "datafile_id",
+            "filename",
+            "local_path",
+            "download_status",
+            "crop_scope",
+            "local_reconciliation_status",
+        }
+        missing_reuse_columns = sorted(
+            required_reuse_columns - set(local_reuse.columns)
+        )
+        if missing_reuse_columns:
+            raise ValueError(
+                "Local reuse manifest is stale or incomplete; missing columns: "
+                f"{missing_reuse_columns}"
+            )
+        invalid_reuse = local_reuse[
+            ~local_reuse["crop_scope"].eq(WHEAT_CONFIRMED)
+            | ~local_reuse["local_reconciliation_status"].eq(
+                "LOCAL_EXACT_CHECKSUM"
+            )
+        ]
+        if not invalid_reuse.empty:
+            raise ValueError(
+                "Local reuse manifest contains entries that are not certified "
+                "wheat checksum matches"
+            )
+        local_reuse_count = len(local_reuse)
+        downloads = pd.concat([downloads, local_reuse], ignore_index=True)
+        downloads = downloads.drop_duplicates(
+            ["dataset_persistent_id", "datafile_id"], keep="last"
+        )
     search_results = (
         read_table(search_results_path)
         if search_results_path.is_file()
@@ -510,7 +549,12 @@ def main() -> None:
             parse_rows.append({"filename": record.get("filename", ""), "status": "MISSING", "parts": 0, "rows": 0, "detail": str(path)})
             continue
         path_key = str(path)
-        full_scan = requires_full_structured_scan(filename) or path_key in scan_error_paths
+        full_scan = (
+            requires_full_structured_scan(filename)
+            or path_key in scan_error_paths
+            or clean(record.get("local_reconciliation_status"))
+            == "LOCAL_EXACT_CHECKSUM"
+        )
         indexed_terms = terms_by_path.get(path_key, set())
         if use_content_prefilter and not full_scan and not indexed_terms:
             parse_rows.append(
@@ -574,6 +618,7 @@ def main() -> None:
             {"metric": "resolver_rows", "value": len(resolver)},
             {"metric": "resolver_terms", "value": term_count},
             {"metric": "downloaded_files_considered", "value": len(downloads)},
+            {"metric": "verified_local_reuse_files_considered", "value": local_reuse_count},
             {"metric": "wheat_confirmed_downloaded_files", "value": int(downloads["crop_scope"].eq(WHEAT_CONFIRMED).sum())},
             {"metric": "non_wheat_downloaded_files_excluded", "value": int(downloads["crop_scope"].eq(NON_WHEAT_EXCLUDED).sum())},
             {"metric": "ambiguous_crop_downloaded_files_deferred", "value": int(downloads["crop_scope"].eq(AMBIGUOUS_REVIEW).sum())},
@@ -607,6 +652,11 @@ def main() -> None:
             "search_results_path": str(search_results_path) if search_results_path.is_file() else "",
             "search_results_sha256": sha256_file(search_results_path) if search_results_path.is_file() else "",
             "source_crop_audit": str(out_dir / "dataverse_structured_source_crop_scope.tsv"),
+        },
+        "local_reuse_manifest": {
+            "path": str(local_reuse_path) if local_reuse_path.is_file() else "",
+            "sha256": sha256_file(local_reuse_path) if local_reuse_path.is_file() else "",
+            "verified_reuse_rows": local_reuse_count,
         },
         "direct_marker_assignment_ready": False,
         "required_next_certification": "external_sample_axis_and_marker_call_concordance",

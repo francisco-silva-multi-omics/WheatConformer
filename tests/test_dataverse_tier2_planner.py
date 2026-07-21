@@ -9,6 +9,7 @@ from server_genotype_recovery.dataverse_crop_scope import (
     classify_crop_scope,
 )
 from server_genotype_recovery.plan_cimmyt_dataverse_tier2 import (
+    apply_local_availability,
     build_download_plan,
     build_inventory,
     evidence_crop_summary,
@@ -178,3 +179,48 @@ def test_plans_require_dataset_local_mapping_and_explicit_restricted_access() ->
     )
     non_wheat = crop_audit[crop_audit["crop_scope"].eq(NON_WHEAT_EXCLUDED)]
     assert int(non_wheat["evidence_rows"].sum()) == 1
+
+
+def test_verified_or_probable_local_files_are_not_selected() -> None:
+    files = pd.DataFrame(
+        [
+            candidate("doi:a", "a-map", "SampleIDvsGID.txt", role="marker_and_pedigree"),
+            candidate("doi:a", "a-snp", "wheat_80K_SNP_calls.vcf.gz", filesize=500),
+        ]
+    )
+    downloads = pd.DataFrame(columns=["dataset_persistent_id", "datafile_id"])
+    evidence = pd.DataFrame(
+        columns=["dataset_persistent_id", "query_id", "evidence_class"]
+    )
+    search = pd.DataFrame(
+        [
+            {
+                "dataset_persistent_id": "doi:a",
+                "global_id": "",
+                "dataset_name": "Wheat 80K genotyping",
+            }
+        ]
+    )
+    inventory = build_inventory(files, downloads, evidence, search)
+    inventory["local_reconciliation_status"] = [
+        "LOCAL_EXACT_CHECKSUM",
+        "LOCAL_DERIVED_REPRESENTATION_REVIEW",
+    ]
+    inventory["local_reuse_verified"] = [True, False]
+    inventory["local_equivalence_review_required"] = [False, True]
+    inventory = apply_local_availability(inventory)
+
+    plan = build_download_plan(
+        inventory,
+        include_restricted=True,
+        max_files=10,
+        max_file_bytes=10_000,
+        max_total_bytes=10_000,
+        marker_files_per_dataset=2,
+        mapping_files_per_dataset=2,
+    ).set_index("datafile_id")
+
+    assert plan.loc["a-map", "plan_status"] == "AVAILABLE_LOCAL_VERIFIED"
+    assert plan.loc["a-snp", "plan_status"] == (
+        "DEFERRED_LOCAL_EQUIVALENCE_REVIEW"
+    )

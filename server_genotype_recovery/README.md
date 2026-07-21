@@ -334,7 +334,13 @@ bash "$HOME/tools/WheatConformer/scripts/plan_cimmyt_dataverse_tier2.sh" \
 ```
 
 The planner inventories the complete discovered file catalog by restriction,
-size, role, platform and dataset-local resolver support. It writes separate
+size, role, platform and dataset-local resolver support. Before selecting any
+download, it scans `GENOTYPIC_DATA`, `TRIALS_AND_NURSERIES` and the legacy local
+`TRIALS_AND_NURSERIES_DATA` directory. Exact checksum and byte-size matches are
+reused automatically. Compression-normalized filenames and dataset-directory
+matches are written to `dataverse_tier2_local_equivalence_review.tsv` and are
+blocked from download until reviewed; filename similarity alone is never treated
+as proof of identity. It writes separate
 unrestricted and authorization-required plans. Marker matrices are selected
 only when a sample mapping exists in the same dataset or has already been
 downloaded. Only files with explicit wheat, Triticum or recognized wheat-trial
@@ -342,7 +348,9 @@ evidence can be selected; maize and other crops are excluded, while ambiguous
 datasets require manual review. Defaults are 20 files, 2 GiB per file and 10 GiB
 total; files beyond those limits remain explicitly deferred. The structured
 evidence audit applies the same wheat-only gate before pedigree evidence is
-created. The planner reads no phenotype values or evaluation outcomes and
+created and imports only checksum-certified entries from
+`dataverse_tier2_local_reuse_manifest.tsv`. The planner reads file metadata and
+bytes needed for checksums, but no phenotype values or evaluation outcomes, and
 performs no downloads.
 
 Run the unrestricted target list only after reviewing its TSV:
