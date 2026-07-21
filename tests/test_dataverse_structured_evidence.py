@@ -6,8 +6,10 @@ import pandas as pd
 
 from server_genotype_recovery.audit_dataverse_structured_evidence import (
     _excel_engine,
+    content_term_index,
     evidence_class,
     marker_bridge_class,
+    requires_full_structured_scan,
     scan_frame,
     structured_parts,
     summarize_gid_evidence,
@@ -99,3 +101,24 @@ def test_structured_parts_reads_gzip_wrapped_xlsx(tmp_path, monkeypatch) -> None
     assert part_name == "sheet:lines"
     assert frame.iloc[0].tolist() == ["GID", "Selection History"]
     assert frame.iloc[1].tolist() == ["123", "SEL-1"]
+
+
+def test_content_index_limits_terms_but_binary_workbooks_require_full_scan() -> None:
+    full_index = {
+        "SEL1": [{"query_id": "GID1"}],
+        "SEL2": [{"query_id": "GID2"}],
+    }
+    matches = pd.DataFrame(
+        [
+            {"path": "/data/a.tsv", "query_kind": "selection_history", "query_text": "SEL-1"},
+            {"path": "/data/b.tsv", "query_kind": "scan_error", "query_text": ""},
+        ]
+    )
+
+    by_path, errors = content_term_index(matches, full_index)
+
+    assert by_path == {"/data/a.tsv": {"SEL1"}}
+    assert errors == {"/data/b.tsv"}
+    assert requires_full_structured_scan("legacy.xls")
+    assert requires_full_structured_scan("mapping.xlsx.gz")
+    assert not requires_full_structured_scan("mapping.xlsx")

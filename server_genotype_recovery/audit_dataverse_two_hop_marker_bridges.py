@@ -146,17 +146,36 @@ def infer_marker_sample_header_row(frame: pd.DataFrame) -> int | None:
     return best_row if best_score >= 2 else None
 
 
-def load_frames(downloads: pd.DataFrame) -> tuple[dict[tuple[str, str], pd.DataFrame], list[dict[str, object]]]:
+def load_frames(
+    downloads: pd.DataFrame,
+    required_parts: set[tuple[str, str]] | None = None,
+    all_parts_paths: set[str] | None = None,
+    progress: bool = False,
+) -> tuple[dict[tuple[str, str], pd.DataFrame], list[dict[str, object]]]:
     frames: dict[tuple[str, str], pd.DataFrame] = {}
     log: list[dict[str, object]] = []
-    for record in downloads.to_dict("records"):
+    all_parts_paths = all_parts_paths or set()
+    records = downloads.to_dict("records")
+    for file_number, record in enumerate(records, start=1):
         path = Path(clean(record.get("local_path")))
         if not path.is_file():
             continue
+        if progress:
+            print(
+                f"[{file_number}/{len(records)}] load structured frames: "
+                f"{clean(record.get('filename')) or path.name}",
+                flush=True,
+            )
         try:
             part_count = 0
             for part, frame in structured_parts(path):
-                frames[(str(path), part)] = frame.fillna("")
+                key = (str(path), part)
+                if (
+                    required_parts is None
+                    or key in required_parts
+                    or str(path) in all_parts_paths
+                ):
+                    frames[key] = frame.fillna("")
                 part_count += 1
             log.append(
                 {
@@ -176,6 +195,34 @@ def load_frames(downloads: pd.DataFrame) -> tuple[dict[tuple[str, str], pd.DataF
                 }
             )
     return frames, log
+
+
+def select_two_hop_downloads(
+    downloads: pd.DataFrame,
+    evidence: pd.DataFrame,
+) -> tuple[pd.DataFrame, set[tuple[str, str]], set[str]]:
+    mapping = evidence[
+        evidence["evidence_class"].eq("selection_history_exact_unique")
+        & evidence["source_subtype"].eq("germplasm_or_sample_mapping")
+    ]
+    mapping_parts = {
+        (clean(row["local_path"]), clean(row["source_part"]))
+        for row in mapping[["local_path", "source_part"]].to_dict("records")
+        if clean(row["local_path"]) and clean(row["source_part"])
+    }
+    mapping_datasets = set(mapping["dataset_persistent_id"].map(clean)) - {""}
+    marker_mask = downloads.apply(
+        lambda row: (
+            clean(row.get("dataset_persistent_id")) in mapping_datasets
+            and source_subtype(row.get("filename"), row.get("description"))
+            == "marker_matrix_candidate"
+        ),
+        axis=1,
+    )
+    marker_paths = set(downloads.loc[marker_mask, "local_path"].map(clean)) - {""}
+    required_paths = {path for path, _ in mapping_parts} | marker_paths
+    selected = downloads[downloads["local_path"].map(clean).isin(required_paths)].copy()
+    return selected, mapping_parts, marker_paths
 
 
 def collect_mapping_aliases(
@@ -358,11 +405,19 @@ def main() -> None:
     downloads = downloads[downloads["download_status"].isin(["DOWNLOADED", "REUSED"])].copy()
     evidence = pd.read_csv(evidence_path, sep="\t", dtype=str)
     evidence["source_row"] = pd.to_numeric(evidence["source_row"], errors="coerce").fillna(-1).astype(int)
-    frames, parse_log = load_frames(downloads)
+    selected_downloads, mapping_parts, marker_paths = select_two_hop_downloads(
+        downloads, evidence
+    )
+    frames, parse_log = load_frames(
+        selected_downloads,
+        required_parts=mapping_parts,
+        all_parts_paths=marker_paths,
+        progress=True,
+    )
     aliases = collect_mapping_aliases(evidence, frames)
     locations = collect_marker_locations(
         set(aliases["normalized_external_alias"]) if not aliases.empty else set(),
-        downloads,
+        selected_downloads,
         frames,
     )
     bridges = build_bridges(aliases, locations)
@@ -384,6 +439,8 @@ def main() -> None:
     qc = pd.DataFrame(
         [
             {"metric": "structured_unique_selection_gids", "value": evidence.loc[evidence["evidence_class"] == "selection_history_exact_unique", "query_id"].nunique()},
+            {"metric": "downloaded_files_considered", "value": len(downloads)},
+            {"metric": "dataset_local_files_parsed", "value": len(selected_downloads)},
             {"metric": "mapping_alias_candidate_rows", "value": len(aliases)},
             {"metric": "marker_alias_location_rows", "value": len(locations)},
             {"metric": "two_hop_bridge_rows", "value": len(bridges)},

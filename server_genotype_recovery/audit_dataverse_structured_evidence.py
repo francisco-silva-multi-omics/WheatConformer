@@ -4,7 +4,10 @@ import argparse
 import gzip
 import io
 import json
+import re
+import time
 import zipfile
+from functools import lru_cache
 from pathlib import Path
 from typing import Iterator
 
@@ -41,6 +44,11 @@ EVIDENCE_COLUMNS = [
     "cell_value",
     "row_context_json",
 ]
+
+
+@lru_cache(maxsize=250_000)
+def _normalized_clean_text(text: str) -> str:
+    return re.sub(r"[^A-Z0-9]", "", text.upper())
 
 
 def evidence_class(query_kind: object, resolver_term_gid_count: int) -> tuple[str, str]:
@@ -199,23 +207,24 @@ def scan_frame(
     local = frame.fillna("")
     subtype = source_subtype(source.get("filename"), source.get("description"))
     for row_position, values in enumerate(local.itertuples(index=False, name=None)):
+        text_values = [clean(value) for value in values]
         normalized_cells: dict[str, list[int]] = {}
-        for column_position, value in enumerate(values):
-            normalized = normalized_identifier(value)
+        for column_position, value in enumerate(text_values):
+            normalized = _normalized_clean_text(value)
             if normalized in term_index:
                 normalized_cells.setdefault(normalized, []).append(column_position)
         if not normalized_cells:
             continue
-        context_positions = set(range(min(3, len(values))))
+        context_positions = set(range(min(3, len(text_values))))
         for positions in normalized_cells.values():
             for position in positions:
                 context_positions.update(
-                    range(max(0, position - 2), min(len(values), position + 3))
+                    range(max(0, position - 2), min(len(text_values), position + 3))
                 )
         context = {
-            str(position): clean(values[position])[:500]
+            str(position): text_values[position][:500]
             for position in sorted(context_positions)
-            if clean(values[position])
+            if text_values[position]
         }
         for normalized, positions in normalized_cells.items():
             for term in term_index[normalized]:
@@ -244,11 +253,37 @@ def scan_frame(
                             "source_part": source_part,
                             "source_row": row_position,
                             "source_column": position,
-                            "cell_value": clean(values[position])[:2000],
+                            "cell_value": text_values[position][:2000],
                             "row_context_json": json.dumps(context, sort_keys=True),
                         }
                     )
     return hits
+
+
+def requires_full_structured_scan(filename: object) -> bool:
+    lower = clean(filename).lower()
+    return lower.endswith((".xls", ".xls.gz", ".xlsx.gz", ".xlsm.gz"))
+
+
+def content_term_index(
+    content_matches: pd.DataFrame,
+    full_term_index: dict[str, list[dict[str, object]]],
+) -> tuple[dict[str, set[str]], set[str]]:
+    terms_by_path: dict[str, set[str]] = {}
+    scan_error_paths: set[str] = set()
+    if content_matches.empty or "path" not in content_matches.columns:
+        return terms_by_path, scan_error_paths
+    for row in content_matches.to_dict("records"):
+        path = clean(row.get("path"))
+        if not path:
+            continue
+        if clean(row.get("query_kind")) == "scan_error":
+            scan_error_paths.add(path)
+            continue
+        normalized = normalized_identifier(row.get("query_text"))
+        if normalized in full_term_index:
+            terms_by_path.setdefault(path, set()).add(normalized)
+    return terms_by_path, scan_error_paths
 
 
 def summarize_gid_evidence(evidence: pd.DataFrame) -> pd.DataFrame:
@@ -333,6 +368,7 @@ def main() -> None:
     out_dir = out_dir if out_dir.is_absolute() else root / out_dir
     out_dir.mkdir(parents=True, exist_ok=True)
     downloads_path = recovery_dir / "dataverse_downloads.tsv"
+    content_matches_path = recovery_dir / "dataverse_content_matches.tsv"
     if not downloads_path.is_file():
         raise FileNotFoundError(downloads_path)
     if not resolver_path.is_file():
@@ -342,24 +378,67 @@ def main() -> None:
     term_index, term_count = term_index_from_resolver(resolver)
     downloads = read_table(downloads_path)
     downloads = downloads[downloads["download_status"].isin(["DOWNLOADED", "REUSED"])].copy()
+    content_matches = (
+        read_table(content_matches_path)
+        if content_matches_path.is_file()
+        else pd.DataFrame()
+    )
+    terms_by_path, scan_error_paths = content_term_index(content_matches, term_index)
+    use_content_prefilter = content_matches_path.is_file()
     evidence_rows: list[dict[str, object]] = []
     parse_rows: list[dict[str, object]] = []
-    for record in downloads.to_dict("records"):
+    records = downloads.to_dict("records")
+    for file_number, record in enumerate(records, start=1):
         path = Path(clean(record.get("local_path")))
+        filename = clean(record.get("filename")) or path.name
+        started = time.monotonic()
+        print(
+            f"[{file_number}/{len(records)}] structured evidence: {filename}",
+            flush=True,
+        )
         if not path.is_file():
             parse_rows.append({"filename": record.get("filename", ""), "status": "MISSING", "parts": 0, "rows": 0, "detail": str(path)})
             continue
+        path_key = str(path)
+        full_scan = requires_full_structured_scan(filename) or path_key in scan_error_paths
+        indexed_terms = terms_by_path.get(path_key, set())
+        if use_content_prefilter and not full_scan and not indexed_terms:
+            parse_rows.append(
+                {
+                    "filename": filename,
+                    "status": "INDEXED_NO_IDENTIFIER_MATCH",
+                    "parts": 0,
+                    "rows": 0,
+                    "detail": "Skipped by the complete raw-content identifier index",
+                }
+            )
+            print("  indexed no-match; skipped", flush=True)
+            continue
+        local_term_index = (
+            term_index
+            if full_scan or not use_content_prefilter
+            else {key: term_index[key] for key in indexed_terms}
+        )
         parts = 0
         parsed_rows = 0
+        file_evidence_rows: list[dict[str, object]] = []
         try:
             for source_part, frame in structured_parts(path):
                 parts += 1
                 parsed_rows += len(frame)
-                evidence_rows.extend(scan_frame(frame, term_index, record, source_part))
+                file_evidence_rows.extend(
+                    scan_frame(frame, local_term_index, record, source_part)
+                )
             status, detail = "PASS", ""
         except Exception as exc:
             status, detail = "SKIPPED_OR_FAILED", f"{type(exc).__name__}: {exc}"
+        evidence_rows.extend(file_evidence_rows)
         parse_rows.append({"filename": record.get("filename", ""), "status": status, "parts": parts, "rows": parsed_rows, "detail": detail})
+        print(
+            f"  {status}; parts={parts}; rows={parsed_rows}; "
+            f"matches={len(file_evidence_rows)}; seconds={time.monotonic() - started:.2f}",
+            flush=True,
+        )
 
     evidence = pd.DataFrame(evidence_rows, columns=EVIDENCE_COLUMNS)
     evidence_path = out_dir / "dataverse_structured_evidence.tsv.gz"
@@ -386,6 +465,7 @@ def main() -> None:
             {"metric": "resolver_terms", "value": term_count},
             {"metric": "downloaded_files_considered", "value": len(downloads)},
             {"metric": "files_parsed", "value": int((parse_log["status"] == "PASS").sum()) if not parse_log.empty else 0},
+            {"metric": "files_skipped_by_complete_content_index", "value": int((parse_log["status"] == "INDEXED_NO_IDENTIFIER_MATCH").sum()) if not parse_log.empty else 0},
             {"metric": "structured_match_rows", "value": len(evidence)},
             {"metric": "matched_query_ids", "value": evidence["query_id"].nunique() if not evidence.empty else 0},
             {"metric": "direct_gid_exact_query_ids", "value": evidence.loc[evidence["evidence_class"] == "direct_gid_exact", "query_id"].nunique() if not evidence.empty else 0},
@@ -403,6 +483,12 @@ def main() -> None:
         "selection_data": "resolver_identifiers_and_downloaded_repository_files_only",
         "resolver_query": {"path": str(resolver_path), "sha256": sha256_file(resolver_path)},
         "downloads_manifest": {"path": str(downloads_path), "sha256": sha256_file(downloads_path)},
+        "content_prefilter": {
+            "enabled": use_content_prefilter,
+            "path": str(content_matches_path) if use_content_prefilter else "",
+            "sha256": sha256_file(content_matches_path) if use_content_prefilter else "",
+            "full_scan_formats": [".xls", ".xls.gz", ".xlsx.gz", ".xlsm.gz"],
+        },
         "direct_marker_assignment_ready": False,
         "required_next_certification": "external_sample_axis_and_marker_call_concordance",
         "phenotype_values_read": False,

@@ -9,6 +9,7 @@ from server_genotype_recovery.audit_dataverse_two_hop_marker_bridges import (
     infer_marker_sample_header_row,
     marker_axis_candidate,
     plausible_external_alias,
+    select_two_hop_downloads,
 )
 
 
@@ -95,3 +96,50 @@ def test_two_hop_bridge_is_never_directly_ready() -> None:
     assert len(bridges) == 1
     assert bridges.iloc[0]["bridge_confidence"] == "high_candidate_requires_call_concordance"
     assert not bridges.iloc[0]["direct_marker_assignment_ready"]
+
+
+def test_two_hop_file_selection_is_dataset_local() -> None:
+    downloads = pd.DataFrame(
+        [
+            {
+                "dataset_persistent_id": "doi:a",
+                "filename": "germplasm.xlsx",
+                "description": "germplasm mapping",
+                "local_path": "/data/a_mapping.xlsx",
+            },
+            {
+                "dataset_persistent_id": "doi:a",
+                "filename": "calls_pop_axiom.txt",
+                "description": "SNP calls",
+                "local_path": "/data/a_calls.txt",
+            },
+            {
+                "dataset_persistent_id": "doi:b",
+                "filename": "calls_pop_axiom.txt",
+                "description": "SNP calls",
+                "local_path": "/data/b_calls.txt",
+            },
+        ]
+    )
+    evidence = pd.DataFrame(
+        [
+            {
+                "evidence_class": "selection_history_exact_unique",
+                "source_subtype": "germplasm_or_sample_mapping",
+                "dataset_persistent_id": "doi:a",
+                "local_path": "/data/a_mapping.xlsx",
+                "source_part": "sheet:lines",
+            }
+        ]
+    )
+
+    selected, mapping_parts, marker_paths = select_two_hop_downloads(
+        downloads, evidence
+    )
+
+    assert set(selected["local_path"]) == {
+        "/data/a_mapping.xlsx",
+        "/data/a_calls.txt",
+    }
+    assert mapping_parts == {("/data/a_mapping.xlsx", "sheet:lines")}
+    assert marker_paths == {"/data/a_calls.txt"}

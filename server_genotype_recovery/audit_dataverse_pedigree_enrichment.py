@@ -799,7 +799,20 @@ def main() -> None:
         evidence["evidence_class"].eq("selection_history_exact_unique")
     ]
     selected_ids = set(selected_evidence["query_id"].map(clean)) - {""}
-    frames, parse_log = load_frames(downloads)
+    required_parts = {
+        (clean(row["local_path"]), clean(row["source_part"]))
+        for row in selected_evidence[["local_path", "source_part"]].to_dict("records")
+        if clean(row["local_path"]) and clean(row["source_part"])
+    }
+    required_paths = {path for path, _ in required_parts}
+    selected_downloads = downloads[
+        downloads["local_path"].map(clean).isin(required_paths)
+    ].copy()
+    frames, parse_log = load_frames(
+        selected_downloads,
+        required_parts=required_parts,
+        progress=True,
+    )
     records = extract_external_records(selected_evidence, frames)
     resolver = read_table(paths["resolver"])
     resolver_summary = resolver_lineage(resolver)
@@ -860,6 +873,8 @@ def main() -> None:
     )
     qc_rows = [
         {"metric": "structured_unique_selection_gids", "value": len(selected_ids)},
+        {"metric": "downloaded_files_considered", "value": len(downloads)},
+        {"metric": "evidence_referenced_files_parsed", "value": len(selected_downloads)},
         {"metric": "external_record_rows", "value": len(records)},
         {
             "metric": "external_record_gids",
