@@ -324,6 +324,38 @@ configured file and byte budgets. Large or restricted marker files should be
 targeted explicitly after reviewing their dataset, sample map and authorization
 rather than increasing global budgets blindly.
 
+After the wide structured-evidence audit, build the controlled Tier-2 plan:
+
+```bash
+PYTHON="$HOME/tools/tf_wheat_cpu/bin/python" \
+WHEATCONFORMER_CODE_ROOT="$HOME/tools/WheatConformer" \
+bash "$HOME/tools/WheatConformer/scripts/plan_cimmyt_dataverse_tier2.sh" \
+  /DATA2/estancias/tesis_javier/model_DATA/genotipoXambiente
+```
+
+The planner inventories the complete discovered file catalog by restriction,
+size, role, platform and dataset-local resolver support. It writes separate
+unrestricted and authorization-required plans. Marker matrices are selected
+only when a sample mapping exists in the same dataset or has already been
+downloaded. Defaults are 20 files, 2 GiB per file and 10 GiB total; files beyond
+those limits remain explicitly deferred. The planner reads no phenotype values
+or evaluation outcomes and performs no downloads.
+
+Run the unrestricted target list only after reviewing its TSV:
+
+```bash
+PYTHON="$HOME/tools/tf_wheat_cpu/bin/python" \
+WHEATCONFORMER_CODE_ROOT="$HOME/tools/WheatConformer" \
+CIMMYT_DATAVERSE_TIER2_PLAN_MODE=unrestricted \
+bash "$HOME/tools/WheatConformer/scripts/run_cimmyt_dataverse_tier2_download.sh" \
+  /DATA2/estancias/tesis_javier/model_DATA/genotipoXambiente
+```
+
+The authorized plan additionally requires both an account that can access the
+restricted files and the explicit environment switch
+`CIMMYT_DATAVERSE_TIER2_CONFIRM_RESTRICTED=1`. Both runners revalidate target
+IDs and byte budgets before calling the existing target-only downloader.
+
 Candidate downloads are ranked by resolver-linked search evidence, file role,
 machine readability and GID/pedigree relevance. Restricted files remain opt-in;
 set `CIMMYT_DATAVERSE_INCLUDE_RESTRICTED=1` only when the account is authorized
