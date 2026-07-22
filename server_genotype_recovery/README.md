@@ -560,6 +560,26 @@ review-only: the audit never modifies K_A, never treats complex slash notation
 as a resolved two-parent cross, and requires canonical parent curation plus the
 existing conflict/cycle gate before an isolated replacement K_A can be built.
 
+The isolated replacement is built with:
+
+```bash
+PYTHON="$HOME/tools/tf_wheat_cpu/bin/python" \
+WHEATCONFORMER_CODE_ROOT="$HOME/tools/WheatConformer" \
+CANONICAL_PEDIGREE_ALLOW_CONSERVATIVE_FOUNDER_FALLBACK=1 \
+bash "$HOME/tools/WheatConformer/scripts/build_canonical_pedigree_v2.sh" \
+  /DATA2/estancias/tesis_javier/model_DATA/genotipoXambiente
+```
+
+`build_canonical_pedigree` reconstructs numbered, three-way, double and
+backcross order instead of splitting compound pedigree text at the first slash.
+It assigns deterministic `PEDF_*` IDs to exact local founder designations and
+`PEDX_*` IDs to derived cross nodes, records their definitions in a registry,
+and writes child-lineage and selfing review ledgers. Those local IDs do not
+assert global GID identity. With the conservative fallback enabled, competing
+lineages and unreviewed selfing relationships become explicit founders rather
+than silently selected edges; no phenotype row is removed. The legacy `K_A`
+is preserved.
+
 Selection histories are decomposed into a BCID and developmental-stage tokens.
 The BCID, GID, cross and named parents are germplasm queries, but only the GID
 and BCID are used as direct sample/callset names. Stage suffixes such as `0Y`

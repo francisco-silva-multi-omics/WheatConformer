@@ -10,6 +10,7 @@ K_A_ORDER="${SINGLE_STEP_K_A_ORDER:-genotype_panels/pedigree/K_A_sample_order.ts
 K_G_HMP="${SINGLE_STEP_K_G_HMP:-genotype_panels/hmp/K_HMP.QCfiltered.meanDiag1.npy}"
 K_G_HMP_ORDER="${SINGLE_STEP_K_G_HMP_ORDER:-genotype_panels/hmp/hmp_K_sample_order.QCfiltered.tsv}"
 REGULATORY_CERTIFICATION="${SINGLE_STEP_REGULATORY_CERTIFICATION:-model_kernels/regulatory_eligibility_v1_reconciled/regulatory_eligibility_certification.json}"
+PEDIGREE_PARENT_TABLE="${SINGLE_STEP_PEDIGREE_PARENT_TABLE:-genotype_panels/pedigree/pedigree_parent_table.tsv}"
 export PYTHONPATH="$CODE_ROOT${PYTHONPATH:+:$PYTHONPATH}"
 export PYTHONSAFEPATH=1
 
@@ -19,6 +20,7 @@ mkdir -p logs "$OUT_DIR"
 args=(
   --root .
   --out-dir "$OUT_DIR"
+  --pedigree-parent-table "$PEDIGREE_PARENT_TABLE"
   --k-a "$K_A"
   --k-a-order "$K_A_ORDER"
   --k-g-hmp "$K_G_HMP"
@@ -27,12 +29,20 @@ args=(
   --minimum-overlap "${SINGLE_STEP_MINIMUM_OVERLAP:-100}"
   --sample-size "${SINGLE_STEP_SAMPLE_SIZE:-1024}"
   --blend-fraction "${SINGLE_STEP_PEDIGREE_BLEND_FRACTION:-0.05}"
+  --child-id-regex "${SINGLE_STEP_CHILD_ID_REGEX:-^GID[0-9]+$}"
+  --parent-id-regex "${SINGLE_STEP_PARENT_ID_REGEX:-^GID[0-9]+$}"
 )
 if [[ -n "${CURATED_PARENT_REGISTRY:-}" ]]; then
   args+=(--curated-parent-registry "$CURATED_PARENT_REGISTRY")
 fi
 if [[ -n "${PEDIGREE_SOURCE_MANIFEST:-}" ]]; then
   args+=(--pedigree-source-manifest "$PEDIGREE_SOURCE_MANIFEST")
+fi
+if [[ -n "${STABLE_PARENT_REGISTRY:-}" ]]; then
+  args+=(--stable-parent-registry "$STABLE_PARENT_REGISTRY")
+fi
+if [[ -n "${PEDIGREE_LINEAGE_RESOLUTION:-}" ]]; then
+  args+=(--lineage-resolution "$PEDIGREE_LINEAGE_RESOLUTION")
 fi
 
 "$PYTHON" -P -m server_genotype_recovery.audit_single_step_readiness "${args[@]}"
