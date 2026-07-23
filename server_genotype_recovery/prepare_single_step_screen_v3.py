@@ -80,6 +80,9 @@ def main() -> None:
     parser.add_argument("--freeze-provenance", type=Path, required=True)
     parser.add_argument("--candidate-plan", type=Path, required=True)
     parser.add_argument("--diagnostic-fold-support", type=Path, required=True)
+    parser.add_argument("--canonical-k-a", type=Path, required=True)
+    parser.add_argument("--canonical-k-a-order", type=Path, required=True)
+    parser.add_argument("--canonical-decision", type=Path, required=True)
     parser.add_argument("--out-dir", type=Path, required=True)
     parser.add_argument("--rank", type=int, default=128)
     args = parser.parse_args()
@@ -96,6 +99,31 @@ def main() -> None:
 
     plan_path = resolve(root, args.candidate_plan)
     diagnostic_support_path = resolve(root, args.diagnostic_fold_support)
+    canonical_k_a_path = resolve(root, args.canonical_k_a)
+    canonical_k_a_order_path = resolve(root, args.canonical_k_a_order)
+    canonical_decision_path = resolve(root, args.canonical_decision)
+    for path in (
+        diagnostic_support_path,
+        canonical_k_a_path,
+        canonical_k_a_order_path,
+        canonical_decision_path,
+    ):
+        if not path.is_file() or path.stat().st_size == 0:
+            raise FileNotFoundError(f"Required single-step screen input is missing: {path}")
+    canonical_decision = json.loads(
+        canonical_decision_path.read_text(encoding="utf-8")
+    )
+    if canonical_decision.get("status") != "PASS" or canonical_decision.get(
+        "protocol_version"
+    ) != "canonical_trial_pedigree_v3_verified_recovery_overlay":
+        raise ValueError("Canonical pedigree v3 decision is absent, failed, or stale")
+    for key in (
+        "phenotype_values_read",
+        "outer_test_metrics_read",
+        "final_holdout_outcomes_read",
+    ):
+        if canonical_decision.get(key) is not False:
+            raise ValueError(f"Canonical pedigree v3 safety flag is not false: {key}")
     candidate_plan = pd.read_csv(plan_path, sep="\t", dtype=str).fillna("")
     if candidate_plan["prefix"].duplicated().any():
         raise ValueError("Candidate construction plan contains duplicate prefixes")
@@ -115,17 +143,36 @@ def main() -> None:
         raise ValueError("No globally supported single-step H candidates were prepared")
     global_kernels = global_rows["prefix"].tolist()
     marker_excludes = list(BUILTIN_MARKER_KERNELS)
+    canonical_kernel = "K_A_CANONICAL_V3"
 
-    manifest_rows: list[dict[str, object]] = []
+    manifest_rows: list[dict[str, object]] = [
+        {
+            "kernel": canonical_kernel,
+            "biological_role": "canonical_v3_pedigree_relationship",
+            "kernel_path": relative(root, canonical_k_a_path),
+            "order_path": relative(root, canonical_k_a_order_path),
+            "source_id_col": "sample_id",
+            "eligible_traits": "*",
+            "enabled_default": False,
+            "interaction_enabled": True,
+            "rank": args.rank,
+            "minimum_ledger_coverage": 1.0,
+            "coverage_basis": "unique_entities",
+            "minimum_eligible_entities": 2,
+            "minimum_training_entities": 2,
+        }
+    ]
     plan_rows: list[dict[str, object]] = [
         {
             "architecture": "pedigree_environment_only",
-            "include_disabled_kernels": "",
-            "exclude_kernels": ",".join([*marker_excludes, *global_kernels]),
+            "include_disabled_kernels": canonical_kernel,
+            "exclude_kernels": ",".join(
+                ["K_A", *marker_excludes, *global_kernels]
+            ),
             "direct_genotyped_order_path": "",
             "screen_phase": "phase_1_inner_validation",
             "status": "ready",
-            "decision_note": "canonical_v3_pedigree_environment_reference",
+            "decision_note": "explicit_canonical_v3_pedigree_environment_reference",
         }
     ]
     for row in global_rows.sort_values("source", kind="stable").itertuples(index=False):
@@ -153,7 +200,12 @@ def main() -> None:
                 "architecture": architecture_name(row.prefix),
                 "include_disabled_kernels": row.prefix,
                 "exclude_kernels": ",".join(
-                    ["K_A", *marker_excludes, *[k for k in global_kernels if k != row.prefix]]
+                    [
+                        "K_A",
+                        canonical_kernel,
+                        *marker_excludes,
+                        *[k for k in global_kernels if k != row.prefix],
+                    ]
                 ),
                 "direct_genotyped_order_path": relative(
                     root, Path(outputs["genotyped_overlap_order"])
@@ -194,7 +246,9 @@ def main() -> None:
 
     provenance = {
         "status": "PASS",
-        "protocol_version": "single_step_H_inner_screen_v3_support_gated",
+        "protocol_version": (
+            "single_step_H_inner_screen_v3_support_gated_canonical_v3_reference"
+        ),
         "selection_data": "certified_relationship_kernels_and_frozen_fold_support_only",
         "phenotype_values_read": False,
         "outer_test_metrics_read": False,
@@ -207,6 +261,20 @@ def main() -> None:
         "candidate_plan": {
             "path": relative(root, plan_path),
             "sha256": sha256_file(plan_path),
+        },
+        "canonical_pedigree_v3": {
+            "kernel": {
+                "path": relative(root, canonical_k_a_path),
+                "sha256": sha256_file(canonical_k_a_path),
+            },
+            "order": {
+                "path": relative(root, canonical_k_a_order_path),
+                "sha256": sha256_file(canonical_k_a_order_path),
+            },
+            "decision": {
+                "path": relative(root, canonical_decision_path),
+                "sha256": sha256_file(canonical_decision_path),
+            },
         },
         "global_candidate_count": len(global_rows),
         "diagnostic_candidate_count": len(diagnostic_rows),

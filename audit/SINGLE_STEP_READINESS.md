@@ -113,6 +113,20 @@ least two-thirds of matched inner folds, no mean Pearson drop beyond 0.005, and
 no deterioration in pedigree-only coverage or calibration. Outer-test and
 final-holdout outcomes remain unavailable during this screen.
 
+The screen manifest explicitly registers `K_A_CANONICAL_V3`. The pedigree
+reference includes that disabled kernel and excludes legacy `K_A`; every
+single-step arm excludes both pedigree kernels and includes exactly one `H`.
+After updating screen-generation code, refresh only the manifests without
+rebuilding the certified relationship matrices:
+
+```bash
+PYTHON="$PYTHON" WHEATCONFORMER_CODE_ROOT="$CODE" \
+  bash "$CODE/scripts/refresh_single_step_h_screen_v3.sh" "$DATA"
+```
+
+Repaired runs use `single_step_H_inner_screen_v3_canonical` directories so
+results from a stale legacy-`K_A` smoke test cannot enter their summary.
+
 ## Server run
 
 ```bash

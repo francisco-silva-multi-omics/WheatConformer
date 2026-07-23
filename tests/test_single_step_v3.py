@@ -204,6 +204,21 @@ def test_v3_screen_excludes_diagnostic_kernel_from_global_plan(tmp_path: Path) -
     pd.DataFrame({"source": ["CERTIFIED_HMP"]}).to_csv(
         tmp_path / "diagnostic.tsv", sep="\t", index=False
     )
+    write_file(tmp_path / "K_A_CANONICAL_V3.npy")
+    write_file(tmp_path / "K_A_CANONICAL_V3_order.tsv")
+    (tmp_path / "canonical_decision.json").write_text(
+        json.dumps(
+            {
+                "status": "PASS",
+                "protocol_version": "canonical_trial_pedigree_v3_verified_recovery_overlay",
+                "phenotype_values_read": False,
+                "outer_test_metrics_read": False,
+                "final_holdout_outcomes_read": False,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
     project_root = Path(__file__).resolve().parents[1]
     subprocess.run(
         [
@@ -218,6 +233,12 @@ def test_v3_screen_excludes_diagnostic_kernel_from_global_plan(tmp_path: Path) -
             "plan.tsv",
             "--diagnostic-fold-support",
             "diagnostic.tsv",
+            "--canonical-k-a",
+            "K_A_CANONICAL_V3.npy",
+            "--canonical-k-a-order",
+            "K_A_CANONICAL_V3_order.tsv",
+            "--canonical-decision",
+            "canonical_decision.json",
             "--out-dir",
             "screen",
         ],
@@ -231,6 +252,17 @@ def test_v3_screen_excludes_diagnostic_kernel_from_global_plan(tmp_path: Path) -
         "pedigree_environment_only",
         "single_step_H_READY",
     }
+    reference = global_plan.set_index("architecture").loc[
+        "pedigree_environment_only"
+    ]
+    assert reference["include_disabled_kernels"] == "K_A_CANONICAL_V3"
+    assert "K_A" in reference["exclude_kernels"].split(",")
+    candidate = global_plan.set_index("architecture").loc["single_step_H_READY"]
+    assert "K_A_CANONICAL_V3" in candidate["exclude_kernels"].split(",")
+    manifest = pd.read_csv(
+        tmp_path / "screen/single_step_kernel_manifest.tsv", sep="\t"
+    )
+    assert set(manifest["kernel"]) == {"K_A_CANONICAL_V3", "K_H_READY"}
     diagnostic = pd.read_csv(
         tmp_path / "screen/single_step_diagnostic_kernel_manifest.tsv", sep="\t"
     )

@@ -139,6 +139,9 @@ log "PREPARE support-gated global and diagnostic screen manifests"
   --freeze-provenance "$FREEZE_OUT/frozen_inner_screen_provenance.json" \
   --candidate-plan "$PLAN" \
   --diagnostic-fold-support "$OUT_DIR/single_step_diagnostic_fold_support.tsv" \
+  --canonical-k-a "$K_A" \
+  --canonical-k-a-order "$K_A_ORDER" \
+  --canonical-decision "$CANONICAL_DIR/canonical_pedigree_decision.json" \
   --out-dir "$OUT_DIR"
 
 sha256sum -c "$FREEZE_OUT/frozen_inner_screen_artifacts.sha256"
