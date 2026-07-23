@@ -52,6 +52,67 @@ The parser follows the cross-order and backcross-dose semantics of the
 Purdy/CIMMYT notation. It never treats every slash as an interchangeable text
 separator.
 
+## Certified recovered-edge overlay
+
+After `recovered_identity_verification_v2` passes, build a separate canonical
+v3 pedigree. V3 reconstructs the same canonical source pedigree and then
+overlays only rows from the hashed `accepted_new_pedigree_edges.tsv` bundle:
+
+```bash
+set +u
+
+CODE="$HOME/tools/WheatConformer"
+DATA="/DATA2/estancias/tesis_javier/model_DATA/genotipoXambiente"
+PYTHON="$HOME/tools/tf_wheat_cpu/bin/python"
+
+cd "$DATA"
+env \
+  PYTHON="$PYTHON" \
+  WHEATCONFORMER_CODE_ROOT="$CODE" \
+  CANONICAL_PEDIGREE_ALLOW_CONSERVATIVE_FOUNDER_FALLBACK=1 \
+  bash "$CODE/scripts/build_canonical_pedigree_v3.sh" "$DATA"
+```
+
+This writes `genotype_panels/pedigree_canonical_v3` and
+`K_A_CANONICAL_V3`. It does not modify v2. The builder verifies the complete
+recovered-identity SHA256 manifest, materializes only the stable-parent
+registry closure needed by accepted edges, refuses to overwrite a different
+nonempty v2 parent, and reruns the pedigree cycle and relationship checks.
+`recovered_edge_overlay.tsv` distinguishes newly applied edges from edges
+already represented by the canonical Purdy reconstruction.
+
+Build the independent panel-specific single-step candidates only after v3
+passes:
+
+```bash
+nohup env \
+  PYTHON="$PYTHON" \
+  WHEATCONFORMER_CODE_ROOT="$CODE" \
+  bash "$CODE/scripts/build_single_step_h_candidates_v3.sh" "$DATA" \
+  > "$DATA/logs/build_single_step_h_candidates_v3.nohup.log" 2>&1 &
+```
+
+The candidate registry keeps 80K, GBS, haplotype, IWYP35K and accepted-identity
+Seeds relationships separate. HMP is constructed for diagnostics but excluded
+from the global screen because its frozen country-holdout support reaches one
+training GID. DArTAG is not constructed because some frozen folds have zero
+training support. No platform dosage matrices are merged.
+
+Run the global inner-only comparison after candidate construction:
+
+```bash
+nohup env \
+  PYTHON="$PYTHON" \
+  WHEATCONFORMER_CODE_ROOT="$CODE" \
+  bash "$CODE/scripts/run_single_step_h_inner_screen_v3.sh" "$DATA" all \
+  > "$DATA/logs/single_step_h_inner_screen_v3.nohup.log" 2>&1 &
+```
+
+Selection still requires at least 1% relative normalized-RMSE gain, wins in at
+least two-thirds of matched inner folds, no mean Pearson drop beyond 0.005, and
+no deterioration in pedigree-only coverage or calibration. Outer-test and
+final-holdout outcomes remain unavailable during this screen.
+
 ## Server run
 
 ```bash

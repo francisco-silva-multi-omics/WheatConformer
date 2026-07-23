@@ -191,6 +191,52 @@ def sampled_kernel_qc(values: np.ndarray, sample_size: int) -> dict[str, object]
     }
 
 
+def certify_input_relationship(
+    values: np.ndarray, sample_size: int
+) -> dict[str, object]:
+    if not np.isfinite(values).all():
+        raise ValueError("Input genomic relationship contains non-finite values")
+    symmetry = float(np.max(np.abs(values - values.T)))
+    scale = max(float(np.max(np.abs(values))), 1.0)
+    symmetry_tolerance = max(1e-6, 1e-6 * scale)
+    if symmetry > symmetry_tolerance:
+        raise ValueError(
+            "Input genomic relationship is not symmetric: "
+            f"max_abs={symmetry} tolerance={symmetry_tolerance}"
+        )
+    diagonal = np.diag(values)
+    if np.any(diagonal <= 0):
+        raise ValueError("Input genomic relationship has a non-positive diagonal")
+    selected = np.linspace(
+        0, len(values) - 1, min(len(values), sample_size), dtype=int
+    )
+    sample = np.asarray(values[np.ix_(selected, selected)], dtype=np.float64)
+    eigenvalues = np.linalg.eigvalsh((sample + sample.T) * 0.5)
+    tolerance = max(1e-5, 1e-6 * max(float(np.trace(sample)), 1.0))
+    if float(eigenvalues.min()) < -tolerance:
+        raise ValueError(
+            "Input genomic relationship failed sampled PSD certification: "
+            f"min_eigenvalue={eigenvalues.min()} tolerance={tolerance}"
+        )
+    positive = eigenvalues[eigenvalues > max(1e-8, tolerance * 1e-3)]
+    effective_rank = (
+        float(np.square(positive.sum()) / np.square(positive).sum())
+        if len(positive)
+        else 0.0
+    )
+    if effective_rank < 1.0:
+        raise ValueError("Input genomic relationship has no identifiable positive rank")
+    return {
+        "input_G_symmetry_max_abs": symmetry,
+        "input_G_symmetry_tolerance": symmetry_tolerance,
+        "input_G_diagonal_mean": float(diagonal.mean()),
+        "input_G_diagonal_min": float(diagonal.min()),
+        "input_G_sampled_min_eigenvalue": float(eigenvalues.min()),
+        "input_G_sampled_psd_tolerance": float(tolerance),
+        "input_G_sampled_effective_rank": effective_rank,
+    }
+
+
 def require_readiness(path: Path, k_a_path: Path, k_a_order_path: Path) -> dict[str, object]:
     decision = json.loads(path.read_text(encoding="utf-8"))
     if not decision.get("single_step_H_construction_allowed", False):
@@ -307,6 +353,7 @@ def main() -> None:
     genomic = np.asarray(kg[np.ix_(gi, gi)], dtype=np.float64)
     if not np.isfinite(a22).all() or not np.isfinite(genomic).all():
         raise SystemExit("A22 or G contains non-finite values")
+    input_genomic_qc = certify_input_relationship(genomic, args.sample_size)
     working_genomic, tuning_qc = tune_and_blend_genomic_relationship(
         a22,
         genomic,
@@ -381,6 +428,7 @@ def main() -> None:
         "overlap_genotypes_in_target_order": len(target_overlap),
         "H22_replacement_max_abs_residual": h22_residual,
         "H22_replacement_tolerance": h22_tolerance,
+        **input_genomic_qc,
         **tuning_qc,
         **construction_qc,
         **kernel_qc,

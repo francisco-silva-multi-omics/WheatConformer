@@ -580,6 +580,21 @@ lineages and unreviewed selfing relationships become explicit founders rather
 than silently selected edges; no phenotype row is removed. The legacy `K_A`
 is preserved.
 
+Once the phenotype-blind recovered-identity v2 bundle has passed and been
+reviewed, use `scripts/build_canonical_pedigree_v3.sh` instead of modifying the
+v2 artifacts. The v3 builder verifies the recovered bundle hashes, overlays
+only accepted direct-parent edges into empty canonical parent roles, imports
+their required stable-parent registry closure, rejects conflicting overwrites
+and cycles, and writes `K_A_CANONICAL_V3` under
+`genotype_panels/pedigree_canonical_v3`.
+
+`scripts/build_single_step_h_candidates_v3.sh` then constructs independent H
+candidates for globally supported marker sources. The associated registry
+keeps platforms separate, places HMP in a support-gated diagnostic manifest,
+and blocks DArTAG while any frozen training fold has zero panel support.
+`scripts/run_single_step_h_inner_screen_v3.sh` performs the matched inner-only
+comparison; it does not inspect outer-test or final-holdout outcomes.
+
 Selection histories are decomposed into a BCID and developmental-stage tokens.
 The BCID, GID, cross and named parents are germplasm queries, but only the GID
 and BCID are used as direct sample/callset names. Stage suffixes such as `0Y`

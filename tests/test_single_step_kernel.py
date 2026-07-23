@@ -8,11 +8,20 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from server_genotype_recovery.build_single_step_kernel import (
+    certify_input_relationship,
     construct_single_step_submatrix,
     tune_and_blend_genomic_relationship,
 )
+
+
+def test_input_genomic_relationship_certification_rejects_asymmetry() -> None:
+    relationship = np.eye(3, dtype=float)
+    relationship[0, 1] = 0.5
+    with pytest.raises(ValueError, match="not symmetric"):
+        certify_input_relationship(relationship, sample_size=3)
 
 
 def digest(path: Path) -> str:

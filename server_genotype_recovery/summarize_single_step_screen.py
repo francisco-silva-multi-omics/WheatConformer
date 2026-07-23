@@ -429,9 +429,9 @@ def main() -> None:
         & plan["screen_phase"].eq("phase_1_inner_validation")
     ]
     architectures = set(ready["architecture"])
-    if REFERENCE not in architectures or len(architectures) != 3:
+    if REFERENCE not in architectures or len(architectures) < 2:
         raise SystemExit(
-            "The single-step screen must contain exactly the pedigree reference and two H candidates"
+            "The single-step screen must contain the pedigree reference and at least one H candidate"
         )
     runs = load_runs(models_dir, args.scenario)
     validate_grid(
