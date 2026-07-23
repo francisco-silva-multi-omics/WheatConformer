@@ -26,12 +26,12 @@ CANONICAL_DIR="${REACTION_CANONICAL_DIR:-genotype_panels/pedigree_canonical_v3}"
 INPUT_DIR="${REACTION_INPUT_DIR:-model_kernels/reaction_norm_v1}"
 SCREEN_DIR="${REACTION_SCREEN_DIR:-model_kernels/reaction_norm_inner_screen_v1}"
 MODELS_DIR="${REACTION_MODELS_DIR:-trained_models/reaction_norm_inner_screen_v1_runs}"
-REFERENCE_MODELS_DIR="${REACTION_REFERENCE_MODELS_DIR:-trained_models/single_step_H_inner_screen_v3_canonical_runs}"
+REFERENCE_MODELS_DIR="${REACTION_REFERENCE_MODELS_DIR:-trained_models/reaction_norm_matched_nonlinear_reference_v1_runs}"
 FORCE="${REACTION_FORCE:-0}"
 
 MANIFEST="$BASE_EVALUATION_DIR/nested_evaluation_entities.tsv"
 CONTRACT="$BASE_EVALUATION_DIR/nested_evaluation_contract.json"
-mkdir -p "$INPUT_DIR" "$SCREEN_DIR" "$MODELS_DIR" logs
+mkdir -p "$INPUT_DIR" "$SCREEN_DIR" "$MODELS_DIR" "$REFERENCE_MODELS_DIR" logs
 
 timestamp() { date '+%Y-%m-%d %H:%M:%S'; }
 log() { printf '[%s] %s\n' "$(timestamp)" "$*"; }
@@ -122,6 +122,33 @@ for assignment in "${TRAINING[@]}"; do
   esac
 done
 
+mapfile -t REFERENCE_CONFIGURATION < <("$PYTHON" - "$EVALUATION_PROTOCOL" <<'PY'
+import json, sys
+protocol = json.load(open(sys.argv[1]))
+candidate = next(
+    value for value in protocol["hyperparameter_candidates"]
+    if value["name"] == "frozen_base"
+)
+for key in ["rank_genotype", "rank_environment", "latent_dim", "learning_rate", "weight_decay"]:
+    print(f"{key}={candidate[key]}")
+PY
+)
+for assignment in "${REFERENCE_CONFIGURATION[@]}"; do
+  key="${assignment%%=*}"
+  value="${assignment#*=}"
+  case "$key" in
+    rank_genotype) REFERENCE_RANK_G="$value" ;;
+    rank_environment) REFERENCE_RANK_E="$value" ;;
+    latent_dim) REFERENCE_LATENT_DIM="$value" ;;
+    learning_rate) REFERENCE_LEARNING_RATE="$value" ;;
+    weight_decay) REFERENCE_WEIGHT_DECAY="$value" ;;
+  esac
+done
+if [[ "$REFERENCE_RANK_G" != "$RANK_G" || "$REFERENCE_RANK_E" != "$RANK_E" ]]; then
+  echo "Reaction and nonlinear reference ranks disagree with their frozen protocols" >&2
+  exit 2
+fi
+
 run_is_current() {
   local run_dir="$1" prefix="$2" candidate="$3" seed="$4" outer="$5" inner="$6" certification="$7"
   "$PYTHON" -m server_training_pipeline.verify_reaction_norm_run \
@@ -137,6 +164,37 @@ run_is_current() {
     --reaction-protocol "$REACTION_PROTOCOL" \
     --certification-summary "$certification" \
     --trainer "$CODE_ROOT/server_training_pipeline/train_multitrait_reaction_norm_tf.py" \
+    --factorization-implementation "$CODE_ROOT/server_training_pipeline/kernel_factorization.py" \
+    >/dev/null 2>&1
+}
+
+reference_run_is_current() {
+  local run_dir="$1" prefix="$2" seed="$3" outer="$4" inner="$5" certification="$6"
+  "$PYTHON" -m server_training_pipeline.verify_nested_run \
+    --run-dir "$run_dir" \
+    --prefix "$prefix" \
+    --stage inner_selection \
+    --scenario "$SCENARIO" \
+    --outer-fold "$outer" \
+    --inner-fold "$inner" \
+    --candidate nonlinear_canonical_v3_matched_reference \
+    --seed "$seed" \
+    --model-label multitrait_nonlinear_canonical_v3_matched_reference \
+    --mode full \
+    --rank-genotype "$REFERENCE_RANK_G" \
+    --rank-environment "$REFERENCE_RANK_E" \
+    --latent-dim "$REFERENCE_LATENT_DIM" \
+    --epochs "$EPOCHS" \
+    --batch-size "$BATCH_SIZE" \
+    --learning-rate "$REFERENCE_LEARNING_RATE" \
+    --weight-decay "$REFERENCE_WEIGHT_DECAY" \
+    --patience "$PATIENCE" \
+    --intra-op-threads "$INTRA_THREADS" \
+    --inter-op-threads "$INTER_THREADS" \
+    --manifest "$MANIFEST" \
+    --protocol "$EVALUATION_PROTOCOL" \
+    --certification-summary "$certification" \
+    --trainer "$CODE_ROOT/server_training_pipeline/train_multitrait_multikernel_tf.py" \
     --factorization-implementation "$CODE_ROOT/server_training_pipeline/kernel_factorization.py" \
     >/dev/null 2>&1
 }
@@ -270,6 +328,55 @@ PY
     --inter-op-threads "$INTER_THREADS"
     "${trait_args[@]}"
   )
+
+  for inner_fold in 0 1 2; do
+    seed=$((61001 + outer_fold * 100 + inner_fold * 10))
+    reference_name="reaction_reference_inner_${SCENARIO}_outer${outer_fold}_inner${inner_fold}"
+    reference_dir="$REFERENCE_MODELS_DIR/$reference_name"
+    if [[ "$FORCE" != "1" ]] && reference_run_is_current \
+      "$reference_dir" "$reference_name" "$seed" "$outer_fold" "$inner_fold" "$CERTIFICATION"; then
+      log "SKIP matched nonlinear reference outer=$outer_fold inner=$inner_fold: certified current"
+      continue
+    fi
+    mkdir -p "$reference_dir"
+    log "TRAIN matched nonlinear reference outer=$outer_fold inner=$inner_fold"
+    "$PYTHON" -m server_training_pipeline.train_multitrait_multikernel_tf \
+      --ledger "$LEDGER" \
+      --trait-order "$TRAIT_ORDER" \
+      --kernel-registry "$REGISTRY" \
+      --certification-summary "$CERTIFICATION" \
+      --split-manifest "$MANIFEST" \
+      --split-contract "$CONTRACT" \
+      --evaluation-protocol "$EVALUATION_PROTOCOL" \
+      --evaluation-scenario "$SCENARIO" \
+      --outer-fold "$outer_fold" \
+      --inner-fold "$inner_fold" \
+      --evaluation-stage inner_selection \
+      --stage1-policy leakage_safe_by_scenario \
+      --fold-local-weights \
+      --weight-power 0 \
+      --weight-min-effective-sample-fraction 1 \
+      --weight-max-top-1pct-share 0.02 \
+      --include-disabled-kernel K_A_CANONICAL_V3 \
+      --include-disabled-kernel K_E_TGW_V2 \
+      --max-rank-genotype "$REFERENCE_RANK_G" \
+      --max-rank-environment "$REFERENCE_RANK_E" \
+      --latent-dim "$REFERENCE_LATENT_DIM" \
+      --learning-rate "$REFERENCE_LEARNING_RATE" \
+      --weight-decay "$REFERENCE_WEIGHT_DECAY" \
+      --batch-size "$BATCH_SIZE" \
+      --epochs "$EPOCHS" \
+      --patience "$PATIENCE" \
+      --intra-op-threads "$INTRA_THREADS" \
+      --inter-op-threads "$INTER_THREADS" \
+      "${trait_args[@]}" \
+      --seed "$seed" \
+      --hyperparameter-label nonlinear_canonical_v3_matched_reference \
+      --model-label multitrait_nonlinear_canonical_v3_matched_reference \
+      --factor-cache "$FOLD_DIR/factors_inner${inner_fold}.npz" \
+      --out-dir "$reference_dir" \
+      --prefix "$reference_name"
+  done
 
   for candidate_line in "${CANDIDATES[@]}"; do
     IFS='|' read -r candidate shrinkage reaction_rank ridge <<< "$candidate_line"

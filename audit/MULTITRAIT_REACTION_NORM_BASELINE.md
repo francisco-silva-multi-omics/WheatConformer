@@ -35,10 +35,12 @@ residual scales, kernel centering, and Nyström factors are fit from inner
 training rows only. Outer-test and omitted phenotype-derived fields are cleared
 before support counting and the rows are removed before preprocessing.
 
-Selection reads inner-validation metrics only. It compares the two reaction
-models with the corrected canonical-v3 nonlinear reference using identical
-seeds, validation observations, kernels, and order hashes. It never generates
-outer-test predictions.
+Selection reads inner-validation metrics only. It fits a matched canonical-v3
+nonlinear reference from the same exact six-kernel registry, then compares the
+two reaction models using identical seeds, validation observations, kernels,
+and order hashes. Earlier nonlinear runs that activated optional climatology
+are preserved for their original experiment but are not used as this matched
+reference. The screen never generates outer-test predictions.
 
 ## Server run
 

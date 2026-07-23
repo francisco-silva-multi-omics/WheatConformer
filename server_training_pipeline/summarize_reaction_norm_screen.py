@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import re
 from pathlib import Path
 
 import numpy as np
@@ -10,6 +9,7 @@ import pandas as pd
 
 
 REFERENCE = "nonlinear_canonical_v3_reference"
+MATCHED_REFERENCE_LABEL = "nonlinear_canonical_v3_matched_reference"
 
 
 def resolve(root: Path, value: Path) -> Path:
@@ -60,7 +60,7 @@ def read_predictions(path: Path) -> pd.DataFrame:
 
 
 def reference_candidate(label: str) -> bool:
-    return bool(re.fullmatch(r"pedigree_environment_only_cfg[0-9a-f]{10}", label))
+    return label == MATCHED_REFERENCE_LABEL
 
 
 def content_hash(metadata: dict[str, object], section: str, kernel: str) -> str:
@@ -167,7 +167,9 @@ def load_runs(
         row, traits = load_run(run_dir, architecture=architecture)
         rows.append(row)
         trait_metrics[(architecture, int(row["outer_fold"]), int(row["inner_fold"]))] = traits
-    for run_dir in sorted(reference_dir.glob(f"genomic_inner_{scenario}_outer*_*_inner*")):
+    for run_dir in sorted(
+        reference_dir.glob(f"reaction_reference_inner_{scenario}_outer*_inner*")
+    ):
         metadata_paths = list(run_dir.glob("*_run_metadata.json"))
         if len(metadata_paths) != 1:
             continue
@@ -236,8 +238,16 @@ def validate_grid(
         for inner_fold in sorted(expected_inner):
             reference = lookup.loc[(REFERENCE, outer_fold, inner_fold)]
             reference_metadata = reference["metadata"]
-            if set(json.loads(reference["active_kernels"])) != required_kernels:
-                raise ValueError("Nonlinear reference does not use the frozen kernel set")
+            observed_reference_kernels = set(
+                json.loads(reference["active_kernels"])
+            )
+            if observed_reference_kernels != required_kernels:
+                raise ValueError(
+                    "Matched nonlinear reference violates the frozen kernel set: "
+                    f"outer={outer_fold}; inner={inner_fold}; "
+                    f"missing={sorted(required_kernels-observed_reference_kernels)}; "
+                    f"extra={sorted(observed_reference_kernels-required_kernels)}"
+                )
             for candidate in sorted(candidates):
                 current = lookup.loc[(candidate, outer_fold, inner_fold)]
                 current_metadata = current["metadata"]

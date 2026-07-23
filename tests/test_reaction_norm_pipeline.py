@@ -9,8 +9,10 @@ import numpy as np
 import pandas as pd
 
 from server_training_pipeline.summarize_reaction_norm_screen import (
+    MATCHED_REFERENCE_LABEL,
     REFERENCE,
     prediction_file,
+    reference_candidate,
     summarize,
 )
 
@@ -204,6 +206,11 @@ def test_prediction_file_prefers_parquet_when_tsv_mirror_exists(tmp_path: Path) 
     assert prediction_file(tmp_path) == parquet
 
 
+def test_only_exact_matched_nonlinear_reference_is_accepted() -> None:
+    assert reference_candidate(MATCHED_REFERENCE_LABEL)
+    assert not reference_candidate("pedigree_environment_only_cfg7b8af9c8b5")
+
+
 def test_prepare_reaction_inputs_is_phenotype_blind(tmp_path: Path) -> None:
     canonical = tmp_path / "canonical"
     canonical.mkdir()
@@ -281,5 +288,6 @@ def test_runner_is_inner_only_and_prepares_exact_kernel_subset() -> None:
     assert "--only-kernel" in text
     assert "--evaluation-stage inner_selection" in text
     assert "train_multitrait_reaction_norm_tf" in text
-    assert "single_step_H_inner_screen_v3_canonical_runs" in text
+    assert "reaction_norm_matched_nonlinear_reference_v1_runs" in text
+    assert "TRAIN matched nonlinear reference" in text
     assert "outer_evaluation" not in text
