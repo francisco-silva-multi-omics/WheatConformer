@@ -1,5 +1,5 @@
 {
-  "protocol_version": "recovered_identity_verification_v1",
+  "protocol_version": "recovered_identity_verification_v2",
   "selection_data": "identifiers_metadata_pedigree_and_marker_calls_only",
   "identity_evidence_hierarchy": [
     "direct_canonical_gid_to_unique_marker_sample",

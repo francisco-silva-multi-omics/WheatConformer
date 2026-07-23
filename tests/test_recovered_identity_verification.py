@@ -53,6 +53,7 @@ def candidate(
         "dataset_persistent_id": "hdl:11529/wheat",
         "marker_source_file": "calls.tsv",
         "crop_scope": crop_scope,
+        "direct_gid_mapping_evidence": True,
     }
 
 
@@ -78,6 +79,21 @@ def test_marker_verification_accepts_only_explicit_terminal_paths() -> None:
     assert observed["GID3"] == "unresolved"
     assert set(accepted["canonical_gid"]) == {"GID1"}
     assert set(accepted["mapping_class"]).issubset(MARKER_ACCEPTED)
+
+
+def test_unique_two_hop_identity_is_not_mislabeled_as_direct_gid() -> None:
+    row = candidate("GID1", "S1")
+    row["direct_gid_mapping_evidence"] = False
+    verification, accepted, _ = marker_classification(
+        pd.DataFrame([row]),
+        pd.DataFrame(),
+        pd.DataFrame(),
+        {},
+        minimum_shared=1000,
+        minimum_concordance=0.995,
+    )
+    assert verification.iloc[0]["verification_class"] == "accepted_unique_two_hop_identity"
+    assert accepted.iloc[0]["mapping_class"] == "accepted_unique_two_hop_identity"
 
 
 def test_replicate_classification_distinguishes_overlap_and_call_conflict() -> None:
@@ -532,7 +548,7 @@ def test_full_verification_pipeline_is_reproducible_and_non_destructive(
         "--root",
         str(root),
         "--policy",
-        str(project / "server_genotype_recovery/recovered_identity_verification_policy_v1.json"),
+        str(project / "server_genotype_recovery/recovered_identity_verification_policy_v2.json"),
         "--identity-policy",
         str(identity_policy),
         "--resolver-query",

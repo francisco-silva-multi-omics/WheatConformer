@@ -422,6 +422,10 @@ def attach_bridge_provenance(
                 "bridge_confidence": ";".join(
                     sorted(set(group["bridge_confidence"].map(clean)) - {""})
                 ),
+                "direct_gid_mapping_evidence": any(
+                    canonical_gid(value) == keys[0]
+                    for value in group["query_text"]
+                ),
                 "crop_scope": "WHEAT_CONFIRMED",
                 "crop_scope_evidence": "upstream_wheat_gated_structured_evidence",
             }
@@ -438,6 +442,7 @@ def attach_bridge_provenance(
         "dataset_persistent_id": "",
         "marker_source_file": "",
         "bridge_confidence": "",
+        "direct_gid_mapping_evidence": False,
         "crop_scope": "WHEAT_CONFIRMED",
         "crop_scope_evidence": "certified_existing_wheat_panel",
     }.items():
@@ -548,9 +553,11 @@ def marker_classification(
             "DIRECT_CANONICAL_GID",
         }
         direct_gid_path = (
-            group["mapping_filename"].fillna("").str.contains("SampleIDvsGID", case=False, regex=False).any()
+            group.get(
+                "direct_gid_mapping_evidence",
+                pd.Series(False, index=group.index),
+            ).map(bool_value).any()
             or group["candidate_scope"].eq("existing_platform_reaudit").all()
-            or canonical_cimmyt_gid(group["external_gid"].iloc[0]) == trial_gid
         )
         selection_unique = group["selection_history_unique"].map(bool_value).all()
         status = axis_status.get((trial_gid, panel_id))
@@ -831,10 +838,21 @@ def verify_pedigree_edges(
     rows: list[dict[str, object]] = []
     raw = pd.DataFrame(raw_rows)
     if not raw.empty:
-        group_columns = ["child_id", "parent_role", "parent_id", "parent_source_expression", "derivation"]
+        raw["unresolved_group"] = np.where(
+            raw["parent_id"].map(clean).eq(""), raw["derivation"], ""
+        )
+        group_columns = ["child_id", "parent_role", "parent_id", "unresolved_group"]
         for keys, group in raw.groupby(group_columns, dropna=False, sort=True):
-            child, role, parent, source_expression, derivation = keys
-            statuses = legacy_status.get((child, source_expression), set()) | legacy_status.get((child, parent), set())
+            child, role, parent, unresolved_group = keys
+            source_expressions = sorted(
+                set(group["parent_source_expression"].map(clean)) - {""}
+            )
+            derivations = sorted(set(group["derivation"].map(clean)) - {""})
+            source_expression = ";".join(source_expressions)
+            derivation = ";".join(derivations)
+            statuses = set(legacy_status.get((child, parent), set()))
+            for expression in source_expressions:
+                statuses.update(legacy_status.get((child, expression), set()))
             current_pair = existing_pairs.get(child, ("", ""))
             conflict_status, conflict_reason = conflict_lookup.get(
                 child, ("NO_EXTERNAL_CONFLICT_RECORD", "")
@@ -856,8 +874,8 @@ def verify_pedigree_edges(
                 classification = "conflicting_external_records"
             elif all(current_pair) and source_expression not in current_pair and parent not in current_pair:
                 classification = "conflicts_existing_complete_parent_pair"
-            elif derivation in PEDIGREE_CLASSES:
-                classification = derivation
+            elif unresolved_group in PEDIGREE_CLASSES:
+                classification = unresolved_group
             elif exact_sources == 1 and independent_sources == 1:
                 classification = "accepted_new_edge_exact_unique"
             elif independent_sources >= 2:
@@ -1253,6 +1271,7 @@ def qc_table(
         {"check": "accepted_marker_mapping_unique", "status": "PASS" if not accepted_mapping.duplicated(["canonical_gid", "marker_panel"]).any() else "FAIL", "observed": int(accepted_mapping.duplicated(["canonical_gid", "marker_panel"]).sum()), "expected": 0, "detail": "after replicate collapse"},
         {"check": "accepted_marker_crop_scope", "status": "PASS" if accepted_mapping.empty or accepted_mapping["crop_scope"].eq("WHEAT_CONFIRMED").all() else "FAIL", "observed": int((~accepted_mapping["crop_scope"].eq("WHEAT_CONFIRMED")).sum()) if not accepted_mapping.empty else 0, "expected": 0, "detail": "non-wheat and ambiguous sources excluded"},
         {"check": "accepted_pedigree_no_complete_pair_conflict", "status": "PASS" if pedigree_verification.loc[pedigree_verification["accepted"].map(bool_value), "verification_class"].ne("conflicts_existing_complete_parent_pair").all() else "FAIL", "observed": 0, "expected": 0, "detail": "accepted edge invariant"},
+        {"check": "accepted_pedigree_edge_unique", "status": "PASS" if not pedigree_verification.loc[pedigree_verification["accepted"].map(bool_value)].duplicated(["child_id", "parent_role", "parent_id"]).any() else "FAIL", "observed": int(pedigree_verification.loc[pedigree_verification["accepted"].map(bool_value)].duplicated(["child_id", "parent_role", "parent_id"]).sum()), "expected": 0, "detail": "after stable parent resolution"},
         {"check": "marker_classes_terminal", "status": "PASS" if set(marker_verification["verification_class"]).issubset(MARKER_CLASSES) else "FAIL", "observed": ";".join(sorted(set(marker_verification["verification_class"]))), "expected": ";".join(sorted(MARKER_CLASSES)), "detail": ""},
         {"check": "pedigree_classes_terminal", "status": "PASS" if set(pedigree_verification["verification_class"]).issubset(PEDIGREE_CLASSES) else "FAIL", "observed": ";".join(sorted(set(pedigree_verification["verification_class"]))), "expected": ";".join(sorted(PEDIGREE_CLASSES)), "detail": ""},
     ]
@@ -1285,7 +1304,7 @@ def parse_args() -> argparse.Namespace:
         description="Phenotype-blind verification of recovered marker identities and pedigree edges."
     )
     parser.add_argument("--root", type=Path, default=Path("."))
-    parser.add_argument("--policy", type=Path, default=Path("server_genotype_recovery/recovered_identity_verification_policy_v1.json"))
+    parser.add_argument("--policy", type=Path, default=Path("server_genotype_recovery/recovered_identity_verification_policy_v2.json"))
     parser.add_argument("--identity-policy", type=Path, default=Path("server_genotype_recovery/marker_identity_concordance_policy_v1.json"))
     parser.add_argument("--resolver-query", type=Path, default=Path("genotype_panels/germplasm_resolver/germplasm_cross_query.tsv"))
     parser.add_argument("--wide-dir", type=Path, default=Path("genotype_panels/cimmyt_dataverse_recovery_v1/wide_inventory_v1"))
@@ -1296,7 +1315,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--nested-evaluation-dir", type=Path, default=Path("model_kernels/final_nested_evaluation_v5_fixed"))
     parser.add_argument("--ledger", type=Path, default=None)
     parser.add_argument("--replicate-concordance-mode", choices=["recompute", "verify_cached"], default="recompute")
-    parser.add_argument("--out-dir", type=Path, default=Path("genotype_panels/recovered_identity_verification_v1"))
+    parser.add_argument("--out-dir", type=Path, default=Path("genotype_panels/recovered_identity_verification_v2"))
     parser.add_argument("--force", action="store_true")
     return parser.parse_args()
 
