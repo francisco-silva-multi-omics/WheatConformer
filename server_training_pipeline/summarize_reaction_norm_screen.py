@@ -24,13 +24,18 @@ def unique_file(run_dir: Path, pattern: str) -> Path:
 
 
 def prediction_file(run_dir: Path) -> Path:
-    paths = [
-        *run_dir.glob("*_predictions.parquet"),
-        *run_dir.glob("*_predictions.tsv.gz"),
-    ]
-    if len(paths) != 1:
-        raise ValueError(f"Expected one prediction ledger in {run_dir}; found {len(paths)}")
-    return paths[0]
+    parquet = list(run_dir.glob("*_predictions.parquet"))
+    tsv = list(run_dir.glob("*_predictions.tsv.gz"))
+    if len(parquet) > 1 or len(tsv) > 1:
+        raise ValueError(
+            "Expected at most one prediction artifact per format in "
+            f"{run_dir}; parquet={len(parquet)} tsv_gz={len(tsv)}"
+        )
+    if parquet:
+        return parquet[0]
+    if tsv:
+        return tsv[0]
+    raise ValueError(f"Prediction ledger is absent: {run_dir}")
 
 
 def read_predictions(path: Path) -> pd.DataFrame:

@@ -10,6 +10,7 @@ import pandas as pd
 
 from server_training_pipeline.summarize_reaction_norm_screen import (
     REFERENCE,
+    prediction_file,
     summarize,
 )
 
@@ -193,6 +194,14 @@ def test_reaction_acceptance_requires_gain_stability_pearson_and_calibration() -
         "retain_as_interpretable_mixed_baseline"
     )
     assert result.loc[REFERENCE, "quantitative_model_decision"] == "nonlinear_reference"
+
+
+def test_prediction_file_prefers_parquet_when_tsv_mirror_exists(tmp_path: Path) -> None:
+    parquet = tmp_path / "run_predictions.parquet"
+    mirror = tmp_path / "run_predictions.tsv.gz"
+    parquet.write_bytes(b"parquet")
+    mirror.write_bytes(b"mirror")
+    assert prediction_file(tmp_path) == parquet
 
 
 def test_prepare_reaction_inputs_is_phenotype_blind(tmp_path: Path) -> None:
