@@ -36,6 +36,8 @@ def main() -> None:
     parser.add_argument("--reaction-protocol", type=Path, required=True)
     parser.add_argument("--outer-protocol", type=Path, required=True)
     parser.add_argument("--selection-lock", type=Path, required=True)
+    parser.add_argument("--environment-protocol", type=Path, required=True)
+    parser.add_argument("--environment-selection-lock", type=Path, required=True)
     parser.add_argument("--support-policy", type=Path, required=True)
     parser.add_argument("--final-holdout-environments", type=Path, required=True)
     parser.add_argument("--trainer", type=Path, required=True)
@@ -47,6 +49,12 @@ def main() -> None:
     reaction = json.loads(args.reaction_protocol.read_text(encoding="utf-8"))
     outer = json.loads(args.outer_protocol.read_text(encoding="utf-8"))
     lock = json.loads(args.selection_lock.read_text(encoding="utf-8"))
+    environment_protocol = json.loads(
+        args.environment_protocol.read_text(encoding="utf-8")
+    )
+    environment_lock = json.loads(
+        args.environment_selection_lock.read_text(encoding="utf-8")
+    )
     support_policy = json.loads(args.support_policy.read_text(encoding="utf-8"))
     required_kernels = set(outer["required_kernels"])
     selected_candidate = str(outer["selected_candidate"])
@@ -61,6 +69,8 @@ def main() -> None:
     factorization_sha256 = file_sha256(args.factorization_implementation)
     outer_sha256 = file_sha256(args.outer_protocol)
     lock_sha256 = file_sha256(args.selection_lock)
+    environment_protocol_sha256 = file_sha256(args.environment_protocol)
+    environment_lock_sha256 = file_sha256(args.environment_selection_lock)
     support_sha256 = file_sha256(args.support_policy)
 
     final_holdout = pd.read_csv(args.final_holdout_environments, sep="\t", dtype=str)
@@ -75,12 +85,37 @@ def main() -> None:
         "selection_lock_pass": lock.get("status") == "PASS",
         "selection_lock_candidate": lock.get("selected_candidate")
         == selected_candidate,
+        "selection_lock_protocol": lock.get("outer_evaluation_protocol_sha256")
+        == outer_sha256,
         "selection_lock_outer_unread_at_freeze": lock.get("outer_test_metrics_read")
         is False,
         "selection_lock_final_holdout_unread": lock.get(
             "final_holdout_outcomes_read"
         )
         is False,
+        "environment_selection_lock_pass": environment_lock.get("status") == "PASS",
+        "environment_selection_lock_candidate": environment_lock.get(
+            "selected_environment_architecture"
+        )
+        == outer.get("selected_environment_architecture"),
+        "environment_selection_lock_protocol": environment_lock.get(
+            "outer_evaluation_protocol_sha256"
+        )
+        == outer_sha256,
+        "environment_selection_lock_outer_unread_at_freeze": environment_lock.get(
+            "outer_test_metrics_read"
+        )
+        is False,
+        "environment_selection_lock_final_holdout_unread": environment_lock.get(
+            "final_holdout_outcomes_read"
+        )
+        is False,
+        "environment_protocol_identity": outer.get(
+            "environment_architecture_protocol_sha256"
+        )
+        == environment_protocol_sha256,
+        "environment_protocol_frozen": environment_protocol.get("status")
+        == "frozen_before_inner_validation",
         "inner_protocol_identity": outer.get("inner_reaction_protocol_sha256")
         == file_sha256(args.reaction_protocol),
         "support_policy_identity": outer.get("outer_member_policy", {}).get(
@@ -130,6 +165,20 @@ def main() -> None:
                 "sha256"
             )
             == lock_sha256,
+            "environment_selection_lock": metadata.get(
+                "environment_selection_lock", {}
+            ).get("sha256")
+            == environment_lock_sha256,
+            "environment_architecture": metadata.get("environment_architecture")
+            == outer.get("selected_environment_architecture"),
+            "environment_protocol": metadata.get(
+                "environment_architecture_protocol", {}
+            ).get("sha256")
+            == environment_protocol_sha256,
+            "environment_design_certified": metadata.get("environment_design", {}).get(
+                "certification_status"
+            )
+            == "PASS",
             "outer_metrics_read": metadata.get("outer_test_metrics_read") is True,
             "final_holdout_unread": metadata.get("final_holdout_outcomes_read")
             is False,
@@ -304,6 +353,8 @@ def main() -> None:
         "factorization_sha256": factorization_sha256,
         "outer_protocol_sha256": outer_sha256,
         "selection_lock_sha256": lock_sha256,
+        "environment_protocol_sha256": environment_protocol_sha256,
+        "environment_selection_lock_sha256": environment_lock_sha256,
         "checks": checks,
     }
     (args.out_dir / "reaction_norm_outer_evaluation_provenance.json").write_text(

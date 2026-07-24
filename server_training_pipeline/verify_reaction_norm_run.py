@@ -16,6 +16,7 @@ def main() -> None:
     parser.add_argument("--candidate", required=True)
     parser.add_argument("--reaction-candidate")
     parser.add_argument("--environment-architecture-protocol", type=Path)
+    parser.add_argument("--environment-architecture")
     parser.add_argument("--environment-design-certification", type=Path)
     parser.add_argument(
         "--stage",
@@ -31,6 +32,7 @@ def main() -> None:
     parser.add_argument("--reaction-protocol", type=Path, required=True)
     parser.add_argument("--outer-evaluation-protocol", type=Path)
     parser.add_argument("--reaction-selection-lock", type=Path)
+    parser.add_argument("--environment-selection-lock", type=Path)
     parser.add_argument("--certification-summary", type=Path, required=True)
     parser.add_argument("--trainer", type=Path, required=True)
     parser.add_argument("--factorization-implementation", type=Path, required=True)
@@ -49,6 +51,7 @@ def main() -> None:
     candidate = candidates[reaction_candidate]
     environment_protocol = None
     environment_candidate = None
+    environment_candidate_name = args.environment_architecture or args.candidate
     if args.environment_architecture_protocol is not None:
         environment_protocol = json.loads(
             args.environment_architecture_protocol.read_text(encoding="utf-8")
@@ -56,9 +59,9 @@ def main() -> None:
         environment_candidates = {
             str(value["name"]): value for value in environment_protocol["candidates"]
         }
-        if args.candidate not in environment_candidates:
+        if environment_candidate_name not in environment_candidates:
             raise SystemExit("candidate absent from environment architecture protocol")
-        environment_candidate = environment_candidates[args.candidate]
+        environment_candidate = environment_candidates[environment_candidate_name]
     training = reaction["training"]
     expected_configuration = {
         "max_rank_genotype": int(training["max_rank_genotype"]),
@@ -120,7 +123,7 @@ def main() -> None:
                 "reaction_candidate": metadata.get("reaction_candidate")
                 == reaction_candidate,
                 "environment_architecture": metadata.get("environment_architecture")
-                == args.candidate,
+                == environment_candidate_name,
                 "environment_protocol": metadata.get(
                     "environment_architecture_protocol", {}
                 ).get("sha256")
@@ -176,14 +179,21 @@ def main() -> None:
             "outer_evaluation_protocol"
         ) and not metadata.get("reaction_selection_lock")
     else:
-        if args.outer_evaluation_protocol is None or args.reaction_selection_lock is None:
+        if (
+            args.outer_evaluation_protocol is None
+            or args.reaction_selection_lock is None
+            or args.environment_selection_lock is None
+        ):
             raise SystemExit(
-                "Outer run verification requires the outer protocol and selection lock"
+                "Outer run verification requires the outer protocol and both selection locks"
             )
         outer = json.loads(
             args.outer_evaluation_protocol.read_text(encoding="utf-8")
         )
         lock = json.loads(args.reaction_selection_lock.read_text(encoding="utf-8"))
+        environment_lock = json.loads(
+            args.environment_selection_lock.read_text(encoding="utf-8")
+        )
         checks.update(
             {
                 "outer_test_metrics_read": metadata.get("outer_test_metrics_read")
@@ -201,9 +211,29 @@ def main() -> None:
                 == lock.get("selected_candidate"),
                 "selection_lock_pass": lock.get("status") == "PASS"
                 and lock.get("outer_evaluation_allowed") is True,
+                "environment_selection_lock": metadata.get(
+                    "environment_selection_lock", {}
+                ).get("sha256")
+                == file_sha256(args.environment_selection_lock),
+                "environment_selection_lock_pass": environment_lock.get("status")
+                == "PASS"
+                and environment_lock.get("outer_evaluation_allowed") is True,
+                "selected_environment_architecture": environment_candidate_name
+                == outer.get("selected_environment_architecture")
+                == environment_lock.get("selected_environment_architecture"),
                 "protected_outcomes_not_mutated": protected_rows == 0,
             }
         )
+        if environment_candidate is not None and bool(
+            environment_candidate.get("environment_design_required", False)
+        ):
+            implementation = outer.get("environment_implementation", {})
+            checks["environment_builder_identity"] = design_certification.get(
+                "builder_sha256"
+            ) == implementation.get("builder_sha256")
+            checks["environment_certifier_identity"] = design_certification.get(
+                "certifier_sha256"
+            ) == implementation.get("certifier_sha256")
     required_suffixes = [
         "trait_metrics.tsv",
         "macro_metrics.tsv",

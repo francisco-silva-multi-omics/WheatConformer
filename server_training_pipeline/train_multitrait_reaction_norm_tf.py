@@ -579,6 +579,7 @@ def main() -> None:
     parser.add_argument("--environment-design-certification", type=Path)
     parser.add_argument("--outer-evaluation-protocol", type=Path)
     parser.add_argument("--reaction-selection-lock", type=Path)
+    parser.add_argument("--environment-selection-lock", type=Path)
     parser.add_argument("--evaluation-scenario", choices=sorted(SCENARIO_MODES))
     parser.add_argument("--outer-fold", type=int)
     parser.add_argument("--inner-fold", type=int)
@@ -633,17 +634,26 @@ def main() -> None:
         raise SystemExit("Reaction-norm protocol is not frozen before inner validation")
     outer_protocol = None
     selection_lock = None
+    environment_selection_lock = None
     if args.evaluation_stage == "outer_evaluation":
-        if args.outer_evaluation_protocol is None or args.reaction_selection_lock is None:
+        if (
+            args.outer_evaluation_protocol is None
+            or args.reaction_selection_lock is None
+            or args.environment_selection_lock is None
+            or args.environment_architecture_protocol is None
+        ):
             raise SystemExit(
-                "Outer reaction-norm evaluation requires its frozen protocol and "
-                "completed inner-selection lock"
+                "Outer reaction-norm evaluation requires its frozen protocol, "
+                "reaction-model lock, environment-architecture lock, and environment protocol"
             )
         outer_protocol = json.loads(
             args.outer_evaluation_protocol.read_text(encoding="utf-8")
         )
         selection_lock = json.loads(
             args.reaction_selection_lock.read_text(encoding="utf-8")
+        )
+        environment_selection_lock = json.loads(
+            args.environment_selection_lock.read_text(encoding="utf-8")
         )
         outer_checks = {
             "outer_protocol_status": outer_protocol.get("status")
@@ -675,9 +685,37 @@ def main() -> None:
             == file_sha256(args.outer_evaluation_protocol),
             "selection_lock_candidate": selection_lock.get("selected_candidate")
             == outer_protocol.get("selected_candidate"),
+            "environment_selection_lock_status": environment_selection_lock.get(
+                "status"
+            )
+            == "PASS",
+            "environment_selection_lock_outer_unread": environment_selection_lock.get(
+                "outer_test_metrics_read"
+            )
+            is False,
+            "environment_selection_lock_final_holdout_unread": environment_selection_lock.get(
+                "final_holdout_outcomes_read"
+            )
+            is False,
+            "environment_selection_lock_allows_outer": environment_selection_lock.get(
+                "outer_evaluation_allowed"
+            )
+            is True,
+            "environment_selection_lock_protocol": environment_selection_lock.get(
+                "outer_evaluation_protocol_sha256"
+            )
+            == file_sha256(args.outer_evaluation_protocol),
+            "environment_selection_lock_candidate": environment_selection_lock.get(
+                "selected_environment_architecture"
+            )
+            == outer_protocol.get("selected_environment_architecture"),
             "no_further_selection": outer_protocol.get("model_contract", {}).get(
                 "no_further_hyperparameter_selection"
             )
+            is True,
+            "no_further_environment_selection": outer_protocol.get(
+                "model_contract", {}
+            ).get("no_further_environment_architecture_selection")
             is True,
             "final_holdout_unavailable": outer_protocol.get(
                 "model_contract", {}
@@ -692,7 +730,14 @@ def main() -> None:
                 "Reaction-norm outer-evaluation authorization failed: "
                 + ", ".join(failed_outer)
             )
-    elif args.outer_evaluation_protocol is not None or args.reaction_selection_lock is not None:
+    elif any(
+        value is not None
+        for value in (
+            args.outer_evaluation_protocol,
+            args.reaction_selection_lock,
+            args.environment_selection_lock,
+        )
+    ):
         raise SystemExit(
             "Outer-evaluation authorization artifacts may only be used for outer evaluation"
         )
@@ -714,9 +759,10 @@ def main() -> None:
     kernel_interaction_allowlist = None
     required_kernels_contract = set(reaction_protocol.get("required_kernels", []))
     if args.environment_architecture_protocol is not None:
-        if args.evaluation_stage != "inner_selection":
+        if args.evaluation_stage not in {"inner_selection", "outer_evaluation"}:
             raise SystemExit(
-                "Environment architecture selection is restricted to inner validation"
+                "Environment architecture artifacts are restricted to inner selection or "
+                "a separately authorized outer evaluation"
             )
         environment_protocol = json.loads(
             args.environment_architecture_protocol.read_text(encoding="utf-8")
@@ -729,13 +775,43 @@ def main() -> None:
         }
         if args.environment_architecture not in candidates:
             raise SystemExit("Environment architecture is absent from its frozen protocol")
-        if args.hyperparameter_label != args.environment_architecture:
+        if (
+            args.evaluation_stage == "inner_selection"
+            and args.hyperparameter_label != args.environment_architecture
+        ):
             raise SystemExit(
                 "Environment screen hyperparameter label must equal the architecture name"
             )
         if environment_protocol.get("selected_reaction_candidate") != reaction_candidate_name:
             raise SystemExit("Environment protocol and reaction candidate disagree")
         environment_contract = candidates[args.environment_architecture]
+        if args.evaluation_stage == "outer_evaluation":
+            outer_environment_checks = {
+                "outer_environment_protocol_hash": outer_protocol.get(
+                    "environment_architecture_protocol_sha256"
+                )
+                == file_sha256(args.environment_architecture_protocol),
+                "outer_environment_candidate": outer_protocol.get(
+                    "selected_environment_architecture"
+                )
+                == args.environment_architecture,
+                "outer_environment_kernels": set(
+                    outer_protocol.get("required_kernels", [])
+                )
+                == set(environment_contract.get("required_kernels", [])),
+                "environment_lock_protocol_hash": environment_selection_lock.get(
+                    "environment_architecture_protocol_sha256"
+                )
+                == file_sha256(args.environment_architecture_protocol),
+            }
+            failed_environment = sorted(
+                name for name, passed in outer_environment_checks.items() if not passed
+            )
+            if failed_environment:
+                raise SystemExit(
+                    "Reaction-norm outer environment authorization failed: "
+                    + ", ".join(failed_environment)
+                )
         reaction_feature_mode = str(environment_contract["reaction_feature_mode"])
         kernel_interaction_allowlist = set(
             environment_contract.get("kernel_interaction_allowlist", [])
@@ -1229,6 +1305,22 @@ def main() -> None:
             trait_names,
             environment_protocol.get("trait_slope_penalty_multiplier", {}),
         )
+        if args.evaluation_stage == "outer_evaluation":
+            implementation = outer_protocol.get("environment_implementation", {})
+            implementation_checks = {
+                "builder": environment_design_certification.get("builder_sha256")
+                == implementation.get("builder_sha256"),
+                "certifier": environment_design_certification.get("certifier_sha256")
+                == implementation.get("certifier_sha256"),
+            }
+            failed_implementation = sorted(
+                name for name, passed in implementation_checks.items() if not passed
+            )
+            if failed_implementation:
+                raise SystemExit(
+                    "Fold-local environment implementation violates the frozen outer "
+                    "contract: " + ", ".join(failed_implementation)
+                )
         feature_trait_sets = [
             {value.strip().upper() for value in str(text).split(",") if value.strip()}
             for text in environment_design_manifest["eligible_traits"]
@@ -1675,6 +1767,17 @@ def main() -> None:
                 "selected_candidate": selection_lock["selected_candidate"],
             }
             if selection_lock is not None
+            else {}
+        ),
+        "environment_selection_lock": (
+            {
+                "path": str(args.environment_selection_lock.resolve()),
+                "sha256": file_sha256(args.environment_selection_lock),
+                "selected_environment_architecture": environment_selection_lock[
+                    "selected_environment_architecture"
+                ],
+            }
+            if environment_selection_lock is not None
             else {}
         ),
         "kernel_factorization_sha256": file_sha256(

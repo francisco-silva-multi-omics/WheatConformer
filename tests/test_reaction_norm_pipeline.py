@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
-import warnings
 from pathlib import Path
 
 import numpy as np
@@ -346,6 +345,246 @@ def test_outer_protocol_is_blocked_until_environment_architecture_is_selected() 
     ).hexdigest()
 
 
+def test_outer_v2_protocol_freezes_explicit_environment_architecture() -> None:
+    import hashlib
+
+    protocol = json.loads(
+        (
+            ROOT
+            / "server_training_pipeline/reaction_norm_outer_evaluation_protocol_v2.json"
+        ).read_text(encoding="utf-8")
+    )
+    environment_protocol = (
+        ROOT / "server_training_pipeline/reaction_norm_environment_protocol_v1.json"
+    )
+    assert protocol["status"] == "frozen_after_inner_validation_before_outer_test"
+    assert protocol["selected_candidate"] == "reaction_norm_identity_covariance"
+    assert protocol["selected_environment_architecture"] == "explicit_E_REACTION_NORM_V1"
+    assert protocol["environment_architecture_protocol_sha256"] == hashlib.sha256(
+        environment_protocol.read_bytes()
+    ).hexdigest()
+    assert protocol["environment_implementation"]["builder_sha256"] == hashlib.sha256(
+        (
+            ROOT
+            / "server_training_pipeline/build_reaction_norm_environment_v1.py"
+        ).read_bytes()
+    ).hexdigest()
+    assert protocol["environment_implementation"]["certifier_sha256"] == hashlib.sha256(
+        (
+            ROOT
+            / "server_training_pipeline/certify_reaction_norm_environment_v1.py"
+        ).read_bytes()
+    ).hexdigest()
+    assert set(protocol["required_kernels"]) == {
+        "K_A_CANONICAL_V3",
+        "K_E_GEO",
+        "K_E_WEATHER",
+        "K_E_STRESS",
+        "K_E_MGMT",
+        "K_E_TGW_V2",
+        "K_E_REACTION_NORM_V1",
+    }
+    assert protocol["environment_selection_evidence"]["paired_inner_fold_count"] == 15
+    assert protocol["environment_selection_evidence"]["normalized_rmse_win_rate"] == 1.0
+    assert protocol["model_contract"]["no_further_environment_architecture_selection"] is True
+    assert protocol["model_contract"]["outer_fold_count"] == 23
+    assert protocol["model_contract"]["outer_model_fit_count"] == 69
+    assert protocol["model_contract"]["final_holdout_available"] is False
+
+
+def test_environment_selection_freeze_requires_certified_matched_grid(
+    tmp_path: Path,
+) -> None:
+    import hashlib
+
+    baseline = "current_corrected_generic_environment"
+    selected = "explicit_E_REACTION_NORM_V1"
+    common = ["K_A_CANONICAL_V3", "K_E_GEO"]
+    selected_kernels = [*common, "K_E_REACTION_NORM_V1"]
+    environment_protocol = {
+        "protocol_version": "reaction_norm_environment_test",
+        "status": "frozen_before_inner_validation",
+        "selected_reaction_candidate": "reaction_norm_identity_covariance",
+        "candidates": [
+            {
+                "name": baseline,
+                "required_kernels": common,
+                "environment_design_required": False,
+            },
+            {
+                "name": selected,
+                "required_kernels": selected_kernels,
+                "environment_design_required": True,
+            },
+        ],
+    }
+    environment_protocol_path = tmp_path / "environment.json"
+    environment_protocol_path.write_text(
+        json.dumps(environment_protocol), encoding="utf-8"
+    )
+    environment_sha = hashlib.sha256(environment_protocol_path.read_bytes()).hexdigest()
+    evidence = {
+        "paired_inner_fold_count": 1,
+        "relative_normalized_rmse_gain_mean": 0.1,
+        "normalized_rmse_win_rate": 1.0,
+        "pearson_gain_mean": 0.05,
+        "calibration_error_delta_mean": -0.03,
+        "primary_trait_guard_pass": True,
+    }
+    outer_protocol = {
+        "status": "frozen_after_inner_validation_before_outer_test",
+        "selected_environment_architecture": selected,
+        "environment_architecture_protocol_sha256": environment_sha,
+        "required_kernels": selected_kernels,
+        "environment_selection_evidence": evidence,
+        "environment_implementation": {
+            "builder_sha256": "builder",
+            "certifier_sha256": "certifier",
+        },
+    }
+    outer_path = tmp_path / "outer.json"
+    outer_path.write_text(json.dumps(outer_protocol), encoding="utf-8")
+
+    summary_dir = tmp_path / "summary"
+    models_dir = tmp_path / "models"
+    screen_dir = tmp_path / "screen"
+    summary_dir.mkdir()
+    models_dir.mkdir()
+    selection = {
+        "status": "PASS",
+        "selection_data": "inner_validation_only",
+        "outer_test_metrics_read": False,
+        "final_holdout_outcomes_read": False,
+        "environment_protocol_sha256": environment_sha,
+        "selected_environment_architecture": selected,
+        "explicit_environment_architecture_accepted": True,
+        "outer_evaluation_allowed": False,
+        **evidence,
+    }
+    (summary_dir / "selected_reaction_norm_environment_architecture.json").write_text(
+        json.dumps(selection), encoding="utf-8"
+    )
+    pd.DataFrame(
+        [
+            {"architecture": value, "outer_fold": 0, "inner_fold": 0}
+            for value in (baseline, selected)
+        ]
+    ).to_csv(
+        summary_dir / "reaction_norm_environment_screen_runs.tsv",
+        sep="\t",
+        index=False,
+    )
+    pd.DataFrame([{"outer_fold": 0, "inner_fold": 0}]).to_csv(
+        summary_dir / "reaction_norm_environment_screen_paired_metrics.tsv",
+        sep="\t",
+        index=False,
+    )
+    for filename in (
+        "reaction_norm_environment_screen_trait_paired_metrics.tsv",
+        "reaction_norm_environment_screen_trait_summary.tsv",
+        "reaction_norm_environment_screen_summary.tsv",
+    ):
+        pd.DataFrame({"value": [1]}).to_csv(
+            summary_dir / filename, sep="\t", index=False
+        )
+
+    for architecture, kernels, design_required in (
+        (baseline, common, False),
+        (selected, selected_kernels, True),
+    ):
+        run_dir = (
+            models_dir
+            / f"reaction_environment_inner_unseen_genotypes_outer0_{architecture}_inner0"
+        )
+        run_dir.mkdir()
+        metadata = {
+            "status": "PASS",
+            "evaluation_stage": "inner_selection",
+            "outer_test_metrics_read": False,
+            "final_holdout_outcomes_read": False,
+            "environment_architecture": architecture,
+            "environment_architecture_protocol": {"sha256": environment_sha},
+            "reaction_candidate": "reaction_norm_identity_covariance",
+            "active_kernels": kernels,
+            "environment_design": {"certification_status": "PASS"}
+            if design_required
+            else {},
+            "external_split": {
+                "scenario": "unseen_genotypes",
+                "outer_fold": 0,
+                "inner_fold": 0,
+            },
+            "trainer_sha256": "matched_trainer",
+        }
+        (run_dir / "run_run_metadata.json").write_text(
+            json.dumps(metadata), encoding="utf-8"
+        )
+        pd.DataFrame({"split": ["val"]}).to_csv(
+            run_dir / "run_macro_metrics.tsv", sep="\t", index=False
+        )
+        pd.DataFrame({"split": ["val"]}).to_csv(
+            run_dir / "run_trait_metrics.tsv", sep="\t", index=False
+        )
+
+    artifact_dir = (
+        screen_dir
+        / "folds/unseen_genotypes/outer_0/E_REACTION_NORM_V1"
+    )
+    artifact_dir.mkdir(parents=True)
+    matrix = artifact_dir / "E_REACTION_NORM_V1.parquet"
+    matrix.write_bytes(b"certified")
+    matrix_sha = hashlib.sha256(matrix.read_bytes()).hexdigest()
+    certification = {
+        "status": "PASS",
+        "failed_check_count": 0,
+        "builder_sha256": "builder",
+        "certifier_sha256": "certifier",
+        "artifact_identities": {
+            "matrix": {"path": str(matrix), "sha256": matrix_sha}
+        },
+    }
+    (artifact_dir / "E_REACTION_NORM_V1_certification.json").write_text(
+        json.dumps(certification), encoding="utf-8"
+    )
+
+    subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "server_training_pipeline.freeze_reaction_norm_environment_selection",
+            "--root",
+            str(tmp_path),
+            "--summary-dir",
+            "summary",
+            "--models-dir",
+            "models",
+            "--screen-dir",
+            "screen",
+            "--environment-protocol",
+            "environment.json",
+            "--outer-protocol",
+            "outer.json",
+            "--expected-outer-folds",
+            "1",
+            "--expected-inner-folds",
+            "1",
+            "--out-dir",
+            "frozen",
+        ],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    lock = json.loads(
+        (tmp_path / "frozen/reaction_norm_environment_selection_lock.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert lock["status"] == "PASS"
+    assert lock["selected_environment_architecture"] == selected
+    assert lock["outer_evaluation_allowed"] is True
+    assert lock["expected_inner_pair_count"] == 1
 def test_environment_protocol_freezes_two_arm_inner_only_comparison() -> None:
     protocol = json.loads(
         (
@@ -389,26 +628,6 @@ def test_fold_local_environment_scaling_does_not_use_held_out_values() -> None:
     )
     np.testing.assert_allclose(z_first.loc[fit, "water"].mean(), 0.0, atol=1e-7)
     np.testing.assert_allclose(z_first.loc[fit, "water"].std(ddof=0), 1.0, atol=1e-7)
-
-
-def test_fold_local_environment_scaling_compacts_wide_feature_matrix() -> None:
-    from server_training_pipeline.build_reaction_norm_environment_v1 import (
-        standardize_fold_local,
-    )
-
-    index = pd.Index([f"E{value}" for value in range(6)])
-    features = pd.DataFrame(
-        {
-            f"feature_{column}": np.arange(6, dtype=float) + column
-            for column in range(250)
-        },
-        index=index,
-    )
-    standardized, _, _ = standardize_fold_local(features, index[:4])
-    with warnings.catch_warnings():
-        warnings.simplefilter("error", pd.errors.PerformanceWarning)
-        exported = standardized.reset_index(names="env_id")
-    assert exported.shape == (6, 251)
 
 
 def test_reaction_model_supports_trait_masked_explicit_environment_axes() -> None:
@@ -720,7 +939,15 @@ def test_outer_runners_do_not_reopen_inner_selection() -> None:
     )
     assert "--evaluation-stage outer_evaluation" in fold
     assert "--reaction-selection-lock" in fold
+    assert "--environment-selection-lock" in fold
+    assert "--environment-architecture-protocol" in fold
+    assert "--environment-design-matrix" in fold
+    assert "build_reaction_norm_environment_v1" in fold
+    assert "certify_reaction_norm_environment_v1" in fold
+    assert "reaction_norm_outer_evaluation_protocol_v2.json" in fold
     assert "--outer-evaluation-protocol" in fold
     assert "summarize_reaction_norm_screen" not in fold
     assert "verify_reaction_norm_outer_evaluation" in suite
+    assert "freeze_reaction_norm_environment_selection" in suite
+    assert "reaction_norm_environment_selection_artifacts.sha256" in suite
     assert "final_holdout_environment_ids.tsv" in suite

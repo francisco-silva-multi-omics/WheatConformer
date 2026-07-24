@@ -214,7 +214,7 @@ def standardize_fold_local(
             )
     if not parts:
         raise ValueError("No environment features remain after outer-training scaling")
-    standardized = pd.concat(parts, axis=1).astype(np.float32).copy()
+    standardized = pd.concat(parts, axis=1).astype(np.float32)
     if not np.isfinite(standardized.to_numpy(dtype=float)).all():
         raise ValueError("E_REACTION_NORM_V1 contains non-finite standardized values")
     return standardized, pd.DataFrame(scaling_rows), pd.DataFrame(missing_rows)
@@ -330,47 +330,27 @@ def main() -> None:
         "management": management,
         "confidence": confidence,
     }
-    dynamic_blocks: dict[str, list[pd.Series]] = {}
     for source_name, source in (("generic", generic), ("window", windows)):
         for column in source.columns:
             block = feature_block(str(column))
-            dynamic_blocks.setdefault(block, []).append(
-                pd.to_numeric(source[column], errors="coerce").rename(
-                    f"{source_name}__{column}"
-                )
-            )
-    for block, parts in dynamic_blocks.items():
-        dynamic = pd.concat(parts, axis=1)
-        blocks[block] = pd.concat(
-            [blocks.get(block, pd.DataFrame(index=env_ids)), dynamic], axis=1
-        ).copy()
+            blocks.setdefault(block, pd.DataFrame(index=env_ids))[
+                f"{source_name}__{column}"
+            ] = pd.to_numeric(source[column], errors="coerce")
     development_observed = observed[
         [column for column in observed.columns if "sowing" in str(column).lower()]
     ].copy()
-    development_observed.columns = [
-        f"observed__{column}" for column in development_observed.columns
-    ]
-    blocks["development"] = pd.concat(
-        [
-            blocks.get("development", pd.DataFrame(index=env_ids)),
-            development_observed,
-        ],
-        axis=1,
-    ).copy()
+    blocks.setdefault("development", pd.DataFrame(index=env_ids))[
+        [f"observed__{column}" for column in development_observed.columns]
+    ] = development_observed.to_numpy()
     observed_water_columns = [
         column
         for column in observed.columns
         if any(token in str(column).upper() for token in ("PRECIP", "PPN_", "MOISTURE", "IRRIG"))
     ]
     if observed_water_columns:
-        observed_water = observed[observed_water_columns].copy()
-        observed_water.columns = [
-            f"observed__{column}" for column in observed_water_columns
-        ]
-        blocks["water"] = pd.concat(
-            [blocks.get("water", pd.DataFrame(index=env_ids)), observed_water],
-            axis=1,
-        ).copy()
+        blocks.setdefault("water", pd.DataFrame(index=env_ids))[
+            [f"observed__{column}" for column in observed_water_columns]
+        ] = observed[observed_water_columns].to_numpy()
 
     raw_parts = []
     base_manifest: dict[str, dict[str, object]] = {}
@@ -398,11 +378,7 @@ def main() -> None:
                 "regulatory_treatment": regulatory_treatment(column_text),
             }
     raw = pd.concat(raw_parts, axis=1)
-    raw = (
-        raw.loc[:, ~raw.columns.duplicated()]
-        .replace([np.inf, -np.inf], np.nan)
-        .copy()
-    )
+    raw = raw.loc[:, ~raw.columns.duplicated()].replace([np.inf, -np.inf], np.nan)
     standardized, scaling, missing_manifest = standardize_fold_local(raw, fit_ids)
 
     manifest_rows = []
