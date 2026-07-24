@@ -951,3 +951,34 @@ def test_outer_runners_do_not_reopen_inner_selection() -> None:
     assert "freeze_reaction_norm_environment_selection" in suite
     assert "reaction_norm_environment_selection_artifacts.sha256" in suite
     assert "final_holdout_environment_ids.tsv" in suite
+
+
+def test_outer_trainer_validates_selected_environment_kernel_contract() -> None:
+    from server_training_pipeline.train_multitrait_reaction_norm_tf import (
+        outer_kernel_contract_matches,
+    )
+
+    outer = json.loads(
+        (
+            ROOT
+            / "server_training_pipeline/reaction_norm_outer_evaluation_protocol_v2.json"
+        ).read_text(encoding="utf-8")
+    )
+    environment = json.loads(
+        (
+            ROOT
+            / "server_training_pipeline/reaction_norm_environment_protocol_v1.json"
+        ).read_text(encoding="utf-8")
+    )
+    reaction = json.loads(
+        (
+            ROOT / "server_training_pipeline/reaction_norm_protocol_v1.json"
+        ).read_text(encoding="utf-8")
+    )
+    selected = next(
+        value
+        for value in environment["candidates"]
+        if value["name"] == outer["selected_environment_architecture"]
+    )
+    assert outer_kernel_contract_matches(outer, set(selected["required_kernels"]))
+    assert not outer_kernel_contract_matches(outer, set(reaction["required_kernels"]))

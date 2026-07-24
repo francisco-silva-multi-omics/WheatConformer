@@ -547,6 +547,12 @@ def load_certified_environment_design(
     return values, order, manifest, penalties, certification
 
 
+def outer_kernel_contract_matches(
+    outer_protocol: dict[str, object], required_kernels: set[str]
+) -> bool:
+    return set(outer_protocol.get("required_kernels", [])) == set(required_kernels)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description=(
@@ -1006,10 +1012,12 @@ def main() -> None:
                 "outer_selected_configuration: "
                 f"observed={observed_configuration} expected={selected_configuration}"
             )
-        if set((outer_protocol or {}).get("required_kernels", [])) != set(
-            reaction_protocol.get("required_kernels", [])
+        if not outer_kernel_contract_matches(
+            outer_protocol or {}, required_kernels_contract
         ):
-            mismatches.append("outer required kernels disagree with inner selection")
+            mismatches.append(
+                "outer required kernels disagree with the selected environment architecture"
+            )
         if set((outer_protocol or {}).get("traits", [])) != set(
             reaction_protocol.get("traits", [])
         ):
