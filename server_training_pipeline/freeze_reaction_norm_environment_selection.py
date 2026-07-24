@@ -249,9 +249,19 @@ def main() -> None:
     checks["selected_builder_identity"] = builder_hashes == {
         str(implementation.get("builder_sha256", ""))
     }
-    checks["selected_certifier_identity"] = certifier_hashes == {
-        str(implementation.get("certifier_sha256", ""))
+    compatible_selection_certifiers = {
+        str(value)
+        for value in implementation.get(
+            "selection_certifier_compatible_sha256", []
+        )
+        if str(value)
     }
+    compatible_selection_certifiers.add(
+        str(implementation.get("certifier_sha256", ""))
+    )
+    checks["selected_certifier_identity"] = bool(certifier_hashes) and (
+        certifier_hashes <= compatible_selection_certifiers
+    )
 
     failed = sorted(name for name, passed in checks.items() if not passed)
     if failed:
@@ -301,6 +311,13 @@ def main() -> None:
         "observed_environment_trainer_sha256": next(iter(trainer_hashes)),
         "selected_environment_builder_sha256": next(iter(builder_hashes)),
         "selected_environment_certifier_sha256": next(iter(certifier_hashes)),
+        "outer_environment_certifier_sha256": implementation.get(
+            "certifier_sha256"
+        ),
+        "selection_certifier_compatibility_used": bool(
+            certifier_hashes
+            - {str(implementation.get("certifier_sha256", ""))}
+        ),
         "expected_inner_pair_count": expected_pairs,
         "outer_evaluation_allowed": True,
         "no_further_environment_architecture_selection": True,

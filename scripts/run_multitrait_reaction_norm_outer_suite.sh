@@ -11,7 +11,7 @@ cd "$ROOT"
 
 REACTION_PROTOCOL="${REACTION_PROTOCOL:-$CODE_ROOT/server_training_pipeline/reaction_norm_protocol_v1.json}"
 ENVIRONMENT_PROTOCOL="${REACTION_ENVIRONMENT_PROTOCOL:-$CODE_ROOT/server_training_pipeline/reaction_norm_environment_protocol_v1.json}"
-OUTER_PROTOCOL="${REACTION_OUTER_PROTOCOL:-$CODE_ROOT/server_training_pipeline/reaction_norm_outer_evaluation_protocol_v2.json}"
+OUTER_PROTOCOL="${REACTION_OUTER_PROTOCOL:-$CODE_ROOT/server_training_pipeline/reaction_norm_outer_evaluation_protocol_v3.json}"
 SUPPORT_POLICY="${REACTION_OUTER_SUPPORT_POLICY:-$CODE_ROOT/server_training_pipeline/outer_ensemble_support_policy.json}"
 BASE_EVALUATION_DIR="${REACTION_BASE_EVALUATION_DIR:-model_kernels/final_nested_evaluation_v5_fixed}"
 INNER_SCREEN_DIR="${REACTION_SCREEN_DIR:-model_kernels/reaction_norm_inner_screen_v1}"
@@ -19,10 +19,10 @@ INNER_MODELS_DIR="${REACTION_MODELS_DIR:-trained_models/reaction_norm_inner_scre
 INNER_REFERENCE_DIR="${REACTION_REFERENCE_MODELS_DIR:-trained_models/reaction_norm_matched_nonlinear_reference_v1_runs}"
 ENVIRONMENT_SCREEN_DIR="${REACTION_ENVIRONMENT_SCREEN_DIR:-model_kernels/reaction_norm_environment_inner_screen_v1}"
 ENVIRONMENT_MODELS_DIR="${REACTION_ENVIRONMENT_MODELS_DIR:-trained_models/reaction_norm_environment_inner_screen_v1_runs}"
-FREEZE_DIR="${REACTION_SELECTION_FREEZE_DIR:-audit/reaction_norm_explicit_environment_v2_frozen}"
-OUTER_MODELS_DIR="${REACTION_OUTER_MODELS_DIR:-trained_models/reaction_norm_outer_evaluation_v2_runs}"
-SUMMARY_DIR="${REACTION_OUTER_SUMMARY_DIR:-trained_models/reaction_norm_outer_evaluation_v2_summary}"
-AUDIT_DIR="${REACTION_OUTER_AUDIT_DIR:-audit/reaction_norm_outer_evaluation_v2}"
+FREEZE_DIR="${REACTION_SELECTION_FREEZE_DIR:-audit/reaction_norm_explicit_environment_v3_frozen}"
+OUTER_MODELS_DIR="${REACTION_OUTER_MODELS_DIR:-trained_models/reaction_norm_outer_evaluation_v3_runs}"
+SUMMARY_DIR="${REACTION_OUTER_SUMMARY_DIR:-trained_models/reaction_norm_outer_evaluation_v3_summary}"
+AUDIT_DIR="${REACTION_OUTER_AUDIT_DIR:-audit/reaction_norm_outer_evaluation_v3}"
 mkdir -p "$FREEZE_DIR" "$OUTER_MODELS_DIR" "$SUMMARY_DIR" "$AUDIT_DIR" logs
 
 timestamp() { date '+%Y-%m-%d %H:%M:%S'; }

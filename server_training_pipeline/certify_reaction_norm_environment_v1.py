@@ -46,6 +46,20 @@ def add_check(
     )
 
 
+def recompute_builder_kernel(
+    values: np.ndarray, fit_positions: np.ndarray
+) -> np.ndarray:
+    """Reproduce the builder's float32 kernel arithmetic exactly."""
+    matrix = np.asarray(values, dtype=np.float32)
+    raw = ((matrix @ matrix.T) / max(matrix.shape[1], 1)).astype(np.float32)
+    raw = ((raw + raw.T) * np.float32(0.5)).astype(np.float32)
+    diagonal = np.diag(raw)[np.asarray(fit_positions, dtype=int)]
+    mean_diagonal = float(np.mean(diagonal)) if diagonal.size else 0.0
+    if not np.isfinite(mean_diagonal) or mean_diagonal <= 0:
+        return raw.copy()
+    return (raw / mean_diagonal).astype(np.float32)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Certify a fold-local E_REACTION_NORM_V1 artifact bundle."
@@ -236,9 +250,10 @@ def main() -> None:
         fit_positions = np.flatnonzero(fit_mask)
         diagonal = np.diag(kernel_values)
         mean_diag = float(diagonal[fit_positions].mean())
-        recomputed = (values @ values.T) / max(values.shape[1], 1)
-        recomputed /= float(np.diag(recomputed)[fit_positions].mean())
-        max_delta = float(np.max(np.abs(recomputed - kernel_values)))
+        recomputed = recompute_builder_kernel(values, fit_positions)
+        max_delta = float(
+            np.max(np.abs(recomputed.astype(np.float64) - kernel_values))
+        )
         sampled = np.linspace(0, len(order) - 1, min(len(order), 512), dtype=int)
         min_eigenvalue = float(
             np.linalg.eigvalsh(kernel_values[np.ix_(sampled, sampled)]).min()

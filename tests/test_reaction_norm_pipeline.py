@@ -345,13 +345,13 @@ def test_outer_protocol_is_blocked_until_environment_architecture_is_selected() 
     ).hexdigest()
 
 
-def test_outer_v2_protocol_freezes_explicit_environment_architecture() -> None:
+def test_outer_v3_protocol_freezes_explicit_environment_architecture() -> None:
     import hashlib
 
     protocol = json.loads(
         (
             ROOT
-            / "server_training_pipeline/reaction_norm_outer_evaluation_protocol_v2.json"
+            / "server_training_pipeline/reaction_norm_outer_evaluation_protocol_v3.json"
         ).read_text(encoding="utf-8")
     )
     environment_protocol = (
@@ -375,6 +375,10 @@ def test_outer_v2_protocol_freezes_explicit_environment_architecture() -> None:
             / "server_training_pipeline/certify_reaction_norm_environment_v1.py"
         ).read_bytes()
     ).hexdigest()
+    assert protocol["environment_implementation"][
+        "selection_certifier_compatible_sha256"
+    ] == ["8a0ba86e2beaccb1ef15e094dc06f22fe48522a888f1016ce242e4a50ba6d87c"]
+    assert protocol["environment_implementation"]["model_or_feature_values_changed"] is False
     assert set(protocol["required_kernels"]) == {
         "K_A_CANONICAL_V3",
         "K_E_GEO",
@@ -628,6 +632,25 @@ def test_fold_local_environment_scaling_does_not_use_held_out_values() -> None:
     )
     np.testing.assert_allclose(z_first.loc[fit, "water"].mean(), 0.0, atol=1e-7)
     np.testing.assert_allclose(z_first.loc[fit, "water"].std(ddof=0), 1.0, atol=1e-7)
+
+
+def test_environment_certifier_reproduces_builder_float32_kernel() -> None:
+    from server_training_pipeline.certify_reaction_norm_environment_v1 import (
+        recompute_builder_kernel,
+    )
+
+    rng = np.random.default_rng(20260724)
+    matrix = rng.normal(size=(96, 558)).astype(np.float32)
+    matrix[:, :12] *= np.float32(40.0)
+    fit_positions = np.arange(73, dtype=int)
+
+    raw = ((matrix @ matrix.T) / matrix.shape[1]).astype(np.float32)
+    raw = ((raw + raw.T) * np.float32(0.5)).astype(np.float32)
+    fit_mean_diagonal = float(np.mean(np.diag(raw)[fit_positions]))
+    expected = (raw / fit_mean_diagonal).astype(np.float32)
+
+    observed = recompute_builder_kernel(matrix.astype(np.float64), fit_positions)
+    np.testing.assert_array_equal(observed, expected)
 
 
 def test_reaction_model_supports_trait_masked_explicit_environment_axes() -> None:
@@ -944,7 +967,7 @@ def test_outer_runners_do_not_reopen_inner_selection() -> None:
     assert "--environment-design-matrix" in fold
     assert "build_reaction_norm_environment_v1" in fold
     assert "certify_reaction_norm_environment_v1" in fold
-    assert "reaction_norm_outer_evaluation_protocol_v2.json" in fold
+    assert "reaction_norm_outer_evaluation_protocol_v3.json" in fold
     assert "--outer-evaluation-protocol" in fold
     assert "summarize_reaction_norm_screen" not in fold
     assert "verify_reaction_norm_outer_evaluation" in suite
@@ -961,7 +984,7 @@ def test_outer_trainer_validates_selected_environment_kernel_contract() -> None:
     outer = json.loads(
         (
             ROOT
-            / "server_training_pipeline/reaction_norm_outer_evaluation_protocol_v2.json"
+            / "server_training_pipeline/reaction_norm_outer_evaluation_protocol_v3.json"
         ).read_text(encoding="utf-8")
     )
     environment = json.loads(
