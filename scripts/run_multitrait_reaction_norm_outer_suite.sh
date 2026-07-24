@@ -25,6 +25,16 @@ mkdir -p "$FREEZE_DIR" "$OUTER_MODELS_DIR" "$SUMMARY_DIR" "$AUDIT_DIR" logs
 timestamp() { date '+%Y-%m-%d %H:%M:%S'; }
 log() { printf '[%s] %s\n' "$(timestamp)" "$*"; }
 
+"$PYTHON" - "$OUTER_PROTOCOL" <<'PY'
+import json, sys
+protocol = json.load(open(sys.argv[1]))
+if protocol.get("status") != "frozen_after_inner_validation_before_outer_test":
+    raise SystemExit(
+        "STOP: reaction-norm outer evaluation is blocked pending the "
+        "E_REACTION_NORM_V1 inner-validation architecture selection"
+    )
+PY
+
 log "FREEZE and checksum completed reaction-norm inner selection"
 "$PYTHON" -m server_training_pipeline.freeze_reaction_norm_selection \
   --root . \

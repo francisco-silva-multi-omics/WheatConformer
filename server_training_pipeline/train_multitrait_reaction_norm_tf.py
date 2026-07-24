@@ -124,6 +124,11 @@ class MultiTraitReactionNorm(tf.keras.Model):
         ridge_penalty: float,
         residual_scale_floor: float,
         initialization_seed: int,
+        reaction_feature_mode: str = "kernel_product",
+        kernel_interaction_allowlist: set[str] | None = None,
+        environment_design: np.ndarray | None = None,
+        environment_trait_eligibility: np.ndarray | None = None,
+        trait_slope_penalty_multiplier: np.ndarray | None = None,
     ) -> None:
         super().__init__()
         self.expert_specs = expert_specs
@@ -131,6 +136,7 @@ class MultiTraitReactionNorm(tf.keras.Model):
         self.ridge_penalty = float(ridge_penalty)
         self.residual_scale_floor = float(residual_scale_floor)
         self.initialization_seed = int(initialization_seed)
+        self.reaction_feature_mode = str(reaction_feature_mode)
         self._initializer_index = 0
         self.trait_covariance_sqrt = tf.constant(
             trait_covariance_sqrt, dtype=tf.float32
@@ -187,6 +193,11 @@ class MultiTraitReactionNorm(tf.keras.Model):
             ):
                 continue
             environment_name = str(spec["kernel"])
+            if (
+                kernel_interaction_allowlist is not None
+                and environment_name not in kernel_interaction_allowlist
+            ):
+                continue
             g_projection = deterministic_sign_projection(
                 genotype_factor.shape[1],
                 reaction_rank,
@@ -215,7 +226,57 @@ class MultiTraitReactionNorm(tf.keras.Model):
                 "genotype": hashlib.sha256(g_projection.tobytes()).hexdigest(),
                 "environment": hashlib.sha256(e_projection.tobytes()).hexdigest(),
             }
-        if not self.reaction_environment_indices:
+        self.environment_design = None
+        self.environment_trait_eligibility = None
+        self.explicit_reaction_coefficients = None
+        self.explicit_genotype_features = None
+        self.trait_slope_penalty_multiplier = None
+        if self.reaction_feature_mode == "explicit_environment_axes":
+            if environment_design is None or environment_trait_eligibility is None:
+                raise ValueError("Explicit reaction axes require a matrix and trait eligibility")
+            design = np.asarray(environment_design, dtype=np.float32)
+            eligibility = np.asarray(environment_trait_eligibility, dtype=bool)
+            if design.ndim != 2 or eligibility.shape != (
+                design.shape[1],
+                len(trait_names),
+            ):
+                raise ValueError(
+                    "Environment design/eligibility shape mismatch: "
+                    f"design={design.shape}; eligibility={eligibility.shape}"
+                )
+            if not np.isfinite(design).all():
+                raise ValueError("Explicit environment design contains non-finite values")
+            g_projection = deterministic_sign_projection(
+                genotype_factor.shape[1],
+                reaction_rank,
+                initialization_seed,
+                f"{genotype_kernel}xE_REACTION_NORM_V1:genotype",
+            ) / math.sqrt(max(genotype_factor.shape[1], 1))
+            self.explicit_genotype_features = tf.constant(
+                (genotype_factor @ g_projection).astype(np.float32)
+            )
+            self.environment_design = tf.constant(design)
+            self.environment_trait_eligibility = tf.constant(eligibility)
+            self.explicit_reaction_coefficients = self.add_weight(
+                name="E_REACTION_NORM_V1_explicit_slope_coefficients",
+                shape=(reaction_rank, design.shape[1], len(trait_names)),
+                initializer=self._initializer(),
+            )
+            penalty = (
+                np.ones(len(trait_names), dtype=np.float32)
+                if trait_slope_penalty_multiplier is None
+                else np.asarray(trait_slope_penalty_multiplier, dtype=np.float32)
+            )
+            if penalty.shape != (len(trait_names),) or np.any(penalty < 1.0):
+                raise ValueError("Trait slope penalties must have one value >= 1 per trait")
+            self.trait_slope_penalty_multiplier = tf.constant(penalty)
+            self.reaction_projection_digests["E_REACTION_NORM_V1"] = {
+                "genotype": hashlib.sha256(g_projection.tobytes()).hexdigest(),
+                "environment": hashlib.sha256(design.tobytes()).hexdigest(),
+            }
+        elif self.reaction_feature_mode != "kernel_product":
+            raise ValueError(f"Unknown reaction feature mode: {self.reaction_feature_mode}")
+        if not self.reaction_environment_indices and self.explicit_reaction_coefficients is None:
             raise ValueError("Reaction-norm model has no environment interaction axes")
         self.reaction_scale = tf.constant(1.0 / math.sqrt(reaction_rank), tf.float32)
 
@@ -237,7 +298,11 @@ class MultiTraitReactionNorm(tf.keras.Model):
         return tf.matmul(raw, self.trait_covariance_sqrt, transpose_b=True)
 
     def call(self, inputs, training: bool = False):
-        expert_indices, trait_index = inputs
+        if len(inputs) == 2:
+            expert_indices, trait_index = inputs
+            reaction_environment_index = None
+        else:
+            expert_indices, trait_index, reaction_environment_index = inputs
         prediction = tf.gather(self.intercept, trait_index)
         gathered_factors: list[tf.Tensor] = []
         availability: list[tf.Tensor] = []
@@ -287,6 +352,29 @@ class MultiTraitReactionNorm(tf.keras.Model):
             )
             active = genotype_available & environment_available & trait_eligible
             prediction += effect * tf.cast(active, tf.float32)
+        if self.explicit_reaction_coefficients is not None:
+            if reaction_environment_index is None:
+                raise ValueError("Explicit reaction axes require environment row indices")
+            environment_available = reaction_environment_index >= 0
+            safe_environment_index = tf.maximum(reaction_environment_index, 0)
+            g_feature = tf.gather(
+                self.explicit_genotype_features, safe_genotype_indices
+            )
+            e_feature = tf.gather(self.environment_design, safe_environment_index)
+            trait_one_hot = tf.one_hot(
+                trait_index, depth=len(self.trait_names), dtype=tf.float32
+            )
+            eligibility = tf.cast(self.environment_trait_eligibility, tf.float32)
+            coefficients = self.explicit_reaction_coefficients * eligibility[None, :, :]
+            effect = tf.einsum(
+                "br,rft,bf,bt->b",
+                g_feature,
+                coefficients,
+                e_feature,
+                trait_one_hot,
+            ) * self.reaction_scale
+            active = genotype_available & environment_available
+            prediction += effect * tf.cast(active, tf.float32)
         return prediction
 
     def residual_scales(self) -> tf.Tensor:
@@ -294,9 +382,18 @@ class MultiTraitReactionNorm(tf.keras.Model):
 
     def regularization_loss(self) -> tf.Tensor:
         coefficients = [*self.main_coefficients, *self.reaction_coefficients]
-        return self.ridge_penalty * tf.add_n(
-            [tf.reduce_sum(tf.square(value)) for value in coefficients]
-        )
+        terms = [tf.reduce_sum(tf.square(value)) for value in coefficients]
+        if self.explicit_reaction_coefficients is not None:
+            eligibility = tf.cast(self.environment_trait_eligibility, tf.float32)
+            penalty = self.trait_slope_penalty_multiplier[None, None, :]
+            terms.append(
+                tf.reduce_sum(
+                    tf.square(self.explicit_reaction_coefficients)
+                    * eligibility[None, :, :]
+                    * penalty
+                )
+            )
+        return self.ridge_penalty * tf.add_n(terms)
 
     def component_variance_frame(self) -> pd.DataFrame:
         rows: list[dict[str, object]] = []
@@ -332,6 +429,19 @@ class MultiTraitReactionNorm(tf.keras.Model):
                         ),
                     }
                 )
+        if self.explicit_reaction_coefficients is not None:
+            coefficients = self.explicit_reaction_coefficients.numpy()
+            eligibility = self.environment_trait_eligibility.numpy()
+            for trait_index, trait in enumerate(self.trait_names):
+                local = coefficients[:, eligibility[:, trait_index], trait_index]
+                rows.append(
+                    {
+                        "component": "K_A_CANONICAL_V3xE_REACTION_NORM_V1",
+                        "component_type": "explicit_reaction_axes",
+                        "trait_name_canonical": trait,
+                        "coefficient_mean_square": float(np.mean(np.square(local))),
+                    }
+                )
         return pd.DataFrame(rows)
 
 
@@ -342,11 +452,16 @@ def make_dataset(
     shuffle: bool,
     seed: int,
 ) -> tf.data.Dataset:
+    reaction_environment_index = frame.get(
+        "reaction_environment_index",
+        pd.Series(-1, index=frame.index, dtype=np.int32),
+    ).to_numpy(dtype=np.int32)
     dataset = tf.data.Dataset.from_tensor_slices(
         (
             (
                 frame[expert_columns].to_numpy(dtype=np.int32),
                 frame["trait_index"].to_numpy(dtype=np.int32),
+                reaction_environment_index,
             ),
             frame["y_scaled"].to_numpy(dtype=np.float32),
             frame["loss_weight"].to_numpy(dtype=np.float32),
@@ -380,6 +495,58 @@ def macro_standardized_rmse(frame: pd.DataFrame, prediction: np.ndarray) -> floa
     return float(np.mean(scores)) if scores else float("inf")
 
 
+def load_certified_environment_design(
+    matrix_path: Path,
+    order_path: Path,
+    manifest_path: Path,
+    certification_path: Path,
+    trait_names: list[str],
+    slope_penalties: dict[str, object],
+) -> tuple[np.ndarray, pd.DataFrame, pd.DataFrame, np.ndarray, dict[str, object]]:
+    certification = json.loads(certification_path.read_text(encoding="utf-8"))
+    if certification.get("status") != "PASS":
+        raise SystemExit("E_REACTION_NORM_V1 certification is not PASS")
+    if certification.get("phenotype_values_read") is not False:
+        raise SystemExit("Environment design certification is not phenotype-blind")
+    identities = certification.get("artifact_identities", {})
+    for label, path in {
+        "matrix": matrix_path,
+        "order": order_path,
+        "feature_manifest": manifest_path,
+    }.items():
+        expected = identities.get(label, {})
+        if expected.get("sha256") != file_sha256(path):
+            raise SystemExit(f"Certified environment artifact is stale: {label}")
+    matrix = pd.read_parquet(matrix_path)
+    order = pd.read_csv(order_path, sep="\t", dtype=str)
+    manifest = pd.read_csv(manifest_path, sep="\t", dtype=str)
+    feature_columns = [column for column in matrix.columns if column != "env_id"]
+    if matrix["env_id"].astype(str).tolist() != order["env_id"].astype(str).tolist():
+        raise SystemExit("Environment design matrix and order disagree")
+    if manifest["feature"].tolist() != feature_columns:
+        raise SystemExit("Environment design feature manifest and matrix disagree")
+    values = matrix[feature_columns].to_numpy(dtype=np.float32)
+    if not np.isfinite(values).all():
+        raise SystemExit("Environment design matrix contains non-finite values")
+    eligibility = np.zeros((len(feature_columns), len(trait_names)), dtype=bool)
+    trait_lookup = {trait.upper(): index for index, trait in enumerate(trait_names)}
+    for feature_index, row in enumerate(manifest.itertuples(index=False)):
+        for trait in str(row.eligible_traits).split(","):
+            key = trait.strip().upper()
+            if key in trait_lookup:
+                eligibility[feature_index, trait_lookup[key]] = True
+    if not eligibility.any(axis=0).all():
+        missing = [trait for index, trait in enumerate(trait_names) if not eligibility[:, index].any()]
+        raise SystemExit(f"Traits lack explicit environment axes: {missing}")
+    penalties = np.asarray(
+        [float(slope_penalties.get(trait, 1.0)) for trait in trait_names],
+        dtype=np.float32,
+    )
+    if np.any(penalties < 1.0) or not np.isfinite(penalties).all():
+        raise SystemExit("Environment slope penalty multipliers must be finite and >= 1")
+    return values, order, manifest, penalties, certification
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description=(
@@ -403,6 +570,13 @@ def main() -> None:
     parser.add_argument("--split-contract", type=Path)
     parser.add_argument("--evaluation-protocol", type=Path)
     parser.add_argument("--reaction-protocol", type=Path, required=True)
+    parser.add_argument("--reaction-candidate")
+    parser.add_argument("--environment-architecture-protocol", type=Path)
+    parser.add_argument("--environment-architecture")
+    parser.add_argument("--environment-design-matrix", type=Path)
+    parser.add_argument("--environment-design-order", type=Path)
+    parser.add_argument("--environment-design-manifest", type=Path)
+    parser.add_argument("--environment-design-certification", type=Path)
     parser.add_argument("--outer-evaluation-protocol", type=Path)
     parser.add_argument("--reaction-selection-lock", type=Path)
     parser.add_argument("--evaluation-scenario", choices=sorted(SCENARIO_MODES))
@@ -527,12 +701,73 @@ def main() -> None:
     candidate_by_name = {
         str(value["name"]): value for value in reaction_protocol.get("candidates", [])
     }
-    if args.hyperparameter_label not in candidate_by_name:
+    reaction_candidate_name = args.reaction_candidate or args.hyperparameter_label
+    if reaction_candidate_name not in candidate_by_name:
         raise SystemExit(
-            "Hyperparameter label is absent from the frozen reaction protocol: "
-            f"{args.hyperparameter_label}"
+            "Reaction candidate is absent from the frozen reaction protocol: "
+            f"{reaction_candidate_name}"
         )
-    candidate_contract = candidate_by_name[args.hyperparameter_label]
+    candidate_contract = candidate_by_name[reaction_candidate_name]
+    environment_protocol = None
+    environment_contract = None
+    reaction_feature_mode = "kernel_product"
+    kernel_interaction_allowlist = None
+    required_kernels_contract = set(reaction_protocol.get("required_kernels", []))
+    if args.environment_architecture_protocol is not None:
+        if args.evaluation_stage != "inner_selection":
+            raise SystemExit(
+                "Environment architecture selection is restricted to inner validation"
+            )
+        environment_protocol = json.loads(
+            args.environment_architecture_protocol.read_text(encoding="utf-8")
+        )
+        if environment_protocol.get("status") != "frozen_before_inner_validation":
+            raise SystemExit("Environment architecture protocol is not frozen")
+        candidates = {
+            str(value["name"]): value
+            for value in environment_protocol.get("candidates", [])
+        }
+        if args.environment_architecture not in candidates:
+            raise SystemExit("Environment architecture is absent from its frozen protocol")
+        if args.hyperparameter_label != args.environment_architecture:
+            raise SystemExit(
+                "Environment screen hyperparameter label must equal the architecture name"
+            )
+        if environment_protocol.get("selected_reaction_candidate") != reaction_candidate_name:
+            raise SystemExit("Environment protocol and reaction candidate disagree")
+        environment_contract = candidates[args.environment_architecture]
+        reaction_feature_mode = str(environment_contract["reaction_feature_mode"])
+        kernel_interaction_allowlist = set(
+            environment_contract.get("kernel_interaction_allowlist", [])
+        )
+        required_kernels_contract = set(environment_contract["required_kernels"])
+        design_arguments = [
+            args.environment_design_matrix,
+            args.environment_design_order,
+            args.environment_design_manifest,
+            args.environment_design_certification,
+        ]
+        design_required = bool(environment_contract["environment_design_required"])
+        if design_required != all(value is not None for value in design_arguments):
+            raise SystemExit(
+                "Environment design artifact arguments disagree with the architecture contract"
+            )
+        if not design_required and any(value is not None for value in design_arguments):
+            raise SystemExit("The comparator must not consume E_REACTION_NORM_V1 artifacts")
+    elif any(
+        value is not None
+        for value in (
+            args.reaction_candidate,
+            args.environment_architecture,
+            args.environment_design_matrix,
+            args.environment_design_order,
+            args.environment_design_manifest,
+            args.environment_design_certification,
+        )
+    ):
+        raise SystemExit(
+            "Environment architecture arguments require --environment-architecture-protocol"
+        )
     training_contract = reaction_protocol["training"]
     exact_contract = {
         "reaction_rank": (args.reaction_rank, int(candidate_contract["reaction_rank"])),
@@ -750,7 +985,7 @@ def main() -> None:
     registry = registry[enabled].copy().reset_index(drop=True)
     if registry.empty:
         raise SystemExit("No kernel experts remain after registry filtering")
-    required_kernels = set(reaction_protocol.get("required_kernels", []))
+    required_kernels = required_kernels_contract
     active_kernels = set(registry["kernel"].astype(str))
     forbidden_kernels = set(reaction_protocol.get("forbidden_kernels", []))
     forbidden_prefixes = tuple(reaction_protocol.get("forbidden_kernel_prefixes", []))
@@ -770,6 +1005,8 @@ def main() -> None:
     generic_environment = set(
         reaction_protocol.get("generic_environment_kernels", [])
     )
+    if "K_E_REACTION_NORM_V1" in required_kernels:
+        generic_environment.add("K_E_REACTION_NORM_V1")
     trait_specific_environment = set(
         reaction_protocol.get("trait_specific_environment_kernels", [])
     )
@@ -972,6 +1209,52 @@ def main() -> None:
         )
     ].copy().reset_index(drop=True)
     ledger, expert_columns, coverage = add_expert_indices(ledger, registry)
+    environment_design = None
+    environment_design_manifest = None
+    environment_design_certification = None
+    environment_trait_eligibility = None
+    trait_slope_penalties = None
+    if reaction_feature_mode == "explicit_environment_axes":
+        (
+            environment_design,
+            environment_design_order,
+            environment_design_manifest,
+            trait_slope_penalties,
+            environment_design_certification,
+        ) = load_certified_environment_design(
+            args.environment_design_matrix,
+            args.environment_design_order,
+            args.environment_design_manifest,
+            args.environment_design_certification,
+            trait_names,
+            environment_protocol.get("trait_slope_penalty_multiplier", {}),
+        )
+        feature_trait_sets = [
+            {value.strip().upper() for value in str(text).split(",") if value.strip()}
+            for text in environment_design_manifest["eligible_traits"]
+        ]
+        environment_trait_eligibility = np.asarray(
+            [
+                [trait.upper() in eligible for trait in trait_names]
+                for eligible in feature_trait_sets
+            ],
+            dtype=bool,
+        )
+        environment_lookup = dict(
+            zip(
+                environment_design_order["env_id"].astype(str),
+                pd.to_numeric(
+                    environment_design_order["compact_kernel_index"], errors="raise"
+                ).astype(int),
+            )
+        )
+        ledger["reaction_environment_index"] = (
+            ledger["environment_id"].fillna("").astype(str).map(environment_lookup).fillna(-1).astype(np.int32)
+        )
+        if ledger["reaction_environment_index"].lt(0).any():
+            raise SystemExit("E_REACTION_NORM_V1 does not cover every retained environment")
+    else:
+        ledger["reaction_environment_index"] = np.int32(-1)
 
     weight_parameters = pd.DataFrame()
     if args.fold_local_weights:
@@ -1166,6 +1449,11 @@ def main() -> None:
         args.ridge_penalty,
         args.residual_scale_floor,
         args.seed,
+        reaction_feature_mode=reaction_feature_mode,
+        kernel_interaction_allowlist=kernel_interaction_allowlist,
+        environment_design=environment_design,
+        environment_trait_eligibility=environment_trait_eligibility,
+        trait_slope_penalty_multiplier=trait_slope_penalties,
     )
     optimizer = tf.keras.optimizers.Adam(args.learning_rate)
     train_dataset = make_dataset(train, expert_columns, args.batch_size, True, args.seed)
@@ -1296,6 +1584,22 @@ def main() -> None:
     model.component_variance_frame().to_csv(
         args.out_dir / f"{args.prefix}_component_variance_proxies.tsv", sep="\t", index=False
     )
+    if environment_design_manifest is not None:
+        environment_design_manifest.to_csv(
+            args.out_dir / f"{args.prefix}_environment_axis_manifest.tsv",
+            sep="\t",
+            index=False,
+        )
+        pd.DataFrame(
+            {
+                "trait_name_canonical": trait_names,
+                "slope_penalty_multiplier": trait_slope_penalties,
+            }
+        ).to_csv(
+            args.out_dir / f"{args.prefix}_environment_slope_penalties.tsv",
+            sep="\t",
+            index=False,
+        )
     if not weight_parameters.empty:
         weight_parameters.to_csv(
             args.out_dir / f"{args.prefix}_fold_weight_parameters.tsv", sep="\t", index=False
@@ -1313,7 +1617,9 @@ def main() -> None:
     pd.DataFrame([leakage]).to_csv(
         args.out_dir / f"{args.prefix}_split_leakage_qc.tsv", sep="\t", index=False
     )
-    export = predictions.drop(columns=expert_columns, errors="ignore")
+    export = predictions.drop(
+        columns=[*expert_columns, "reaction_environment_index"], errors="ignore"
+    )
     write_table(export, args.out_dir / f"{args.prefix}_predictions.parquet")
 
     metadata = {
@@ -1324,6 +1630,35 @@ def main() -> None:
             "sha256": file_sha256(args.reaction_protocol),
             "protocol_version": reaction_protocol["protocol_version"],
         },
+        "environment_architecture_protocol": (
+            {
+                "path": str(args.environment_architecture_protocol.resolve()),
+                "sha256": file_sha256(args.environment_architecture_protocol),
+                "protocol_version": environment_protocol["protocol_version"],
+            }
+            if environment_protocol is not None
+            else {}
+        ),
+        "environment_architecture": args.environment_architecture or "",
+        "reaction_candidate": reaction_candidate_name,
+        "reaction_feature_mode": reaction_feature_mode,
+        "kernel_interaction_allowlist": sorted(kernel_interaction_allowlist or []),
+        "environment_design": (
+            {
+                "matrix_sha256": file_sha256(args.environment_design_matrix),
+                "order_sha256": file_sha256(args.environment_design_order),
+                "manifest_sha256": file_sha256(args.environment_design_manifest),
+                "certification_sha256": file_sha256(
+                    args.environment_design_certification
+                ),
+                "feature_count": int(environment_design.shape[1]),
+                "environment_count": int(environment_design.shape[0]),
+                "certification_status": environment_design_certification["status"],
+                "preprocessing_fit_partition": "outer_training_environments_only",
+            }
+            if environment_design is not None
+            else {}
+        ),
         "outer_evaluation_protocol": (
             {
                 "path": str(args.outer_evaluation_protocol.resolve()),

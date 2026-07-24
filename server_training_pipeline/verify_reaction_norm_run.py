@@ -14,6 +14,9 @@ def main() -> None:
     parser.add_argument("--run-dir", type=Path, required=True)
     parser.add_argument("--prefix", required=True)
     parser.add_argument("--candidate", required=True)
+    parser.add_argument("--reaction-candidate")
+    parser.add_argument("--environment-architecture-protocol", type=Path)
+    parser.add_argument("--environment-design-certification", type=Path)
     parser.add_argument(
         "--stage",
         choices=["inner_selection", "outer_evaluation"],
@@ -40,9 +43,22 @@ def main() -> None:
     reaction = json.loads(args.reaction_protocol.read_text(encoding="utf-8"))
     evaluation = load_protocol(args.evaluation_protocol)
     candidates = {str(value["name"]): value for value in reaction["candidates"]}
-    if args.candidate not in candidates:
-        raise SystemExit(f"candidate absent from frozen protocol: {args.candidate}")
-    candidate = candidates[args.candidate]
+    reaction_candidate = args.reaction_candidate or args.candidate
+    if reaction_candidate not in candidates:
+        raise SystemExit(f"candidate absent from frozen protocol: {reaction_candidate}")
+    candidate = candidates[reaction_candidate]
+    environment_protocol = None
+    environment_candidate = None
+    if args.environment_architecture_protocol is not None:
+        environment_protocol = json.loads(
+            args.environment_architecture_protocol.read_text(encoding="utf-8")
+        )
+        environment_candidates = {
+            str(value["name"]): value for value in environment_protocol["candidates"]
+        }
+        if args.candidate not in environment_candidates:
+            raise SystemExit("candidate absent from environment architecture protocol")
+        environment_candidate = environment_candidates[args.candidate]
     training = reaction["training"]
     expected_configuration = {
         "max_rank_genotype": int(training["max_rank_genotype"]),
@@ -83,7 +99,11 @@ def main() -> None:
         == file_sha256(args.factorization_implementation),
         "configuration": metadata.get("training_configuration") == expected_configuration,
         "active_kernels": set(metadata.get("active_kernels", []))
-        == set(reaction["required_kernels"]),
+        == set(
+            environment_candidate["required_kernels"]
+            if environment_candidate is not None
+            else reaction["required_kernels"]
+        ),
         "factorization_mode": metadata.get("requested_factorization_mode")
         == training["factorization_mode"]
         and metadata.get("effective_factorization_mode") == training["factorization_mode"],
@@ -93,6 +113,57 @@ def main() -> None:
         "outer_test_outcomes_unused": preprocessing.get("outer_test_outcomes_used") is False,
         "final_holdout_unread": metadata.get("final_holdout_outcomes_read") is False,
     }
+    if environment_protocol is not None:
+        design_required = bool(environment_candidate["environment_design_required"])
+        checks.update(
+            {
+                "reaction_candidate": metadata.get("reaction_candidate")
+                == reaction_candidate,
+                "environment_architecture": metadata.get("environment_architecture")
+                == args.candidate,
+                "environment_protocol": metadata.get(
+                    "environment_architecture_protocol", {}
+                ).get("sha256")
+                == file_sha256(args.environment_architecture_protocol),
+                "reaction_feature_mode": metadata.get("reaction_feature_mode")
+                == environment_candidate["reaction_feature_mode"],
+                "interaction_allowlist": set(
+                    metadata.get("kernel_interaction_allowlist", [])
+                )
+                == set(environment_candidate.get("kernel_interaction_allowlist", [])),
+                "environment_design_presence": bool(metadata.get("environment_design"))
+                is design_required,
+            }
+        )
+        if design_required:
+            if args.environment_design_certification is None:
+                raise SystemExit("Explicit environment verification requires certification")
+            design_certification = json.loads(
+                args.environment_design_certification.read_text(encoding="utf-8")
+            )
+            design_metadata = metadata.get("environment_design", {})
+            checks["environment_design_certification"] = metadata.get(
+                "environment_design", {}
+            ).get("certification_sha256") == file_sha256(
+                args.environment_design_certification
+            )
+            checks["environment_design_certification_pass"] = (
+                design_certification.get("status") == "PASS"
+            )
+            for label, metadata_key in (
+                ("matrix", "matrix_sha256"),
+                ("order", "order_sha256"),
+                ("feature_manifest", "manifest_sha256"),
+            ):
+                artifact = design_certification.get("artifact_identities", {}).get(
+                    label, {}
+                )
+                path = Path(str(artifact.get("path", "")))
+                checks[f"environment_design_{label}_current"] = (
+                    path.is_file()
+                    and file_sha256(path) == artifact.get("sha256")
+                    and design_metadata.get(metadata_key) == artifact.get("sha256")
+                )
     protected_rows = int(
         preprocessing.get("protected_outcome_rows_cleared_before_preprocessing", 0)
     )

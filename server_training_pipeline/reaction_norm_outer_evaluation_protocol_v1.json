@@ -1,6 +1,8 @@
 {
   "protocol_version": "multitrait_reaction_norm_outer_v1",
-  "status": "frozen_after_inner_validation_before_outer_test",
+  "status": "blocked_pending_environment_architecture_selection",
+  "blocked_on": "2026-07-23",
+  "blocked_reason": "E_REACTION_NORM_V1 must be compared with the current corrected generic environment representation using all 15 inner-validation folds before outer evaluation.",
   "frozen_on": "2026-07-23",
   "selection_data": "completed_inner_validation_only",
   "inner_validation_phenotype_values_read": true,

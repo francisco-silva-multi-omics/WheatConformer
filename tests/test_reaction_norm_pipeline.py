@@ -293,7 +293,21 @@ def test_runner_is_inner_only_and_prepares_exact_kernel_subset() -> None:
     assert "outer_evaluation" not in text
 
 
-def test_outer_protocol_freezes_identity_candidate_and_complete_scenario_grid() -> None:
+def test_environment_screen_runner_is_inner_only_and_blocks_old_outer_suite() -> None:
+    screen = (
+        ROOT / "scripts/run_reaction_norm_environment_inner_screen.sh"
+    ).read_text(encoding="utf-8")
+    outer = (
+        ROOT / "scripts/run_multitrait_reaction_norm_outer_suite.sh"
+    ).read_text(encoding="utf-8")
+    assert "--evaluation-stage inner_selection" in screen
+    assert "summarize_reaction_norm_environment_screen" in screen
+    assert "E_REACTION_NORM_V1_certification.json" in screen
+    assert "outer_evaluation" not in screen
+    assert "STOP: reaction-norm outer evaluation is blocked" in outer
+
+
+def test_outer_protocol_is_blocked_until_environment_architecture_is_selected() -> None:
     import hashlib
 
     protocol = json.loads(
@@ -302,7 +316,8 @@ def test_outer_protocol_freezes_identity_candidate_and_complete_scenario_grid() 
             / "server_training_pipeline/reaction_norm_outer_evaluation_protocol_v1.json"
         ).read_text(encoding="utf-8")
     )
-    assert protocol["status"] == "frozen_after_inner_validation_before_outer_test"
+    assert protocol["status"] == "blocked_pending_environment_architecture_selection"
+    assert "E_REACTION_NORM_V1" in protocol["blocked_reason"]
     assert protocol["selected_candidate"] == "reaction_norm_identity_covariance"
     assert protocol["model_contract"]["no_further_hyperparameter_selection"] is True
     assert protocol["model_contract"]["final_holdout_available"] is False
@@ -328,6 +343,108 @@ def test_outer_protocol_freezes_identity_candidate_and_complete_scenario_grid() 
             ROOT / "server_training_pipeline/outer_ensemble_support_policy.json"
         ).read_bytes()
     ).hexdigest()
+
+
+def test_environment_protocol_freezes_two_arm_inner_only_comparison() -> None:
+    protocol = json.loads(
+        (
+            ROOT
+            / "server_training_pipeline/reaction_norm_environment_protocol_v1.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert protocol["status"] == "frozen_before_inner_validation"
+    assert protocol["outer_test_metrics_read"] is False
+    candidates = {value["name"]: value for value in protocol["candidates"]}
+    assert set(candidates) == {
+        "current_corrected_generic_environment",
+        "explicit_E_REACTION_NORM_V1",
+    }
+    assert candidates["current_corrected_generic_environment"][
+        "reaction_feature_mode"
+    ] == "kernel_product"
+    explicit = candidates["explicit_E_REACTION_NORM_V1"]
+    assert explicit["reaction_feature_mode"] == "explicit_environment_axes"
+    assert "K_E_REACTION_NORM_V1" in explicit["required_kernels"]
+    assert explicit["kernel_interaction_allowlist"] == ["K_E_TGW_V2"]
+    assert protocol["trait_slope_penalty_multiplier"]["TEST_WEIGHT"] == 4.0
+
+
+def test_fold_local_environment_scaling_does_not_use_held_out_values() -> None:
+    from server_training_pipeline.build_reaction_norm_environment_v1 import (
+        standardize_fold_local,
+    )
+
+    index = pd.Index(["E1", "E2", "E3"])
+    first = pd.DataFrame({"water": [1.0, 3.0, 1000.0]}, index=index)
+    second = pd.DataFrame({"water": [1.0, 3.0, -9000.0]}, index=index)
+    fit = pd.Index(["E1", "E2"])
+    z_first, scaling_first, _ = standardize_fold_local(first, fit)
+    z_second, scaling_second, _ = standardize_fold_local(second, fit)
+    pd.testing.assert_frame_equal(
+        scaling_first.reset_index(drop=True), scaling_second.reset_index(drop=True)
+    )
+    np.testing.assert_allclose(
+        z_first.loc[fit, "water"], z_second.loc[fit, "water"], atol=1e-7
+    )
+    np.testing.assert_allclose(z_first.loc[fit, "water"].mean(), 0.0, atol=1e-7)
+    np.testing.assert_allclose(z_first.loc[fit, "water"].std(ddof=0), 1.0, atol=1e-7)
+
+
+def test_reaction_model_supports_trait_masked_explicit_environment_axes() -> None:
+    import tensorflow as tf
+
+    from server_training_pipeline.train_multitrait_reaction_norm_tf import (
+        MultiTraitReactionNorm,
+    )
+
+    specs = [
+        {
+            "kernel": "K_A_CANONICAL_V3",
+            "axis": "genotype",
+            "eligible_traits": "*",
+            "interaction_enabled": True,
+        },
+        {
+            "kernel": "K_E_TGW_V2",
+            "axis": "environment",
+            "eligible_traits": "T2",
+            "interaction_enabled": True,
+        },
+    ]
+    factors = [
+        np.eye(2, dtype=np.float32),
+        np.eye(2, dtype=np.float32),
+    ]
+    design = np.asarray([[1.0, 0.0, -1.0], [0.0, 1.0, 1.0]], dtype=np.float32)
+    eligibility = np.asarray([[True, True], [True, False], [False, True]])
+    model = MultiTraitReactionNorm(
+        specs,
+        factors,
+        ["T1", "T2"],
+        "K_A_CANONICAL_V3",
+        np.eye(2, dtype=np.float32),
+        reaction_rank=2,
+        ridge_penalty=1e-4,
+        residual_scale_floor=0.05,
+        initialization_seed=61001,
+        reaction_feature_mode="explicit_environment_axes",
+        kernel_interaction_allowlist={"K_E_TGW_V2"},
+        environment_design=design,
+        environment_trait_eligibility=eligibility,
+        trait_slope_penalty_multiplier=np.asarray([1.0, 4.0], dtype=np.float32),
+    )
+    prediction = model(
+        (
+            tf.constant([[0, 0], [1, 1]], dtype=tf.int32),
+            tf.constant([0, 1], dtype=tf.int32),
+            tf.constant([0, 1], dtype=tf.int32),
+        )
+    ).numpy()
+    assert prediction.shape == (2,)
+    assert np.isfinite(prediction).all()
+    components = model.component_variance_frame()
+    assert "K_A_CANONICAL_V3xE_REACTION_NORM_V1" in set(components["component"])
+    assert np.isfinite(float(model.regularization_loss().numpy()))
 
 
 def test_freeze_reaction_selection_records_biomass_caveat_without_trait_removal(
