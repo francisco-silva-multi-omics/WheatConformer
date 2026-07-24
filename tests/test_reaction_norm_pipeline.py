@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+import warnings
 from pathlib import Path
 
 import numpy as np
@@ -388,6 +389,26 @@ def test_fold_local_environment_scaling_does_not_use_held_out_values() -> None:
     )
     np.testing.assert_allclose(z_first.loc[fit, "water"].mean(), 0.0, atol=1e-7)
     np.testing.assert_allclose(z_first.loc[fit, "water"].std(ddof=0), 1.0, atol=1e-7)
+
+
+def test_fold_local_environment_scaling_compacts_wide_feature_matrix() -> None:
+    from server_training_pipeline.build_reaction_norm_environment_v1 import (
+        standardize_fold_local,
+    )
+
+    index = pd.Index([f"E{value}" for value in range(6)])
+    features = pd.DataFrame(
+        {
+            f"feature_{column}": np.arange(6, dtype=float) + column
+            for column in range(250)
+        },
+        index=index,
+    )
+    standardized, _, _ = standardize_fold_local(features, index[:4])
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", pd.errors.PerformanceWarning)
+        exported = standardized.reset_index(names="env_id")
+    assert exported.shape == (6, 251)
 
 
 def test_reaction_model_supports_trait_masked_explicit_environment_axes() -> None:
