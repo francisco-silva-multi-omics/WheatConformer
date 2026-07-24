@@ -291,3 +291,298 @@ def test_runner_is_inner_only_and_prepares_exact_kernel_subset() -> None:
     assert "reaction_norm_matched_nonlinear_reference_v1_runs" in text
     assert "TRAIN matched nonlinear reference" in text
     assert "outer_evaluation" not in text
+
+
+def test_outer_protocol_freezes_identity_candidate_and_complete_scenario_grid() -> None:
+    import hashlib
+
+    protocol = json.loads(
+        (
+            ROOT
+            / "server_training_pipeline/reaction_norm_outer_evaluation_protocol_v1.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert protocol["status"] == "frozen_after_inner_validation_before_outer_test"
+    assert protocol["selected_candidate"] == "reaction_norm_identity_covariance"
+    assert protocol["model_contract"]["no_further_hyperparameter_selection"] is True
+    assert protocol["model_contract"]["final_holdout_available"] is False
+    assert protocol["trait_reporting_policy"]["ABOVE_GROUND_BIOMASS"] == (
+        "exploratory_not_improved_in_inner_validation"
+    )
+    assert protocol["scenarios"] == {
+        "unseen_environments": 5,
+        "unseen_genotypes": 5,
+        "unseen_genotypes_and_environments": 5,
+        "temporal_holdout": 3,
+        "country_holdout": 5,
+    }
+    assert protocol["outer_member_policy"]["member_count"] == 3
+    assert protocol["inner_reaction_protocol_sha256"] == hashlib.sha256(
+        (ROOT / "server_training_pipeline/reaction_norm_protocol_v1.json").read_bytes()
+    ).hexdigest()
+    assert protocol["evaluation_protocol_sha256"] == hashlib.sha256(
+        (ROOT / "server_training_pipeline/final_evaluation_protocol.json").read_bytes()
+    ).hexdigest()
+    assert protocol["outer_member_policy"]["support_policy_sha256"] == hashlib.sha256(
+        (
+            ROOT / "server_training_pipeline/outer_ensemble_support_policy.json"
+        ).read_bytes()
+    ).hexdigest()
+
+
+def test_freeze_reaction_selection_records_biomass_caveat_without_trait_removal(
+    tmp_path: Path,
+) -> None:
+    summary_dir = tmp_path / "summary"
+    models_dir = tmp_path / "models"
+    reference_dir = tmp_path / "references"
+    summary_dir.mkdir()
+    models_dir.mkdir()
+    reference_dir.mkdir()
+    kernels = ["K_A_CANONICAL_V3"]
+    traits = ["DAYS_TO_HEADING", "ABOVE_GROUND_BIOMASS"]
+    candidates = [
+        {
+            "name": "reaction_norm_identity_covariance",
+            "trait_covariance_shrinkage": 1.0,
+            "reaction_rank": 2,
+            "ridge_penalty": 0.1,
+        },
+        {
+            "name": "reaction_norm_correlated_traits",
+            "trait_covariance_shrinkage": 0.25,
+            "reaction_rank": 2,
+            "ridge_penalty": 0.1,
+        },
+    ]
+    reaction_protocol = {
+        "protocol_version": "test_inner",
+        "status": "frozen_before_inner_validation",
+        "scenario": "unseen_genotypes",
+        "required_kernels": kernels,
+        "traits": traits,
+        "candidates": candidates,
+        "selection": {
+            "minimum_relative_nrmse_gain_vs_nonlinear_reference": 0.01,
+            "minimum_fold_win_rate": 2.0 / 3.0,
+            "maximum_mean_pearson_drop": 0.005,
+            "maximum_mean_calibration_error_increase": 0.0,
+        },
+    }
+    reaction_path = tmp_path / "reaction.json"
+    reaction_path.write_text(json.dumps(reaction_protocol), encoding="utf-8")
+    import hashlib
+
+    outer_protocol = {
+        "protocol_version": "test_outer",
+        "status": "frozen_after_inner_validation_before_outer_test",
+        "selected_candidate": "reaction_norm_identity_covariance",
+        "selected_model_label": "frozen_identity",
+        "selected_configuration": {},
+        "inner_reaction_protocol_sha256": hashlib.sha256(
+            reaction_path.read_bytes()
+        ).hexdigest(),
+        "trait_reporting_policy": {
+            "ABOVE_GROUND_BIOMASS": "exploratory_not_improved_in_inner_validation",
+            "default": "primary_quantitative_result",
+        },
+    }
+    outer_path = tmp_path / "outer.json"
+    outer_path.write_text(json.dumps(outer_protocol), encoding="utf-8")
+    (summary_dir / "reaction_norm_inner_screen_provenance.json").write_text(
+        json.dumps(
+            {
+                "status": "PASS",
+                "selection_data": "inner_validation_metrics_only",
+                "outer_test_metrics_read": False,
+                "final_holdout_outcomes_read": False,
+                "selected_reaction_candidate": "reaction_norm_identity_covariance",
+                "outer_folds": [0],
+                "inner_fold_count": 1,
+                "reaction_run_count": 2,
+                "reference_run_count": 1,
+                "matched_seed_status": "pass",
+                "matched_validation_observation_status": "pass",
+                "matched_common_kernel_identity_status": "pass",
+            }
+        ),
+        encoding="utf-8",
+    )
+    pd.DataFrame(
+        [
+            {
+                "architecture": "reaction_norm_identity_covariance",
+                "paired_inner_folds": 1,
+                "outer_folds": 1,
+                "relative_nrmse_gain_vs_reference_mean": 0.02,
+                "nrmse_win_rate_vs_reference": 1.0,
+                "pearson_gain_vs_reference_mean": 0.01,
+                "calibration_error_delta_vs_reference_mean": -0.01,
+                "quantitative_model_decision": "advance_as_primary_quantitative_model",
+            },
+            {
+                "architecture": "reaction_norm_correlated_traits",
+                "paired_inner_folds": 1,
+                "outer_folds": 1,
+                "relative_nrmse_gain_vs_reference_mean": 0.0,
+                "nrmse_win_rate_vs_reference": 0.0,
+                "pearson_gain_vs_reference_mean": 0.0,
+                "calibration_error_delta_vs_reference_mean": 0.0,
+                "quantitative_model_decision": "retain_as_interpretable_mixed_baseline",
+            },
+        ]
+    ).to_csv(
+        summary_dir / "reaction_norm_inner_screen_summary.tsv", sep="\t", index=False
+    )
+    pd.DataFrame(
+        [
+            {
+                "architecture": "reaction_norm_identity_covariance",
+                "outer_fold": 0,
+                "inner_fold": 0,
+                "trait_name_canonical": "DAYS_TO_HEADING",
+                "normalized_rmse_candidate": 0.7,
+                "normalized_rmse_reference": 0.8,
+                "nrmse_gain_vs_reference": 0.1,
+                "pearson_candidate": 0.7,
+                "pearson_reference": 0.6,
+                "pearson_gain_vs_reference": 0.1,
+                "calibration_error_delta_vs_reference": -0.1,
+            },
+            {
+                "architecture": "reaction_norm_identity_covariance",
+                "outer_fold": 0,
+                "inner_fold": 0,
+                "trait_name_canonical": "ABOVE_GROUND_BIOMASS",
+                "normalized_rmse_candidate": 0.9,
+                "normalized_rmse_reference": 0.8,
+                "nrmse_gain_vs_reference": -0.1,
+                "pearson_candidate": 0.5,
+                "pearson_reference": 0.6,
+                "pearson_gain_vs_reference": -0.1,
+                "calibration_error_delta_vs_reference": -0.1,
+            },
+        ]
+    ).to_csv(
+        summary_dir / "reaction_norm_inner_screen_trait_metrics.tsv",
+        sep="\t",
+        index=False,
+    )
+    pd.DataFrame({"x": [1]}).to_csv(
+        summary_dir / "reaction_norm_inner_screen_runs.tsv", sep="\t", index=False
+    )
+    pd.DataFrame({"x": [1]}).to_csv(
+        summary_dir / "reaction_norm_inner_screen_paired_metrics.tsv",
+        sep="\t",
+        index=False,
+    )
+
+    def write_run(run_dir: Path, label: str, reaction_run: bool) -> None:
+        run_dir.mkdir()
+        metadata = {
+            "evaluation_stage": "inner_selection",
+            "external_split": {
+                "scenario": "unseen_genotypes",
+                "outer_fold": 0,
+                "inner_fold": 0,
+            },
+            "hyperparameter_label": label,
+            "active_kernels": kernels,
+            "trainer_sha256": "reaction" if reaction_run else "reference",
+        }
+        if reaction_run:
+            metadata.update(
+                {
+                    "status": "PASS",
+                    "outer_test_metrics_read": False,
+                    "final_holdout_outcomes_read": False,
+                    "phenotype_preprocessing": {"outer_test_outcomes_used": False},
+                }
+            )
+        (run_dir / "x_run_metadata.json").write_text(
+            json.dumps(metadata), encoding="utf-8"
+        )
+        pd.DataFrame({"split": ["val"]}).to_csv(
+            run_dir / "x_macro_metrics.tsv", sep="\t", index=False
+        )
+        pd.DataFrame({"split": ["val"]}).to_csv(
+            run_dir / "x_trait_metrics.tsv", sep="\t", index=False
+        )
+        pd.DataFrame({"split": ["val"], "y_pred": [0.0]}).to_csv(
+            run_dir / "x_predictions.tsv.gz", sep="\t", index=False
+        )
+
+    for candidate in candidates:
+        write_run(
+            models_dir
+            / f"reaction_inner_unseen_genotypes_outer0_{candidate['name']}_inner0",
+            candidate["name"],
+            True,
+        )
+    write_run(
+        reference_dir / "reaction_reference_inner_unseen_genotypes_outer0_inner0",
+        "nonlinear_canonical_v3_matched_reference",
+        False,
+    )
+
+    subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "server_training_pipeline.freeze_reaction_norm_selection",
+            "--root",
+            str(tmp_path),
+            "--summary-dir",
+            "summary",
+            "--models-dir",
+            "models",
+            "--reference-models-dir",
+            "references",
+            "--reaction-protocol",
+            "reaction.json",
+            "--outer-protocol",
+            "outer.json",
+            "--expected-outer-folds",
+            "1",
+            "--expected-inner-folds",
+            "1",
+            "--out-dir",
+            "frozen",
+        ],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    lock = json.loads(
+        (tmp_path / "frozen/reaction_norm_selection_lock.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    reporting = pd.read_csv(
+        tmp_path / "frozen/reaction_norm_selected_trait_reporting.tsv", sep="\t"
+    )
+    assert lock["status"] == "PASS"
+    assert lock["trait_architecture_preserved"] is True
+    assert lock["outer_evaluation_allowed"] is True
+    biomass = reporting[
+        reporting["trait_name_canonical"].eq("ABOVE_GROUND_BIOMASS")
+    ].iloc[0]
+    assert biomass["reporting_class"] == (
+        "exploratory_not_improved_in_inner_validation"
+    )
+
+
+def test_outer_runners_do_not_reopen_inner_selection() -> None:
+    fold = (ROOT / "scripts/run_multitrait_reaction_norm_outer_fold.sh").read_text(
+        encoding="utf-8"
+    )
+    suite = (ROOT / "scripts/run_multitrait_reaction_norm_outer_suite.sh").read_text(
+        encoding="utf-8"
+    )
+    assert "--evaluation-stage outer_evaluation" in fold
+    assert "--reaction-selection-lock" in fold
+    assert "--outer-evaluation-protocol" in fold
+    assert "summarize_reaction_norm_screen" not in fold
+    assert "verify_reaction_norm_outer_evaluation" in suite
+    assert "final_holdout_environment_ids.tsv" in suite

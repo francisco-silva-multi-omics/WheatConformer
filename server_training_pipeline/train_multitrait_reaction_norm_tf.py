@@ -403,6 +403,8 @@ def main() -> None:
     parser.add_argument("--split-contract", type=Path)
     parser.add_argument("--evaluation-protocol", type=Path)
     parser.add_argument("--reaction-protocol", type=Path, required=True)
+    parser.add_argument("--outer-evaluation-protocol", type=Path)
+    parser.add_argument("--reaction-selection-lock", type=Path)
     parser.add_argument("--evaluation-scenario", choices=sorted(SCENARIO_MODES))
     parser.add_argument("--outer-fold", type=int)
     parser.add_argument("--inner-fold", type=int)
@@ -455,6 +457,71 @@ def main() -> None:
     reaction_protocol = json.loads(args.reaction_protocol.read_text(encoding="utf-8"))
     if reaction_protocol.get("status") != "frozen_before_inner_validation":
         raise SystemExit("Reaction-norm protocol is not frozen before inner validation")
+    outer_protocol = None
+    selection_lock = None
+    if args.evaluation_stage == "outer_evaluation":
+        if args.outer_evaluation_protocol is None or args.reaction_selection_lock is None:
+            raise SystemExit(
+                "Outer reaction-norm evaluation requires its frozen protocol and "
+                "completed inner-selection lock"
+            )
+        outer_protocol = json.loads(
+            args.outer_evaluation_protocol.read_text(encoding="utf-8")
+        )
+        selection_lock = json.loads(
+            args.reaction_selection_lock.read_text(encoding="utf-8")
+        )
+        outer_checks = {
+            "outer_protocol_status": outer_protocol.get("status")
+            == "frozen_after_inner_validation_before_outer_test",
+            "inner_protocol_version": outer_protocol.get(
+                "inner_reaction_protocol_version"
+            )
+            == reaction_protocol.get("protocol_version"),
+            "inner_protocol_sha256": outer_protocol.get(
+                "inner_reaction_protocol_sha256"
+            )
+            == file_sha256(args.reaction_protocol),
+            "selection_lock_status": selection_lock.get("status") == "PASS",
+            "selection_lock_outer_unread": selection_lock.get(
+                "outer_test_metrics_read"
+            )
+            is False,
+            "selection_lock_final_holdout_unread": selection_lock.get(
+                "final_holdout_outcomes_read"
+            )
+            is False,
+            "selection_lock_allows_outer": selection_lock.get(
+                "outer_evaluation_allowed"
+            )
+            is True,
+            "selection_lock_protocol": selection_lock.get(
+                "outer_evaluation_protocol_sha256"
+            )
+            == file_sha256(args.outer_evaluation_protocol),
+            "selection_lock_candidate": selection_lock.get("selected_candidate")
+            == outer_protocol.get("selected_candidate"),
+            "no_further_selection": outer_protocol.get("model_contract", {}).get(
+                "no_further_hyperparameter_selection"
+            )
+            is True,
+            "final_holdout_unavailable": outer_protocol.get(
+                "model_contract", {}
+            ).get("final_holdout_available")
+            is False,
+        }
+        failed_outer = sorted(
+            name for name, passed in outer_checks.items() if not passed
+        )
+        if failed_outer:
+            raise SystemExit(
+                "Reaction-norm outer-evaluation authorization failed: "
+                + ", ".join(failed_outer)
+            )
+    elif args.outer_evaluation_protocol is not None or args.reaction_selection_lock is not None:
+        raise SystemExit(
+            "Outer-evaluation authorization artifacts may only be used for outer evaluation"
+        )
     if reaction_protocol.get("genotype_kernel") != args.genotype_kernel:
         raise SystemExit("Configured genotype kernel disagrees with the reaction protocol")
     candidate_by_name = {
@@ -577,14 +644,65 @@ def main() -> None:
             "stage1_policy: "
             f"observed={args.stage1_policy} expected={training_contract['stage1_policy']}"
         )
-    if args.evaluation_stage != "inner_selection":
-        mismatches.append("evaluation_stage must be inner_selection")
-    if args.evaluation_scenario != reaction_protocol.get("scenario"):
+    if args.evaluation_stage not in {"inner_selection", "outer_evaluation"}:
+        mismatches.append("evaluation_stage must be inner_selection or outer_evaluation")
+    expected_scenarios = (
+        {str(reaction_protocol.get("scenario"))}
+        if args.evaluation_stage == "inner_selection"
+        else set((outer_protocol or {}).get("scenarios", {}))
+    )
+    if args.evaluation_scenario not in expected_scenarios:
         mismatches.append(
             "evaluation_scenario: "
             f"observed={args.evaluation_scenario} "
-            f"expected={reaction_protocol.get('scenario')}"
+            f"expected={sorted(expected_scenarios)}"
         )
+    if args.evaluation_stage == "outer_evaluation":
+        selected_candidate = str((outer_protocol or {}).get("selected_candidate", ""))
+        if args.hyperparameter_label != selected_candidate:
+            mismatches.append(
+                "outer_candidate: "
+                f"observed={args.hyperparameter_label} expected={selected_candidate}"
+            )
+        selected_model_label = str(
+            (outer_protocol or {}).get("selected_model_label", "")
+        )
+        if args.model_label != selected_model_label:
+            mismatches.append(
+                "outer_model_label: "
+                f"observed={args.model_label} expected={selected_model_label}"
+            )
+        selected_configuration = (outer_protocol or {}).get(
+            "selected_configuration", {}
+        )
+        observed_configuration = {
+            "max_rank_genotype": args.max_rank_genotype,
+            "max_rank_environment": args.max_rank_environment,
+            "reaction_rank": args.reaction_rank,
+            "trait_covariance_shrinkage": args.trait_covariance_shrinkage,
+            "trait_covariance_minimum_pairs": args.trait_covariance_minimum_pairs,
+            "ridge_penalty": args.ridge_penalty,
+            "residual_scale_floor": args.residual_scale_floor,
+            "epochs": args.epochs,
+            "batch_size": args.batch_size,
+            "learning_rate": args.learning_rate,
+            "patience": args.patience,
+            "intra_op_threads": args.intra_op_threads,
+            "inter_op_threads": args.inter_op_threads,
+        }
+        if observed_configuration != selected_configuration:
+            mismatches.append(
+                "outer_selected_configuration: "
+                f"observed={observed_configuration} expected={selected_configuration}"
+            )
+        if set((outer_protocol or {}).get("required_kernels", [])) != set(
+            reaction_protocol.get("required_kernels", [])
+        ):
+            mismatches.append("outer required kernels disagree with inner selection")
+        if set((outer_protocol or {}).get("traits", [])) != set(
+            reaction_protocol.get("traits", [])
+        ):
+            mismatches.append("outer traits disagree with inner selection")
     if mismatches:
         raise SystemExit(
             "Reaction-norm frozen training contract failed: " + "; ".join(mismatches)
@@ -607,6 +725,16 @@ def main() -> None:
     if args.split_manifest is not None:
         protocol = load_protocol(args.evaluation_protocol)
         require_non_discovery_seed(args.seed, protocol)
+        if outer_protocol is not None:
+            if outer_protocol.get("evaluation_protocol_version") != protocol.get(
+                "protocol_version"
+            ) or outer_protocol.get("evaluation_protocol_sha256") != protocol.get(
+                "protocol_sha256"
+            ):
+                raise SystemExit(
+                    "Outer reaction-norm protocol disagrees with the immutable "
+                    "evaluation protocol"
+                )
 
     certification = json.loads(args.certification_summary.read_text(encoding="utf-8"))
     if certification.get("status") != "PASS":
@@ -1196,6 +1324,24 @@ def main() -> None:
             "sha256": file_sha256(args.reaction_protocol),
             "protocol_version": reaction_protocol["protocol_version"],
         },
+        "outer_evaluation_protocol": (
+            {
+                "path": str(args.outer_evaluation_protocol.resolve()),
+                "sha256": file_sha256(args.outer_evaluation_protocol),
+                "protocol_version": outer_protocol["protocol_version"],
+            }
+            if outer_protocol is not None
+            else {}
+        ),
+        "reaction_selection_lock": (
+            {
+                "path": str(args.reaction_selection_lock.resolve()),
+                "sha256": file_sha256(args.reaction_selection_lock),
+                "selected_candidate": selection_lock["selected_candidate"],
+            }
+            if selection_lock is not None
+            else {}
+        ),
         "kernel_factorization_sha256": file_sha256(
             Path(effective_factorization_mode.__code__.co_filename).resolve()
         ),
@@ -1262,7 +1408,7 @@ def main() -> None:
         "reaction_projection_digests": model.reaction_projection_digests,
         "best_validation_macro_nrmse": float(best_score),
         "epochs_completed": len(history_rows),
-        "outer_test_metrics_read": False,
+        "outer_test_metrics_read": args.evaluation_stage == "outer_evaluation",
         "final_holdout_outcomes_read": False,
     }
     (args.out_dir / f"{args.prefix}_run_metadata.json").write_text(

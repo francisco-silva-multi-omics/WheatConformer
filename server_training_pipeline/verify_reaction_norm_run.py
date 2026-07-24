@@ -14,6 +14,11 @@ def main() -> None:
     parser.add_argument("--run-dir", type=Path, required=True)
     parser.add_argument("--prefix", required=True)
     parser.add_argument("--candidate", required=True)
+    parser.add_argument(
+        "--stage",
+        choices=["inner_selection", "outer_evaluation"],
+        default="inner_selection",
+    )
     parser.add_argument("--seed", type=int, required=True)
     parser.add_argument("--scenario", required=True)
     parser.add_argument("--outer-fold", type=int, required=True)
@@ -21,6 +26,8 @@ def main() -> None:
     parser.add_argument("--split-manifest", type=Path, required=True)
     parser.add_argument("--evaluation-protocol", type=Path, required=True)
     parser.add_argument("--reaction-protocol", type=Path, required=True)
+    parser.add_argument("--outer-evaluation-protocol", type=Path)
+    parser.add_argument("--reaction-selection-lock", type=Path)
     parser.add_argument("--certification-summary", type=Path, required=True)
     parser.add_argument("--trainer", type=Path, required=True)
     parser.add_argument("--factorization-implementation", type=Path, required=True)
@@ -56,7 +63,7 @@ def main() -> None:
     preprocessing = metadata.get("phenotype_preprocessing", {})
     checks = {
         "status": metadata.get("status") == "PASS",
-        "stage": metadata.get("evaluation_stage") == "inner_selection",
+        "stage": metadata.get("evaluation_stage") == args.stage,
         "scenario": external.get("scenario") == args.scenario,
         "outer_fold": int(external.get("outer_fold", -1)) == args.outer_fold,
         "inner_fold": int(external.get("inner_fold", -1)) == args.inner_fold,
@@ -84,11 +91,48 @@ def main() -> None:
         is bool(training["kernel_centering"]),
         "fold_local_weights": preprocessing.get("fold_local_weights") is True,
         "outer_test_outcomes_unused": preprocessing.get("outer_test_outcomes_used") is False,
-        "protected_outcomes_cleared": int(
-            preprocessing.get("protected_outcome_rows_cleared_before_preprocessing", 0)
-        )
-        > 0,
+        "final_holdout_unread": metadata.get("final_holdout_outcomes_read") is False,
     }
+    protected_rows = int(
+        preprocessing.get("protected_outcome_rows_cleared_before_preprocessing", 0)
+    )
+    if args.stage == "inner_selection":
+        checks["protected_outcomes_cleared"] = protected_rows > 0
+        checks["outer_test_metrics_unread"] = (
+            metadata.get("outer_test_metrics_read") is False
+        )
+        checks["outer_authorization_absent"] = not metadata.get(
+            "outer_evaluation_protocol"
+        ) and not metadata.get("reaction_selection_lock")
+    else:
+        if args.outer_evaluation_protocol is None or args.reaction_selection_lock is None:
+            raise SystemExit(
+                "Outer run verification requires the outer protocol and selection lock"
+            )
+        outer = json.loads(
+            args.outer_evaluation_protocol.read_text(encoding="utf-8")
+        )
+        lock = json.loads(args.reaction_selection_lock.read_text(encoding="utf-8"))
+        checks.update(
+            {
+                "outer_test_metrics_read": metadata.get("outer_test_metrics_read")
+                is True,
+                "outer_protocol": metadata.get("outer_evaluation_protocol", {}).get(
+                    "sha256"
+                )
+                == file_sha256(args.outer_evaluation_protocol),
+                "selection_lock": metadata.get("reaction_selection_lock", {}).get(
+                    "sha256"
+                )
+                == file_sha256(args.reaction_selection_lock),
+                "selected_candidate": args.candidate
+                == outer.get("selected_candidate")
+                == lock.get("selected_candidate"),
+                "selection_lock_pass": lock.get("status") == "PASS"
+                and lock.get("outer_evaluation_allowed") is True,
+                "protected_outcomes_not_mutated": protected_rows == 0,
+            }
+        )
     required_suffixes = [
         "trait_metrics.tsv",
         "macro_metrics.tsv",
@@ -110,7 +154,10 @@ def main() -> None:
     macro_path = args.run_dir / f"{args.prefix}_macro_metrics.tsv"
     if macro_path.is_file():
         macro = pd.read_csv(macro_path, sep="\t")
-        checks["no_test_metrics"] = not macro["split"].astype(str).eq("test").any()
+        has_test = macro["split"].astype(str).eq("test").any()
+        checks["test_metric_contract"] = (
+            not has_test if args.stage == "inner_selection" else has_test
+        )
     leakage_path = args.run_dir / f"{args.prefix}_split_leakage_qc.tsv"
     if leakage_path.is_file():
         leakage = pd.read_csv(leakage_path, sep="\t")
