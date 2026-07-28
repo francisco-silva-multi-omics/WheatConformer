@@ -109,3 +109,36 @@ pedigree order, `K_A_CANONICAL_V3`, and the full environment order. It does not
 read phenotype values or model metrics and does not modify kernels. Its output
 separates rows recoverable by a canonical-v3 model-input rebuild from rows that
 still require pedigree or environment metadata recovery.
+
+## Environment-name alias recovery
+
+When readiness reports `P1_RECOVER_ENVIRONMENT`, run:
+
+```bash
+PYTHON="$HOME/tools/tf_wheat_cpu/bin/python" \
+WHEATCONFORMER_CODE_ROOT="$HOME/tools/WheatConformer" \
+bash "$HOME/tools/WheatConformer/scripts/run_stage1_environment_alias_recovery.sh" \
+  /DATA2/estancias/tesis_javier/model_DATA/genotipoXambiente
+```
+
+The recovery is intentionally narrower than weather imputation. It first
+checks whether an excluded six-part environment ID already exists in the
+global kernel order under an expanded trial name. A trial-name alias is
+accepted only from at least three unambiguous matches, at least 95% agreement,
+and a unique dominant target trial. The remaining five environment fields must
+match exactly. This permits the accepted trial alias to resolve otherwise
+ambiguous identity matches without selecting by phenotype or model metrics.
+
+The runner rebuilds model inputs in
+`model_kernels/stage1_canonical_v3_environment_alias_v1`; it does not overwrite
+the original Stage-1 model directory. The observation table preserves
+`env_kernel_id_original`, records `environment_alias_applied`, and uses the
+certified target ID only for environment-kernel indexing and grouped splits.
+Validation requires the resulting observation IDs to equal exactly:
+
+```text
+RETAINED_REFERENCE + P1_RECOVER_ENVIRONMENT
+```
+
+Rows classified as `P3_REPAIR_WEIGHT_METADATA` remain excluded. No frozen
+outer-evaluation or final-holdout artifact is read or modified.
