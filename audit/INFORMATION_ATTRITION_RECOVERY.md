@@ -100,3 +100,12 @@ Primary outputs are:
 Additional traits identified by this audit are candidates for a new
 inner-validation-only screen. They cannot be added to the already completed
 outer evaluation.
+
+## Stage-1 recovery readiness
+
+After version 2 completes, run `scripts/run_stage1_signal_recovery_audit.sh`.
+This lightweight audit compares excluded Stage-1 identifiers with the legacy
+pedigree order, `K_A_CANONICAL_V3`, and the full environment order. It does not
+read phenotype values or model metrics and does not modify kernels. Its output
+separates rows recoverable by a canonical-v3 model-input rebuild from rows that
+still require pedigree or environment metadata recovery.
