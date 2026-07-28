@@ -274,7 +274,26 @@ def genotype_expert_support_table(
                 "failure_reasons": ";".join(failures),
             }
         )
-    return pd.DataFrame(rows)
+    return pd.DataFrame(
+        rows,
+        columns=[
+            "kernel_expert",
+            "order_id_count",
+            "ledger_unique_genotypes",
+            "development_unique_genotypes",
+            "development_unique_fraction",
+            "development_observation_rows",
+            "required_development_unique_genotypes",
+            "required_development_observation_rows",
+            "holdout_unique_genotypes",
+            "holdout_unique_fraction",
+            "holdout_observation_rows",
+            "required_holdout_unique_genotypes",
+            "required_holdout_observation_rows",
+            "support_status",
+            "failure_reasons",
+        ],
+    )
 
 
 def environment_rank(value: str, protocol_id: str, attempt: int) -> int:
@@ -373,7 +392,30 @@ def nested_genotype_expert_support_table(
                             "support_status": support_status,
                         }
                     )
-    return pd.DataFrame(rows)
+    return pd.DataFrame(
+        rows,
+        columns=[
+            "scenario",
+            "outer_fold",
+            "inner_fold",
+            "kernel_expert",
+            "expert_policy",
+            "train_observation_rows",
+            "train_unique_genotypes",
+            "val_observation_rows",
+            "val_unique_genotypes",
+            "test_observation_rows",
+            "test_unique_genotypes",
+            "omitted_observation_rows",
+            "omitted_unique_genotypes",
+            "development_unique_genotypes",
+            "required_train_unique_genotypes",
+            "required_train_unique_fraction",
+            "required_train_observation_rows",
+            "leakage_status",
+            "support_status",
+        ],
+    )
 
 
 def choose_final_environment_block(

@@ -20,6 +20,8 @@ def main() -> None:
     parser.add_argument("--environment-design-certification", type=Path)
     parser.add_argument("--loss-balance-protocol", type=Path)
     parser.add_argument("--loss-balance-candidate")
+    parser.add_argument("--trial-hierarchy-protocol", type=Path)
+    parser.add_argument("--trial-hierarchy-candidate")
     parser.add_argument(
         "--stage",
         choices=["inner_selection", "outer_evaluation"],
@@ -214,6 +216,63 @@ def main() -> None:
                 "loss_balance_diagnostics": diagnostics_path.is_file()
                 and loss_metadata.get("diagnostics_sha256")
                 == file_sha256(diagnostics_path),
+            }
+        )
+    if (args.trial_hierarchy_protocol is None) != (
+        args.trial_hierarchy_candidate is None
+    ):
+        raise SystemExit(
+            "Trial-hierarchy verification requires both its protocol and candidate"
+        )
+    if args.trial_hierarchy_protocol is not None:
+        hierarchy_protocol = json.loads(
+            args.trial_hierarchy_protocol.read_text(encoding="utf-8")
+        )
+        hierarchy_candidates = {
+            str(value["name"]): value
+            for value in hierarchy_protocol.get("candidates", [])
+        }
+        if args.trial_hierarchy_candidate not in hierarchy_candidates:
+            raise SystemExit("Trial-hierarchy candidate is absent from its protocol")
+        hierarchy_metadata = metadata.get("trial_hierarchy", {})
+        support_path = args.run_dir / f"{args.prefix}_trial_hierarchy_support.tsv"
+        checks.update(
+            {
+                "trial_hierarchy_protocol_status": hierarchy_protocol.get("status")
+                == "frozen_before_inner_validation",
+                "trial_hierarchy_candidate": hierarchy_metadata.get("candidate")
+                == args.trial_hierarchy_candidate,
+                "trial_hierarchy_contract": hierarchy_metadata.get(
+                    "candidate_contract"
+                )
+                == hierarchy_candidates[args.trial_hierarchy_candidate],
+                "trial_hierarchy_protocol": hierarchy_metadata.get(
+                    "protocol_sha256"
+                )
+                == file_sha256(args.trial_hierarchy_protocol),
+                "trial_hierarchy_fit_partition": hierarchy_metadata.get(
+                    "support_fit_partition"
+                )
+                == "inner_training_only",
+                "trial_hierarchy_support_phenotype_blind": hierarchy_metadata.get(
+                    "phenotype_values_used_for_support"
+                )
+                is False,
+                "trial_hierarchy_unseen_policy": hierarchy_metadata.get(
+                    "unseen_entity_policy"
+                )
+                == "zero_effect",
+                "trial_hierarchy_outer_unread": hierarchy_metadata.get(
+                    "outer_test_metrics_read"
+                )
+                is False,
+                "trial_hierarchy_final_holdout_unread": hierarchy_metadata.get(
+                    "final_holdout_outcomes_read"
+                )
+                is False,
+                "trial_hierarchy_support": support_path.is_file()
+                and hierarchy_metadata.get("support_sha256")
+                == file_sha256(support_path),
             }
         )
     protected_rows = int(

@@ -144,8 +144,8 @@ def load_protocol(path: Path | None = None) -> dict[str, Any]:
     protected_experts = [
         str(value).strip() for value in protocol.get("protected_genotype_experts", [])
     ]
-    if not protected_experts or any(not value for value in protected_experts):
-        raise ValueError("Final evaluation requires named protected genotype experts")
+    if any(not value for value in protected_experts):
+        raise ValueError("Protected genotype expert names cannot be empty")
     if len(protected_experts) != len(set(protected_experts)):
         raise ValueError("Protected genotype expert names must be unique")
     scenario_expert_policy = protocol.get("scenario_genotype_expert_policy", {})
