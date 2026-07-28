@@ -208,6 +208,10 @@ def test_information_attrition_cli_classifies_recovery_opportunities(
     assert provenance["outer_test_metrics_read"] is False
     assert provenance["final_holdout_outcomes_read"] is False
     assert provenance["target_values_used_for_selection_or_imputation"] is False
+    assert Path(provenance["code_root"]).resolve() == ROOT
+    assert provenance["git_commit"] == subprocess.check_output(
+        ["git", "-C", str(ROOT), "rev-parse", "HEAD"], text=True
+    ).strip()
 
     policy = pd.read_csv(out_dir / "imputation_policy.tsv", sep="\t")
     target = policy[policy["information_type"].eq("target_phenotype")].iloc[0]

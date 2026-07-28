@@ -8,7 +8,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from .audit_common import canonical_gid, file_identity, git_value, write_json
+from .audit_common import canonical_gid, file_identity, write_json
 
 
 SELECTED_TRAITS = (
@@ -95,9 +95,13 @@ def resolve(root: Path, value: Path) -> Path:
     return value.resolve() if value.is_absolute() else (root / value).resolve()
 
 
-def git_commit(root: Path) -> str:
+def git_commit(code_root: Path) -> str:
     try:
-        return git_value(root, "rev-parse", "HEAD")
+        return subprocess.check_output(
+            ["git", "-C", str(code_root), "rev-parse", "HEAD"],
+            text=True,
+            stderr=subprocess.DEVNULL,
+        ).strip()
     except (OSError, subprocess.CalledProcessError):
         return "unknown"
 
@@ -704,6 +708,7 @@ def main() -> None:
         "target_values_not_used_for_model_selection": True,
     }
     status = "PASS" if all(checks.values()) else "FAIL"
+    code_root = Path(__file__).resolve().parents[1]
     provenance = {
         "status": status,
         "audit_version": "information_attrition_v1",
@@ -716,7 +721,8 @@ def main() -> None:
         "selected_traits": sorted(selected_traits),
         "checks": checks,
         "regulatory_summary": regulatory_summary,
-        "git_commit": git_commit(root),
+        "code_root": str(code_root),
+        "git_commit": git_commit(code_root),
         "inputs": {name: file_identity(path) for name, path in paths.items() if path.is_file()},
         "outputs": sorted(path.name for path in out_dir.iterdir() if path.is_file()),
     }
