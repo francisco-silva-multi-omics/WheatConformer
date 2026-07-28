@@ -77,10 +77,12 @@ def test_trial_alias_does_not_resolve_without_minimum_anchor_support() -> None:
 
 
 def test_apply_environment_aliases_preserves_original_ids() -> None:
-    frame = pd.DataFrame({"env_kernel_id": ["short", "existing"]})
+    raw_source = "SHORT|40|22207|INDIA|NEW DELHI -  PUSA FARMS - IARI|2015"
+    registry_source = "SHORT|40|22207|INDIA|NEW DELHI - PUSA FARMS - IARI|2015"
+    frame = pd.DataFrame({"env_kernel_id": [raw_source, "existing"]})
     aliases = pd.DataFrame(
         {
-            "source_env_id": ["short"],
+            "source_env_id": [registry_source],
             "target_env_id": ["expanded"],
             "mapping_status": ["ACCEPTED_ALIAS"],
         }
@@ -89,8 +91,12 @@ def test_apply_environment_aliases_preserves_original_ids() -> None:
     result, stats = apply_environment_aliases(frame, "env_kernel_id", aliases)
 
     assert result["env_kernel_id"].tolist() == ["expanded", "existing"]
-    assert result["env_kernel_id_original"].tolist() == ["short", "existing"]
+    assert result["env_kernel_id_original"].tolist() == [raw_source, "existing"]
     assert result["environment_alias_applied"].tolist() == [True, False]
+    assert result["environment_alias_registry_source_id"].tolist() == [
+        registry_source,
+        "",
+    ]
     assert result["environment_alias_mapping_status"].tolist() == [
         "ACCEPTED_ALIAS",
         "NOT_APPLICABLE",
@@ -103,11 +109,13 @@ def test_apply_environment_aliases_preserves_original_ids() -> None:
 
 
 def test_stage1_builder_applies_certified_environment_alias(tmp_path: Path) -> None:
+    raw_source = "SHORT|40|22207|INDIA|NEW DELHI -  PUSA FARMS - IARI|2015"
+    registry_source = "SHORT|40|22207|INDIA|NEW DELHI - PUSA FARMS - IARI|2015"
     phenotype_path = tmp_path / "phenotypes.tsv"
     pd.DataFrame(
         {
             "panel_sample_id": ["g1", "g1"],
-            "env_kernel_id": ["short", "existing"],
+            "env_kernel_id": [raw_source, "existing"],
             "y_tilde_g_e": [1.0, 2.0],
             "SE_g_e": [0.1, 0.1],
             "var_g_e": [0.01, 0.01],
@@ -134,7 +142,7 @@ def test_stage1_builder_applies_certified_environment_alias(tmp_path: Path) -> N
     alias_path = tmp_path / "aliases.tsv"
     pd.DataFrame(
         {
-            "source_env_id": ["short"],
+            "source_env_id": [registry_source],
             "target_env_id": ["expanded"],
             "mapping_status": ["ACCEPTED_ALIAS"],
         }
@@ -174,17 +182,23 @@ def test_stage1_builder_applies_certified_environment_alias(tmp_path: Path) -> N
     metrics = dict(zip(summary["metric"], summary["value"], strict=True))
 
     assert observations["env_kernel_id"].tolist() == ["expanded", "existing"]
-    assert observations["env_kernel_id_original"].tolist() == ["short", "existing"]
+    assert observations["env_kernel_id_original"].tolist() == [raw_source, "existing"]
+    assert observations["environment_alias_registry_source_id"].fillna("").tolist() == [
+        registry_source,
+        "",
+    ]
     assert observations["env_kernel_index"].tolist() == [1, 0]
     assert int(metrics["environment_alias_applied_rows"]) == 1
 
 
 def test_alias_model_validator_accepts_exact_partition(tmp_path: Path) -> None:
+    raw_source = "SHORT|40|22207|INDIA|NEW DELHI -  PUSA FARMS - IARI|2015"
+    registry_source = "SHORT|40|22207|INDIA|NEW DELHI - PUSA FARMS - IARI|2015"
     readiness = tmp_path / "readiness.tsv"
     pd.DataFrame(
         {
             "canonical_observation_id": ["retained", "recovered", "weight_bad"],
-            "env_kernel_id": ["existing", "short", "short"],
+            "env_kernel_id": ["existing", registry_source, registry_source],
             "recovery_readiness": [
                 "RETAINED_REFERENCE",
                 "P1_RECOVER_ENVIRONMENT",
@@ -198,8 +212,9 @@ def test_alias_model_validator_accepts_exact_partition(tmp_path: Path) -> None:
             "canonical_observation_id": ["retained", "recovered"],
             "canonical_germplasm_key": ["g1", "g1"],
             "env_kernel_id": ["existing", "expanded"],
-            "env_kernel_id_original": ["existing", "short"],
+            "env_kernel_id_original": ["existing", raw_source],
             "environment_alias_applied": [False, True],
+            "environment_alias_registry_source_id": ["", registry_source],
             "environment_alias_mapping_status": [
                 "NOT_APPLICABLE",
                 "ACCEPTED_ALIAS",
@@ -211,7 +226,7 @@ def test_alias_model_validator_accepts_exact_partition(tmp_path: Path) -> None:
     aliases = tmp_path / "aliases.tsv"
     pd.DataFrame(
         {
-            "source_env_id": ["short"],
+            "source_env_id": [registry_source],
             "target_env_id": ["expanded"],
             "mapping_status": ["ACCEPTED_ALIAS"],
         }

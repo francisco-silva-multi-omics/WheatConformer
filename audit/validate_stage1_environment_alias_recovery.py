@@ -17,6 +17,7 @@ MODEL_COLUMNS = (
     "env_kernel_id",
     "env_kernel_id_original",
     "environment_alias_applied",
+    "environment_alias_registry_source_id",
     "environment_alias_mapping_status",
     "geno_kernel_index",
     "env_kernel_index",
@@ -32,6 +33,10 @@ def read_columns(path: Path, columns: tuple[str, ...]) -> pd.DataFrame:
 
 def normalized_ids(values: pd.Series) -> pd.Series:
     return values.fillna("").astype(str).str.strip()
+
+
+def normalized_environment_ids(values: pd.Series) -> pd.Series:
+    return normalized_ids(values).str.replace(r"\s+", " ", regex=True)
 
 
 def boolean_values(values: pd.Series) -> pd.Series:
@@ -128,13 +133,14 @@ def main() -> None:
         "canonical_germplasm_key",
         "env_kernel_id",
         "env_kernel_id_original",
+        "environment_alias_registry_source_id",
         "environment_alias_mapping_status",
     ):
         model[column] = normalized_ids(model[column])
     model["environment_alias_applied"] = boolean_values(
         model["environment_alias_applied"]
     )
-    aliases["source_env_id"] = normalized_ids(aliases["source_env_id"])
+    aliases["source_env_id"] = normalized_environment_ids(aliases["source_env_id"])
     aliases["target_env_id"] = normalized_ids(aliases["target_env_id"])
     if aliases["source_env_id"].duplicated().any():
         raise ValueError("Alias registry contains duplicate source environment IDs")
@@ -170,7 +176,9 @@ def main() -> None:
     alias_mapping = dict(
         zip(aliases["source_env_id"], aliases["target_env_id"], strict=True)
     )
-    expected_alias_targets = alias_rows["env_kernel_id_original"].map(alias_mapping)
+    expected_alias_targets = alias_rows["environment_alias_registry_source_id"].map(
+        alias_mapping
+    )
 
     genotype_ids = normalized_ids(genotype_order[args.genotype_order_column])
     environment_ids = normalized_ids(
@@ -205,8 +213,21 @@ def main() -> None:
         "nonrecoverable_observations_excluded": not bool(model_ids & excluded_ids),
         "alias_applied_exactly_to_P1_environment_observations": alias_model_ids
         == recoverable_ids,
-        "alias_sources_are_certified": set(alias_rows["env_kernel_id_original"])
+        "alias_sources_are_certified": set(
+            alias_rows["environment_alias_registry_source_id"]
+        )
         == set(aliases["source_env_id"]),
+        "alias_registry_source_matches_normalized_original": bool(
+            alias_rows["environment_alias_registry_source_id"]
+            .eq(normalized_environment_ids(alias_rows["env_kernel_id_original"]))
+            .all()
+            and model.loc[
+                ~model["environment_alias_applied"],
+                "environment_alias_registry_source_id",
+            ]
+            .eq("")
+            .all()
+        ),
         "alias_targets_match_registry": bool(
             expected_alias_targets.notna().all()
             and expected_alias_targets.eq(alias_rows["env_kernel_id"]).all()

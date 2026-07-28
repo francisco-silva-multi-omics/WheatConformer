@@ -22,6 +22,10 @@ def norm_text(x: str) -> str:
     return re.sub(r"\s+", " ", str(x).strip().upper())
 
 
+def normalize_environment_ids(values: pd.Series) -> pd.Series:
+    return clean_str(values).str.replace(r"\s+", " ", regex=True)
+
+
 def read_table(path: Path, **kwargs) -> pd.DataFrame:
     suffixes = "".join(path.suffixes).lower()
     if suffixes.endswith(".parquet"):
@@ -89,7 +93,7 @@ def load_environment_alias_map(path: Path) -> pd.DataFrame:
     if missing:
         raise SystemExit(f"Environment alias registry is missing columns: {missing}")
     aliases = aliases[aliases["mapping_status"].eq("ACCEPTED_ALIAS")].copy()
-    aliases["source_env_id"] = clean_str(aliases["source_env_id"])
+    aliases["source_env_id"] = normalize_environment_ids(aliases["source_env_id"])
     aliases["target_env_id"] = clean_str(aliases["target_env_id"])
     if aliases.empty:
         raise SystemExit(f"Environment alias registry has no accepted aliases: {path}")
@@ -115,8 +119,12 @@ def apply_environment_aliases(
         )
     local[original_col] = clean_str(local[env_col])
     mapping = dict(zip(aliases["source_env_id"], aliases["target_env_id"], strict=True))
-    mapped = local[original_col].map(mapping)
+    normalized_source = normalize_environment_ids(local[original_col])
+    mapped = normalized_source.map(mapping)
     local["environment_alias_applied"] = mapped.notna()
+    local["environment_alias_registry_source_id"] = np.where(
+        mapped.notna(), normalized_source, ""
+    )
     local["environment_alias_mapping_status"] = np.where(
         mapped.notna(), "ACCEPTED_ALIAS", "NOT_APPLICABLE"
     )
@@ -125,7 +133,10 @@ def apply_environment_aliases(
         "environment_alias_registry_rows": len(aliases),
         "environment_alias_applied_rows": int(local["environment_alias_applied"].sum()),
         "environment_alias_applied_source_ids": int(
-            local.loc[local["environment_alias_applied"], original_col].nunique()
+            local.loc[
+                local["environment_alias_applied"],
+                "environment_alias_registry_source_id",
+            ].nunique()
         ),
     }
     return local, stats
@@ -253,7 +264,9 @@ def main() -> None:
                 f"examples: {missing_alias_targets[:5]}"
             )
         existing_alias_sources = sorted(
-            set(environment_aliases["source_env_id"]).intersection(env_index)
+            set(environment_aliases["source_env_id"]).intersection(
+                normalize_environment_ids(pd.Series(env_index.keys()))
+            )
         )
         if existing_alias_sources:
             raise SystemExit(
@@ -285,7 +298,8 @@ def main() -> None:
         )
         alias_stats["environment_alias_applied_source_ids"] = int(
             pheno.loc[
-                pheno["environment_alias_applied"], f"{args.env_col}_original"
+                pheno["environment_alias_applied"],
+                "environment_alias_registry_source_id",
             ].nunique()
         )
 
@@ -307,6 +321,7 @@ def main() -> None:
         "env_kernel_id",
         "env_kernel_id_original",
         "environment_alias_applied",
+        "environment_alias_registry_source_id",
         "environment_alias_mapping_status",
         "trial_name",
         "cycle",
