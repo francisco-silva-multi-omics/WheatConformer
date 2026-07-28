@@ -1,0 +1,88 @@
+{
+  "protocol_version": "reaction_norm_loss_balance_v1",
+  "status": "frozen_before_inner_validation",
+  "selection_data": "inner_validation_only",
+  "phenotype_values_read_at_freeze": false,
+  "outer_test_metrics_read": false,
+  "final_holdout_outcomes_read": false,
+  "selected_reaction_candidate": "reaction_norm_identity_covariance",
+  "selected_environment_architecture": "explicit_E_REACTION_NORM_V1",
+  "count_fit_partition": "inner_training_only",
+  "precision_weight_power": 0.0,
+  "trait_total_loss_mass": "equal",
+  "candidates": [
+    {
+      "name": "current_trait_row_balanced",
+      "environment_count_exponent": 0.0,
+      "genotype_count_exponent": 0.0,
+      "minimum_relative_weight": null,
+      "maximum_relative_weight": null
+    },
+    {
+      "name": "trait_environment_balanced",
+      "environment_count_exponent": 1.0,
+      "genotype_count_exponent": 0.0,
+      "minimum_relative_weight": 0.1,
+      "maximum_relative_weight": 10.0
+    },
+    {
+      "name": "damped_environment_genotype_balanced",
+      "environment_count_exponent": 0.5,
+      "genotype_count_exponent": 0.5,
+      "minimum_relative_weight": 0.1,
+      "maximum_relative_weight": 10.0
+    }
+  ],
+  "phase_1": {
+    "name": "representative_outer_training_folds",
+    "outer_folds_by_scenario": {
+      "unseen_environments": [0],
+      "unseen_genotypes": [0],
+      "unseen_genotypes_and_environments": [0],
+      "temporal_holdout": [0],
+      "country_holdout": [0]
+    },
+    "inner_folds": 3
+  },
+  "confirmation": {
+    "name": "complete_inner_validation_grid",
+    "outer_folds_by_scenario": {
+      "unseen_environments": [0, 1, 2, 3, 4],
+      "unseen_genotypes": [0, 1, 2, 3, 4],
+      "unseen_genotypes_and_environments": [0, 1, 2, 3, 4],
+      "temporal_holdout": [0, 1, 2],
+      "country_holdout": [0, 1, 2, 3, 4]
+    },
+    "inner_folds": 3,
+    "candidates": "current_reference_plus_phase_1_winner_only"
+  },
+  "acceptance": {
+    "minimum_relative_normalized_rmse_gain": 0.01,
+    "minimum_paired_inner_fold_win_rate": 0.6666666666666666,
+    "maximum_mean_pearson_drop": 0.005,
+    "maximum_mean_calibration_error_increase": 0.0,
+    "require_positive_unseen_genotype_gain": true,
+    "maximum_primary_trait_relative_nrmse_loss": 0.01,
+    "primary_guard_traits": [
+      "DAYS_TO_HEADING",
+      "DAYS_TO_MATURITY",
+      "PLANT_HEIGHT",
+      "GRAIN_YIELD",
+      "1000_GRAIN_WEIGHT"
+    ],
+    "exploratory_traits": [
+      "ABOVE_GROUND_BIOMASS",
+      "TEST_WEIGHT"
+    ]
+  },
+  "model_contract": {
+    "kernels_unchanged": true,
+    "reaction_architecture_unchanged": true,
+    "environment_architecture_unchanged": true,
+    "hyperparameters_unchanged": true,
+    "loss_counts_fit_from_inner_training_only": true,
+    "recovery_status_used_for_weighting": false,
+    "outer_test_available_during_selection": false,
+    "final_holdout_available": false
+  }
+}

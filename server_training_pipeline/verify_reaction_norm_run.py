@@ -18,6 +18,8 @@ def main() -> None:
     parser.add_argument("--environment-architecture-protocol", type=Path)
     parser.add_argument("--environment-architecture")
     parser.add_argument("--environment-design-certification", type=Path)
+    parser.add_argument("--loss-balance-protocol", type=Path)
+    parser.add_argument("--loss-balance-candidate")
     parser.add_argument(
         "--stage",
         choices=["inner_selection", "outer_evaluation"],
@@ -167,6 +169,53 @@ def main() -> None:
                     and file_sha256(path) == artifact.get("sha256")
                     and design_metadata.get(metadata_key) == artifact.get("sha256")
                 )
+    if (args.loss_balance_protocol is None) != (args.loss_balance_candidate is None):
+        raise SystemExit(
+            "Loss-balance verification requires both its protocol and candidate"
+        )
+    if args.loss_balance_protocol is not None:
+        loss_protocol = json.loads(
+            args.loss_balance_protocol.read_text(encoding="utf-8")
+        )
+        loss_candidates = {
+            str(value["name"]): value
+            for value in loss_protocol.get("candidates", [])
+        }
+        if args.loss_balance_candidate not in loss_candidates:
+            raise SystemExit("Loss-balance candidate is absent from its protocol")
+        loss_metadata = metadata.get("loss_balance", {})
+        diagnostics_path = args.run_dir / f"{args.prefix}_loss_weight_diagnostics.tsv"
+        checks.update(
+            {
+                "loss_balance_protocol_status": loss_protocol.get("status")
+                == "frozen_before_inner_validation",
+                "loss_balance_candidate": loss_metadata.get("candidate")
+                == args.loss_balance_candidate,
+                "loss_balance_policy": loss_metadata.get("policy")
+                == loss_candidates[args.loss_balance_candidate],
+                "loss_balance_protocol": loss_metadata.get("protocol_sha256")
+                == file_sha256(args.loss_balance_protocol),
+                "loss_balance_fit_partition": loss_metadata.get(
+                    "count_fit_partition"
+                )
+                == "inner_training_only",
+                "loss_balance_recovery_status_unused": loss_metadata.get(
+                    "recovery_status_used_for_weighting"
+                )
+                is False,
+                "loss_balance_outer_unread": loss_metadata.get(
+                    "outer_test_metrics_read"
+                )
+                is False,
+                "loss_balance_final_holdout_unread": loss_metadata.get(
+                    "final_holdout_outcomes_read"
+                )
+                is False,
+                "loss_balance_diagnostics": diagnostics_path.is_file()
+                and loss_metadata.get("diagnostics_sha256")
+                == file_sha256(diagnostics_path),
+            }
+        )
     protected_rows = int(
         preprocessing.get("protected_outcome_rows_cleared_before_preprocessing", 0)
     )
