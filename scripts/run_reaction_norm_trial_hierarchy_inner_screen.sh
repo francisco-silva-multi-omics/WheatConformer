@@ -279,7 +279,7 @@ PY
         --epochs "$EPOCHS" --patience "$PATIENCE" \
         --intra-op-threads "$INTRA_THREADS" --inter-op-threads "$INTER_THREADS" \
         "${trait_args[@]}" --seed "$seed" \
-        --hyperparameter-label "$candidate" \
+        --hyperparameter-label explicit_E_REACTION_NORM_V1 \
         --model-label "multitrait_reaction_norm_${candidate}" \
         --out-dir "$run_dir" --prefix "$run_name"
       run_is_current \

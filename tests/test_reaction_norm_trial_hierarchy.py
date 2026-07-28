@@ -173,6 +173,8 @@ def test_launcher_is_inner_only_and_uses_exact_kernel_opt_ins() -> None:
     assert "--include-disabled-kernel K_A_CANONICAL_V3" in source
     assert "--include-disabled-kernel K_E_TGW_V2" in source
     assert "--include-disabled-kernel K_E_REACTION_NORM_V1" in source
+    assert "--hyperparameter-label explicit_E_REACTION_NORM_V1" in source
+    assert '--hyperparameter-label "$candidate"' not in source
     assert "outer_evaluation" not in source
     assert "final-holdout" in source
 
