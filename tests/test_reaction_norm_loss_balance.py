@@ -56,6 +56,17 @@ def test_frozen_loss_screen_uses_the_frozen_reaction_selection_scenario() -> Non
     assert scenarios == {loss["selection_scenario"]} == {reaction["scenario"]}
 
 
+def test_loss_screen_launcher_activates_and_preflights_explicit_environment() -> None:
+    root = Path(__file__).resolve().parents[1]
+    source = (
+        root / "scripts" / "run_reaction_norm_loss_balance_inner_screen.sh"
+    ).read_text(encoding="utf-8")
+    assert "--include-disabled-kernel K_A_CANONICAL_V3" in source
+    assert "--include-disabled-kernel K_E_TGW_V2" in source
+    assert "--include-disabled-kernel K_E_REACTION_NORM_V1" in source
+    assert "PASS balanced-loss fold preflight" in source
+
+
 def training_frame() -> pd.DataFrame:
     return pd.DataFrame(
         {

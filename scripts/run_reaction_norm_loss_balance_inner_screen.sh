@@ -188,6 +188,87 @@ for fold_line in "${FOLD_GRID[@]}"; do
   do
     [[ -s "$required" ]] || { echo "Missing certified v4 fold artifact: $required" >&2; exit 2; }
   done
+  "$PYTHON" - "$REGISTRY" "$CERTIFICATION" "$ENVIRONMENT_PROTOCOL" \
+    "$ENV_DIR/E_REACTION_NORM_V1_certification.json" <<'PY'
+import hashlib
+import json
+import sys
+from pathlib import Path
+
+import pandas as pd
+
+
+def sha256(path):
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def enabled(value):
+    return str(value).strip().lower() in {"1", "true", "yes", "y"}
+
+
+registry_path, certification_path, protocol_path, design_path = map(
+    Path, sys.argv[1:]
+)
+registry = pd.read_csv(registry_path, sep="\t", dtype=str).fillna("")
+certification = json.loads(certification_path.read_text(encoding="utf-8"))
+protocol = json.loads(protocol_path.read_text(encoding="utf-8"))
+design = json.loads(design_path.read_text(encoding="utf-8"))
+candidate = next(
+    value
+    for value in protocol["candidates"]
+    if value["name"] == "explicit_E_REACTION_NORM_V1"
+)
+expected = set(candidate["required_kernels"])
+included = {"K_A_CANONICAL_V3", "K_E_TGW_V2", "K_E_REACTION_NORM_V1"}
+active = set(
+    registry.loc[
+        registry["enabled_default"].map(enabled) | registry["kernel"].isin(included),
+        "kernel",
+    ]
+)
+checks = {
+    "kernel_certification_pass": certification.get("status") == "PASS",
+    "design_certification_pass": design.get("status") == "PASS",
+    "active_kernel_contract": active == expected,
+    "registry_identity": certification.get("registry_identity", {}).get("sha256")
+    == sha256(registry_path),
+}
+for kernel in sorted(expected):
+    rows = registry[registry["kernel"].eq(kernel)]
+    checks[f"registry_row_{kernel}"] = len(rows) == 1
+    if len(rows) != 1:
+        continue
+    row = rows.iloc[0]
+    for label, column, identities in (
+        ("kernel", "kernel_path", certification.get("kernel_identities", {})),
+        ("order", "order_path", certification.get("order_identities", {})),
+    ):
+        path = Path(row[column])
+        checks[f"{label}_identity_{kernel}"] = (
+            path.is_file()
+            and identities.get(kernel, {}).get("sha256") == sha256(path)
+        )
+for label, identity in design.get("artifact_identities", {}).items():
+    path = Path(str(identity.get("path", "")))
+    checks[f"design_artifact_{label}"] = (
+        path.is_file() and identity.get("sha256") == sha256(path)
+    )
+failed = sorted(name for name, passed in checks.items() if not passed)
+if failed:
+    raise SystemExit(
+        "Balanced-loss fold preflight failed: "
+        + ", ".join(failed)
+        + f"; active={sorted(active)} expected={sorted(expected)}"
+    )
+print(
+    "PASS balanced-loss fold preflight: "
+    f"kernels={len(active)} certified_artifacts={len(design.get('artifact_identities', {}))}"
+)
+PY
   offset="$(scenario_offset "$scenario")"
   for inner_fold in 0 1 2; do
     seed=$((81001 + offset + outer_fold * 100 + inner_fold * 10))
@@ -226,6 +307,7 @@ for fold_line in "${FOLD_GRID[@]}"; do
         --weight-max-top-1pct-share 0.02 \
         --include-disabled-kernel K_A_CANONICAL_V3 \
         --include-disabled-kernel K_E_TGW_V2 \
+        --include-disabled-kernel K_E_REACTION_NORM_V1 \
         --max-rank-genotype "$RANK_G" --max-rank-environment "$RANK_E" \
         --reaction-rank "$REACTION_RANK" \
         --trait-covariance-shrinkage "$SHRINKAGE" \
