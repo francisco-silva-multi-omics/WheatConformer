@@ -31,10 +31,6 @@ def file_sha256(path: Path, chunk_size: int = 1024 * 1024) -> str:
     return digest.hexdigest()
 
 
-def parse_bool(value: object) -> bool:
-    return str(value).strip().lower() in {"1", "true", "yes", "y"}
-
-
 def apply_frozen_scaling(
     raw_features: pd.DataFrame,
     scaling: pd.DataFrame,
@@ -45,35 +41,53 @@ def apply_frozen_scaling(
     if scaling["feature"].astype(str).duplicated().any():
         raise ValueError("Frozen scaling contains duplicate feature names")
 
-    parts: list[pd.Series] = []
-    for row in scaling.itertuples(index=False):
-        if str(row.status) != "retained":
-            continue
-        feature = str(row.feature)
+    required_scaling_columns = {"feature", "mean", "std"}
+    missing_scaling_columns = sorted(required_scaling_columns - set(scaling.columns))
+    if missing_scaling_columns:
+        raise ValueError(
+            f"Frozen scaling lacks required columns: {missing_scaling_columns}"
+        )
+    base_features = [
+        column for column in expected_columns if not column.endswith("__missing")
+    ]
+    if not base_features:
+        raise ValueError("Certified standardized matrix contains no base features")
+
+    scaling_by_feature = scaling.assign(
+        feature=scaling["feature"].fillna("").astype(str)
+    ).set_index("feature")
+    parts: dict[str, pd.Series] = {}
+    for feature in base_features:
+        if feature not in scaling_by_feature.index:
+            raise ValueError(f"Frozen scaling is absent for certified feature: {feature}")
         if feature not in raw_features.columns:
             raise ValueError(f"Frozen feature is absent from reconstructed inputs: {feature}")
-        mean = float(row.mean)
-        std = float(row.std)
+        row = scaling_by_feature.loc[feature]
+        mean = float(row["mean"])
+        std = float(row["std"])
         if not np.isfinite(mean) or not np.isfinite(std) or std <= 0:
             raise ValueError(f"Invalid frozen scaling for {feature}: mean={mean}; std={std}")
         values = pd.to_numeric(raw_features[feature], errors="coerce").replace(
             [np.inf, -np.inf], np.nan
         )
         missing = values.isna()
-        parts.append(((values.fillna(mean) - mean) / std).rename(feature))
-        if parse_bool(row.missing_indicator_added):
-            parts.append(missing.astype(np.float32).rename(f"{feature}__missing"))
+        parts[feature] = ((values.fillna(mean) - mean) / std).rename(feature)
+        missing_column = f"{feature}__missing"
+        if missing_column in expected_columns:
+            parts[missing_column] = missing.astype(np.float32).rename(missing_column)
 
     if not parts:
         raise ValueError("Frozen scaling retained no environment features")
-    standardized = pd.concat(parts, axis=1).astype(np.float32)
-    if standardized.columns.tolist() != expected_columns:
-        missing = sorted(set(expected_columns) - set(standardized.columns))
-        extra = sorted(set(standardized.columns) - set(expected_columns))
+    missing = sorted(set(expected_columns) - set(parts))
+    extra = sorted(set(parts) - set(expected_columns))
+    if missing or extra:
         raise ValueError(
             "Reconstructed frozen feature columns disagree with the certified matrix: "
             f"missing={missing[:10]}; extra={extra[:10]}"
         )
+    standardized = pd.concat(
+        [parts[column] for column in expected_columns], axis=1
+    ).astype(np.float32)
     if not np.isfinite(standardized.to_numpy(dtype=np.float64)).all():
         raise ValueError("Frozen feature projection produced nonfinite values")
     return standardized

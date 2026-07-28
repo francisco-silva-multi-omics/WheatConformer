@@ -179,15 +179,15 @@ def test_prepare_recovery_nested_protocol_preserves_architecture_and_assignments
     ] is True
 
 
-def test_recovery_launchers_use_isolated_v2_paths_and_frozen_tgw_extension() -> None:
+def test_recovery_launchers_use_isolated_v3_paths_and_frozen_tgw_extension() -> None:
     root = Path(__file__).resolve().parents[1]
     prepare = (root / "scripts/prepare_stage1_recovery_nested_cv.sh").read_text()
     run = (root / "scripts/run_stage1_recovery_nested_cv.sh").read_text()
     fold = (root / "scripts/run_multitrait_reaction_norm_outer_fold.sh").read_text()
 
-    assert "stage1_recovery_nested_v2" in prepare
-    assert "stage1_recovery_nested_v2" in run
-    assert "stage1_recovery_reaction_norm_outer_v2" in run
+    assert "stage1_recovery_nested_v3" in prepare
+    assert "stage1_recovery_nested_v3" in run
+    assert "stage1_recovery_reaction_norm_outer_v3" in run
     assert "extend_trait_environment_kernel.py" in prepare
     assert "trait_environment_recovery_contract" in fold
     assert "original_block_max_abs_delta" in fold

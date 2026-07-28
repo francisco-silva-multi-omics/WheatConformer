@@ -260,7 +260,7 @@ def main() -> None:
     }
     evaluation.update(
         {
-            "protocol_version": "multitrait_stage1_recovery_nested_v2",
+            "protocol_version": "multitrait_stage1_recovery_nested_v3",
             "status": "frozen",
             "freeze_kind": "phenotype_blind_stage1_recovery_before_recovery_outer_test",
             "selection_data": "identifiers_uncertainty_metadata_and_kernel_orders_only",
@@ -316,7 +316,7 @@ def main() -> None:
     outer = dict(base_outer)
     outer.update(
         {
-            "protocol_version": "multitrait_reaction_norm_stage1_recovery_nested_v2",
+            "protocol_version": "multitrait_reaction_norm_stage1_recovery_nested_v3",
             "selection_data": "frozen_architecture_plus_phenotype_blind_stage1_recovery",
             "outer_test_metrics_read_at_freeze": False,
             "final_holdout_outcomes_read": False,
@@ -441,7 +441,7 @@ def main() -> None:
     status = "PASS" if all(checks.values()) else "FAIL"
     freeze = {
         "status": status,
-        "protocol_version": "stage1_recovery_nested_freeze_v2",
+        "protocol_version": "stage1_recovery_nested_freeze_v3",
         "selection_data": "phenotype_blind_recovery_plus_previously_frozen_architecture",
         "phenotype_values_read_for_recovery": False,
         "outer_test_metrics_read": False,

@@ -68,6 +68,27 @@ def test_frozen_scaling_and_extension_preserve_original_kernel_block() -> None:
     assert extended_features.loc["e3", "temperature__missing"] == 1.0
 
 
+def test_legacy_scaling_schema_uses_certified_feature_columns() -> None:
+    raw = pd.DataFrame(
+        {"temperature": [10.0, np.nan]}, index=["observed", "missing"]
+    )
+    legacy_scaling = pd.DataFrame(
+        {"feature": ["temperature"], "mean": [10.0], "std": [2.0]}
+    )
+
+    projected = apply_frozen_scaling(
+        raw,
+        legacy_scaling,
+        ["temperature", "temperature__missing"],
+    )
+
+    assert projected.columns.tolist() == ["temperature", "temperature__missing"]
+    assert projected.loc["observed", "temperature"] == 0.0
+    assert projected.loc["missing", "temperature"] == 0.0
+    assert projected.loc["observed", "temperature__missing"] == 0.0
+    assert projected.loc["missing", "temperature__missing"] == 1.0
+
+
 def test_extension_rejects_loss_of_a_frozen_environment() -> None:
     source_order = pd.DataFrame({"env_id": ["e1", "e2"]})
     target_order = pd.DataFrame({"env_id": ["e1", "e3"]})
