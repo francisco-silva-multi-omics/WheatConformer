@@ -21,6 +21,7 @@ def row(
     has_environment: bool = True,
     original: str = "DTH",
     trait: str = "DAYS_TO_HEADING",
+    source_level: str = "raw_plot_linked_summary",
 ) -> dict[str, object]:
     return {
         "canonical_observation_id": observation_id,
@@ -38,10 +39,21 @@ def row(
         "trait_name_original": original,
         "unit": "DAYS",
         "phenotype_value": value,
+        "phenotype_source": "MeanVal",
+        "value_sd": 0.0,
+        "value_min": value,
+        "value_max": value,
         "raw_numeric_records": 2,
         "raw_plot_records": 2,
         "n_records": 2,
-        "source_level": "raw_plot_linked_summary",
+        "n_source_files": 1,
+        "duplicate_resolution": "mean_of_duplicate_numeric_records",
+        "plot_support_status": (
+            "no_raw_plot_match"
+            if source_level == "summary_level"
+            else "multiple_plot_records"
+        ),
+        "source_level": source_level,
         "gid_resolution_status": "resolved" if gid else "unresolved",
         "genotype_name": gid,
         "has_environment_kernel": has_environment,
@@ -61,6 +73,7 @@ def stage_row(observation_id: str, gid: str, env: str, original: str) -> dict[st
         "cycle": "2020",
         "country": "MEXICO",
         "y_tilde_g_e": 1.0,
+        "weight_g_e": 1.0,
         "stage1_model_status": "linear_model_adjusted",
         "n_plot_records": 2,
     }
@@ -99,6 +112,13 @@ def test_information_attrition_cli_classifies_recovery_opportunities(
                 "E1",
                 original="GY",
                 trait="GRAIN_YIELD",
+            ),
+            row(
+                "C9",
+                "GID1",
+                "E1",
+                original="DTH_SUMMARY_ONLY",
+                source_level="summary_level",
             ),
         ]
     )
@@ -193,11 +213,38 @@ def test_information_attrition_cli_classifies_recovery_opportunities(
         "unresolved_genotype_identity",
         "environment_kernel_unavailable",
         "absent_from_canonical_pedigree",
-        "not_reconstructed_by_stage1_raw_pipeline",
+        "raw_linked_not_reconstructed_by_stage1",
+        "summary_level_not_stage1_eligible",
         "outside_stage1_genotype_environment_intersection",
     }
     assert expected == set(loss.index)
     assert loss["canonical_rows"].eq(1).all()
+
+    summary = pd.read_csv(
+        out_dir / "summary_branch_candidate_summary.tsv", sep="\t"
+    )
+    assert summary["candidate_rows"].sum() == 1
+    assert summary.iloc[0]["development_status"] == (
+        "candidate_for_inner_only_source_branch"
+    )
+    candidate_manifest = pd.read_parquet(
+        out_dir / "summary_branch_candidate_manifest.parquet"
+    )
+    assert candidate_manifest["canonical_observation_id"].tolist() == ["C9"]
+    assert "phenotype_value" not in candidate_manifest
+
+    environment_priority = pd.read_csv(
+        out_dir / "missing_environment_recovery_priority.tsv", sep="\t"
+    )
+    assert environment_priority.iloc[0]["recovery_priority"] == (
+        "P1_RECOVER_RAW_STAGE1_SIGNAL"
+    )
+
+    stage1_loss = pd.read_csv(
+        out_dir / "stage1_to_model_attrition_summary.tsv", sep="\t"
+    ).set_index("stage1_to_model_status")
+    assert stage1_loss.loc["retained_in_stage1_model_observations", "stage1_rows"] == 1
+    assert stage1_loss.loc["genotype_not_in_stage1_model_order", "stage1_rows"] == 1
 
     provenance = json.loads(
         (out_dir / "information_attrition_provenance.json").read_text(

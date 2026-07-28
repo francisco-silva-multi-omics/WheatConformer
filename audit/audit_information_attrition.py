@@ -34,6 +34,7 @@ CANONICAL_COLUMNS = (
     "canonical_germplasm_key",
     "germplasm_id",
     "resolved_gid",
+    "env_id_pheno",
     "env_kernel_id",
     "trial_name",
     "cycle",
@@ -45,9 +46,16 @@ CANONICAL_COLUMNS = (
     "trait_name_original",
     "unit",
     "phenotype_value",
+    "phenotype_source",
+    "value_sd",
+    "value_min",
+    "value_max",
     "raw_numeric_records",
     "raw_plot_records",
     "n_records",
+    "n_source_files",
+    "duplicate_resolution",
+    "plot_support_status",
     "source_level",
     "gid_resolution_status",
     "genotype_name",
@@ -62,6 +70,7 @@ STAGE1_COLUMNS = (
     "cycle",
     "country",
     "y_tilde_g_e",
+    "weight_g_e",
     "stage1_model_status",
     "n_plot_records",
 )
@@ -241,12 +250,20 @@ def summarize_stage(
 
 def classify_selected_canonical(frame: pd.DataFrame) -> pd.Series:
     reason = pd.Series("retained_in_final_ledger_key", index=frame.index, dtype=object)
+    stage1_missing = ~frame["stage1_key_available"]
+    summary_level = normalized_text(frame["source_level"]).eq("summary_level")
+    raw_numeric = pd.to_numeric(frame["raw_numeric_records"], errors="coerce").fillna(0)
     rules = [
         ("nonfinite_target", ~frame["finite_target"]),
         ("unresolved_genotype_identity", ~frame["gid_resolved"]),
         ("environment_kernel_unavailable", ~frame["environment_available"]),
         ("absent_from_canonical_pedigree", ~frame["canonical_pedigree_available"]),
-        ("not_reconstructed_by_stage1_raw_pipeline", ~frame["stage1_key_available"]),
+        ("summary_level_not_stage1_eligible", stage1_missing & summary_level),
+        (
+            "raw_linked_without_numeric_stage1_input",
+            stage1_missing & ~summary_level & raw_numeric.le(0),
+        ),
+        ("raw_linked_not_reconstructed_by_stage1", stage1_missing),
         ("outside_stage1_genotype_environment_intersection", ~frame["model_key_available"]),
         ("absent_from_final_multitrait_ledger", ~frame["ledger_key_available"]),
     ]
@@ -271,6 +288,175 @@ def grouped_loss(frame: pd.DataFrame, group: str) -> pd.DataFrame:
     )
     output[group] = output[group].fillna("")
     return output
+
+
+def summary_branch_candidates(frame: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+    source_level = normalized_text(frame["source_level"])
+    candidate_mask = (
+        ~frame["stage1_key_available"]
+        & source_level.eq("summary_level")
+        & frame["finite_target"]
+        & frame["gid_resolved"]
+        & frame["environment_available"]
+        & frame["canonical_pedigree_available"]
+    )
+    candidates = frame.loc[candidate_mask].copy()
+    n_records = pd.to_numeric(candidates["n_records"], errors="coerce").fillna(0)
+    n_source_files = pd.to_numeric(
+        candidates["n_source_files"], errors="coerce"
+    ).fillna(0)
+    candidates["source_record_count"] = n_records
+    candidates["source_file_count"] = n_source_files
+    candidates["summary_branch_status"] = np.where(
+        n_source_files.gt(0),
+        "candidate_requires_fold_local_source_calibration",
+        "requires_exact_source_file_lineage_recovery",
+    )
+
+    rows: list[dict[str, object]] = []
+    for (source, trait), group in candidates.groupby(
+        ["phenotype_source", "trait_name_canonical"],
+        dropna=False,
+        sort=True,
+    ):
+        group_records = pd.to_numeric(
+            group["source_record_count"], errors="coerce"
+        ).fillna(0)
+        group_files = pd.to_numeric(
+            group["source_file_count"], errors="coerce"
+        ).fillna(0)
+        rows.append(
+            {
+                "phenotype_source": source,
+                "trait_name_canonical": trait,
+                "candidate_rows": len(group),
+                "unique_natural_keys": group["analysis_key_hash"].nunique(),
+                "unique_genotypes": group["canonical_germplasm_key"].nunique(),
+                "unique_environments": group["env_kernel_id"].nunique(),
+                "unique_countries": normalized_text(group["country"])
+                .replace("", np.nan)
+                .nunique(),
+                "unique_cycles": normalized_text(group["cycle"])
+                .replace("", np.nan)
+                .nunique(),
+                "represented_source_records": int(group_records.sum()),
+                "single_record_summaries": int(group_records.eq(1).sum()),
+                "multi_record_summaries": int(group_records.gt(1).sum()),
+                "single_source_file_summaries": int(group_files.eq(1).sum()),
+                "multi_source_file_summaries": int(group_files.gt(1).sum()),
+                "missing_source_file_lineage_summaries": int(group_files.le(0).sum()),
+                "development_status": (
+                    "requires_exact_source_file_lineage_recovery"
+                    if group_files.le(0).any()
+                    else "candidate_for_inner_only_source_branch"
+                ),
+            }
+        )
+    return candidates, pd.DataFrame(rows)
+
+
+def missing_environment_priority(frame: pd.DataFrame) -> pd.DataFrame:
+    missing = frame.loc[~frame["environment_available"]].copy()
+    if missing.empty:
+        return pd.DataFrame()
+    missing["raw_numeric_records"] = pd.to_numeric(
+        missing["raw_numeric_records"], errors="coerce"
+    ).fillna(0)
+    missing["raw_linked"] = normalized_text(missing["source_level"]).ne(
+        "summary_level"
+    )
+    group_columns = [
+        "env_kernel_id",
+        "trial_name",
+        "cycle",
+        "occ",
+        "loc_no",
+        "country",
+        "loc_desc",
+    ]
+    output = (
+        missing.groupby(group_columns, dropna=False, sort=True)
+        .agg(
+            canonical_rows=("canonical_observation_id", "size"),
+            unique_genotypes=("canonical_germplasm_key", "nunique"),
+            unique_traits=("trait_name_canonical", "nunique"),
+            raw_linked_canonical_rows=("raw_linked", "sum"),
+            represented_raw_numeric_records=("raw_numeric_records", "sum"),
+        )
+        .reset_index()
+    )
+    output["recovery_priority"] = np.select(
+        [
+            output["represented_raw_numeric_records"].gt(0),
+            output["canonical_rows"].gt(0),
+        ],
+        [
+            "P1_RECOVER_RAW_STAGE1_SIGNAL",
+            "P2_REVIEW_SUMMARY_SOURCE_ONLY",
+        ],
+        default="P3_NO_USABLE_SIGNAL",
+    )
+    return output.sort_values(
+        ["represented_raw_numeric_records", "canonical_rows"],
+        ascending=False,
+    ).reset_index(drop=True)
+
+
+def classify_stage1_to_model(
+    frame: pd.DataFrame,
+    genotype_order: set[str],
+    environment_order: set[str],
+) -> pd.Series:
+    reason = pd.Series(
+        "absent_from_model_despite_current_filter_contract",
+        index=frame.index,
+        dtype=object,
+    )
+    retained = frame["model_id_available"]
+    reason.loc[retained] = "retained_in_stage1_model_observations"
+    unassigned = ~retained
+    weight = pd.to_numeric(
+        frame.get("weight_g_e", pd.Series(np.nan, index=frame.index)),
+        errors="coerce",
+    ).to_numpy(dtype=float)
+    valid_weight = pd.Series(np.isfinite(weight) & (weight > 0), index=frame.index)
+    rules = [
+        ("nonfinite_stage1_target", ~frame["finite_target"]),
+        ("invalid_or_nonpositive_stage1_weight", ~valid_weight),
+        ("missing_stage1_genotype_id", frame["canonical_germplasm_key"].eq("")),
+        ("missing_stage1_environment_id", frame["env_kernel_id"].eq("")),
+        (
+            "genotype_not_in_stage1_model_order",
+            ~frame["canonical_germplasm_key"].isin(genotype_order),
+        ),
+        (
+            "environment_not_in_stage1_model_order",
+            ~frame["env_kernel_id"].isin(environment_order),
+        ),
+    ]
+    for label, mask in rules:
+        selected = unassigned & mask
+        reason.loc[selected] = label
+        unassigned &= ~selected
+    return reason
+
+
+def stage1_attrition_summary(frame: pd.DataFrame) -> pd.DataFrame:
+    plot_records = pd.to_numeric(frame["n_plot_records"], errors="coerce").fillna(0)
+    local = frame.assign(_plot_records=plot_records)
+    return (
+        local.groupby("stage1_to_model_status", sort=True)
+        .agg(
+            stage1_rows=("canonical_observation_id", "size"),
+            unique_genotypes=("canonical_germplasm_key", "nunique"),
+            unique_environments=("env_kernel_id", "nunique"),
+            unique_traits=("trait_name_canonical", "nunique"),
+            represented_raw_plot_records=("_plot_records", "sum"),
+        )
+        .reset_index()
+        .sort_values("stage1_rows", ascending=False)
+        .reset_index(drop=True)
+    )
 
 
 def trait_recovery_table(frame: pd.DataFrame, selected_traits: set[str]) -> pd.DataFrame:
@@ -405,7 +591,7 @@ def main() -> None:
         type=Path,
         default=Path("model_kernels/regulatory_eligibility_v1_reconciled/regulatory_genotype_eligibility_manifest.tsv.gz"),
     )
-    parser.add_argument("--out-dir", type=Path, default=Path("audit/information_attrition_v1"))
+    parser.add_argument("--out-dir", type=Path, default=Path("audit/information_attrition_v2"))
     parser.add_argument("--trait", action="append")
     args = parser.parse_args()
 
@@ -476,8 +662,82 @@ def main() -> None:
     stage1["model_id_available"] = normalized_text(stage1["canonical_observation_id"]).isin(model_ids)
     stage1["ledger_id_available"] = normalized_text(stage1["canonical_observation_id"]).isin(ledger_ids)
 
+    selected_stage1 = stage1[stage1["selected_trait"]].copy()
+    selected_stage1["stage1_to_model_status"] = classify_stage1_to_model(
+        selected_stage1,
+        stage1_genotypes,
+        stage1_environments,
+    )
+    stage1_attrition_summary(selected_stage1).to_csv(
+        out_dir / "stage1_to_model_attrition_summary.tsv", sep="\t", index=False
+    )
+    grouped_stage1 = (
+        selected_stage1.groupby(
+            ["trait_name_canonical", "stage1_to_model_status"],
+            sort=True,
+        )
+        .agg(
+            stage1_rows=("canonical_observation_id", "size"),
+            unique_genotypes=("canonical_germplasm_key", "nunique"),
+            unique_environments=("env_kernel_id", "nunique"),
+        )
+        .reset_index()
+    )
+    grouped_stage1.to_csv(
+        out_dir / "stage1_to_model_attrition_by_trait.tsv", sep="\t", index=False
+    )
+    selected_stage1[
+        [
+            "canonical_observation_id",
+            "canonical_germplasm_key",
+            "env_kernel_id",
+            "trial_name",
+            "cycle",
+            "country",
+            "trait_name_canonical",
+            "trait_name_original",
+            "unit",
+            "stage1_model_status",
+            "n_plot_records",
+            "stage1_to_model_status",
+        ]
+    ].to_parquet(out_dir / "stage1_to_model_attrition_ledger.parquet", index=False)
+
     selected = canonical[canonical["selected_trait"]].copy()
     selected["exclusive_loss_reason"] = classify_selected_canonical(selected)
+
+    summary_candidates, summary_candidate_summary = summary_branch_candidates(selected)
+    summary_manifest_columns = [
+        "canonical_observation_id",
+        "canonical_germplasm_key",
+        "resolved_gid",
+        "env_id_pheno",
+        "env_kernel_id",
+        "trial_name",
+        "cycle",
+        "occ",
+        "loc_no",
+        "country",
+        "loc_desc",
+        "trait_name_canonical",
+        "trait_name_original",
+        "unit",
+        "phenotype_source",
+        "analysis_key_hash",
+        "source_record_count",
+        "source_file_count",
+        "duplicate_resolution",
+        "summary_branch_status",
+    ]
+    summary_candidates[
+        [column for column in summary_manifest_columns if column in summary_candidates]
+    ].to_parquet(out_dir / "summary_branch_candidate_manifest.parquet", index=False)
+    summary_candidate_summary.to_csv(
+        out_dir / "summary_branch_candidate_summary.tsv", sep="\t", index=False
+    )
+    missing_environment_priority(selected).to_csv(
+        out_dir / "missing_environment_recovery_priority.tsv", sep="\t", index=False
+    )
 
     waterfall = pd.DataFrame(
         [
@@ -540,11 +800,16 @@ def main() -> None:
         "trait_name_canonical",
         "trait_name_original",
         "unit",
+        "phenotype_source",
         "analysis_key_hash",
         "exclusive_loss_reason",
         *overlapping_flags,
         "raw_numeric_records",
         "raw_plot_records",
+        "n_records",
+        "n_source_files",
+        "duplicate_resolution",
+        "plot_support_status",
         "source_level",
         "gid_resolution_status",
     ]
@@ -577,6 +842,13 @@ def main() -> None:
             | normalized_text(selected["country"]).ne("")
         )
     )
+    source_level = normalized_text(selected["source_level"])
+    summary_stage1_missing = ~selected["stage1_key_available"] & source_level.eq(
+        "summary_level"
+    )
+    raw_stage1_missing = ~selected["stage1_key_available"] & ~source_level.eq(
+        "summary_level"
+    )
     recovery_rows = [
         {
             "recovery_class": "unresolved_genotype_identity",
@@ -601,9 +873,18 @@ def main() -> None:
         },
         {
             "recovery_class": "stage1_raw_reconstruction",
-            "affected_canonical_rows": int((~selected["stage1_key_available"]).sum()),
-            "strict_recovery_candidate_rows": int((~selected["stage1_key_available"] & raw_numeric.gt(0)).sum()),
+            "affected_canonical_rows": int(raw_stage1_missing.sum()),
+            "strict_recovery_candidate_rows": int(
+                (raw_stage1_missing & raw_numeric.gt(0)).sum()
+            ),
             "method": "Rebuild adjusted outcomes from raw plot records; do not fill target labels",
+            "target_imputation_allowed": False,
+        },
+        {
+            "recovery_class": "summary_level_source_branch",
+            "affected_canonical_rows": int(summary_stage1_missing.sum()),
+            "strict_recovery_candidate_rows": len(summary_candidates),
+            "method": "Certify exact source lineage, then evaluate as a separately calibrated lower-confidence observation branch",
             "target_imputation_allowed": False,
         },
         {
@@ -699,6 +980,10 @@ def main() -> None:
         "model_observation_ids_unique": len(model_ids) == len(model),
         "ledger_observation_ids_unique": len(ledger_ids) == len(ledger),
         "model_is_stage1_subset": model_ids <= stage1_ids,
+        "stage1_attrition_partitions_selected_rows": int(
+            stage1_attrition_summary(selected_stage1)["stage1_rows"].sum()
+        )
+        == len(selected_stage1),
         "ledger_is_model_subset": ledger_ids <= model_ids,
         "ledger_traits_match_requested": set(ledger["trait_name_canonical"]) == selected_traits,
         "ledger_targets_finite": bool(finite_values(ledger["phenotype_value"]).all()),
@@ -711,7 +996,7 @@ def main() -> None:
     code_root = Path(__file__).resolve().parents[1]
     provenance = {
         "status": status,
-        "audit_version": "information_attrition_v1",
+        "audit_version": "information_attrition_v2",
         "selection_data": "identifiers_metadata_support_and_target_finiteness_only",
         "phenotype_values_read_for_finiteness_only": True,
         "phenotype_magnitudes_exported": False,
