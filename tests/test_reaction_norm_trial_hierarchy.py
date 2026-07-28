@@ -5,12 +5,16 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from server_training_pipeline.build_final_evaluation_manifests import (
     genotype_expert_support_table,
     nested_genotype_expert_support_table,
 )
 from server_training_pipeline.final_evaluation_contract import load_protocol
+from server_training_pipeline.prepare_reaction_norm_trial_hierarchy_screen import (
+    write_freeze,
+)
 from server_training_pipeline.trial_hierarchy import (
     fit_hierarchy_support,
     hierarchy_indices,
@@ -171,3 +175,16 @@ def test_launcher_is_inner_only_and_uses_exact_kernel_opt_ins() -> None:
     assert "--include-disabled-kernel K_E_REACTION_NORM_V1" in source
     assert "outer_evaluation" not in source
     assert "final-holdout" in source
+
+
+def test_failed_freeze_can_be_replaced_but_pass_freeze_is_immutable(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "freeze.json"
+    write_freeze(path, {"status": "FAIL", "checks": {"old": False}})
+    corrected = {"status": "PASS", "checks": {"corrected": True}}
+    write_freeze(path, corrected)
+    assert json.loads(path.read_text(encoding="utf-8")) == corrected
+    write_freeze(path, corrected)
+    with pytest.raises(SystemExit, match="Existing PASS"):
+        write_freeze(path, {"status": "PASS", "checks": {"changed": True}})

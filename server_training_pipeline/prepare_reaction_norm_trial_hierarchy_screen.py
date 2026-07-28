@@ -16,6 +16,23 @@ def identity(path: Path) -> dict[str, object]:
     }
 
 
+def write_freeze(path: Path, freeze: dict[str, object]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists():
+        existing = json.loads(path.read_text(encoding="utf-8"))
+        if existing == freeze:
+            return
+        if existing.get("status") == "PASS":
+            raise SystemExit(
+                "Existing PASS trial-hierarchy freeze disagrees with current inputs; "
+                "use a new screen directory"
+            )
+    path.write_text(
+        json.dumps(freeze, indent=2, allow_nan=False) + "\n",
+        encoding="utf-8",
+    )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Freeze a fresh trial-hierarchy inner screen before metrics."
@@ -94,7 +111,7 @@ def main() -> None:
         == "current_trait_row_balanced",
         "loss_balance_decision_pass": loss_balance.get("status") == "PASS",
         "loss_balance_selection_inner_only": loss_balance.get("selection_data")
-        == "inner_validation_metrics_only",
+        == "inner_validation_only",
         "loss_balance_outer_unread": loss_balance.get("outer_test_metrics_read")
         is False,
         "loss_balance_final_holdout_unread": loss_balance.get(
@@ -123,19 +140,7 @@ def main() -> None:
         "failed_checks": failed,
         "artifacts": {path.name: identity(path) for path in paths},
     }
-    args.out.parent.mkdir(parents=True, exist_ok=True)
-    if args.out.exists():
-        existing = json.loads(args.out.read_text(encoding="utf-8"))
-        if existing != freeze:
-            raise SystemExit(
-                "Existing trial-hierarchy freeze disagrees with current inputs; "
-                "use a new screen directory"
-            )
-    else:
-        args.out.write_text(
-            json.dumps(freeze, indent=2, allow_nan=False) + "\n",
-            encoding="utf-8",
-        )
+    write_freeze(args.out, freeze)
     print(json.dumps(freeze, indent=2, allow_nan=False))
     if failed:
         raise SystemExit("Trial-hierarchy screen freeze failed")
