@@ -84,13 +84,16 @@ if [[ ! -s "$ID_DIR/outer_training_environment_ids.tsv" ]]; then
     --out-dir "$ID_DIR"
 fi
 
-readarray -t GLOBAL_ENVIRONMENT_PATHS < <("$PYTHON" - "$GLOBAL_ENVIRONMENT_DIR/K_E.qc.json" <<'PY'
-import json, sys
-qc = json.load(open(sys.argv[1]))
-print(qc["environment_input_dir"])
-print(qc["weather_feature_input_dir"])
-PY
+readarray -t GLOBAL_ENVIRONMENT_PATHS < <(
+  "$PYTHON" -m server_training_pipeline.resolve_environment_kernel_sources \
+    --qc "$GLOBAL_ENVIRONMENT_DIR/K_E.qc.json" \
+    --fallback-environment-dir "$GLOBAL_ENVIRONMENT_DIR" \
+    --fallback-weather-dir "$GLOBAL_ENVIRONMENT_DIR"
 )
+if (( ${#GLOBAL_ENVIRONMENT_PATHS[@]} != 2 )); then
+  echo "Could not resolve environment source paths from $GLOBAL_ENVIRONMENT_DIR/K_E.qc.json" >&2
+  exit 2
+fi
 GLOBAL_ENVIRONMENT_INPUT_DIR="${REACTION_ENVIRONMENT_INPUT_DIR:-${GLOBAL_ENVIRONMENT_PATHS[0]}}"
 GLOBAL_WEATHER_DIR="${REACTION_WEATHER_DIR:-${GLOBAL_ENVIRONMENT_PATHS[1]}}"
 TARGET_ENV_ORDER="$BASE_MODEL_DIR/${BASE_PREFIX}_K_E_unique_order.tsv"
@@ -247,13 +250,16 @@ log "PREPARE frozen canonical-v3 reaction-norm inputs"
   --out-dir "$INPUT_DIR"
 GENOTYPE_MANIFEST="$INPUT_DIR/reaction_norm_genotype_manifest.tsv"
 
-readarray -t ENVIRONMENT_PATHS < <("$PYTHON" - "$ENVIRONMENT_DIR/K_E.qc.json" <<'PY'
-import json, sys
-qc = json.load(open(sys.argv[1]))
-print(qc["environment_input_dir"])
-print(qc["weather_feature_input_dir"])
-PY
+readarray -t ENVIRONMENT_PATHS < <(
+  "$PYTHON" -m server_training_pipeline.resolve_environment_kernel_sources \
+    --qc "$ENVIRONMENT_DIR/K_E.qc.json" \
+    --fallback-environment-dir "$GLOBAL_ENVIRONMENT_INPUT_DIR" \
+    --fallback-weather-dir "$GLOBAL_WEATHER_DIR"
 )
+if (( ${#ENVIRONMENT_PATHS[@]} != 2 )); then
+  echo "Could not resolve fold environment source paths from $ENVIRONMENT_DIR/K_E.qc.json" >&2
+  exit 2
+fi
 ENVIRONMENT_INPUT_DIR="${REACTION_ENVIRONMENT_INPUT_DIR:-${ENVIRONMENT_PATHS[0]}}"
 WEATHER_DIR="${REACTION_WEATHER_DIR:-${ENVIRONMENT_PATHS[1]}}"
 
