@@ -768,6 +768,152 @@ def choose_final_cycle_block(
     )
 
 
+def evaluate_frozen_final_environment_block(
+    ledger: pd.DataFrame,
+    protocol: dict[str, object],
+    protected_ids: dict[str, set[str]],
+    frozen_environments: set[str],
+) -> tuple[list[str], set[str], pd.DataFrame, pd.DataFrame, dict[str, object], pd.DataFrame]:
+    """Validate an existing sealed holdout without selecting a new one."""
+    if not frozen_environments or "" in frozen_environments:
+        raise ValueError("Frozen final-holdout environment IDs must be nonempty")
+    environment = nonempty(ledger, "env_kernel_id")
+    available = set(environment).difference({""})
+    absent = sorted(frozen_environments.difference(available))
+    if absent:
+        raise ValueError(
+            "Frozen final-holdout environments are absent from the expanded ledger: "
+            f"{absent[:5]}"
+        )
+    traits = [str(value) for value in protocol["traits"]]
+    support = dict(protocol["final_holdout_support"])
+    total_environments = len(available)
+    minimum_environment_count = max(
+        int(support["minimum_environment_count"]),
+        int(
+            math.ceil(
+                total_environments * float(support["minimum_environment_fraction"])
+            )
+        ),
+    )
+    maximum_environment_count = int(
+        math.floor(
+            total_environments * float(support["maximum_environment_fraction"])
+        )
+    )
+    minimum_rows_per_trait = int(support["minimum_rows_per_trait"])
+    requirements = trait_environment_requirements(
+        ledger,
+        traits,
+        default_minimum_environments=int(
+            support.get("minimum_environments_per_trait", 1)
+        ),
+        policy=(
+            dict(protocol["trait_environment_support"])
+            if protocol.get("trait_environment_support")
+            else None
+        ),
+    )
+    trait_support = trait_support_table(
+        ledger,
+        frozen_environments,
+        traits,
+        minimum_rows_per_trait,
+        requirements,
+    )
+    expert_support = genotype_expert_support_table(
+        ledger,
+        frozen_environments,
+        protected_ids,
+        dict(protocol["final_holdout_genotype_expert_support"]),
+    )
+    trait_support["frozen_reuse_support_status"] = np.where(
+        trait_support["observation_rows"].ge(minimum_rows_per_trait)
+        & trait_support["holdout_environment_count"].ge(1)
+        & trait_support["development_environment_count"].ge(
+            trait_support["minimum_required_development_environments"]
+        ),
+        "PASS",
+        "FAIL",
+    )
+    failures = []
+    if not trait_support["frozen_reuse_support_status"].eq("PASS").all():
+        failures.append("trait_support")
+    if not expert_support["support_status"].eq("PASS").all():
+        failures.append("genotype_expert_support")
+    selected_rows = environment.isin(frozen_environments)
+    selected_cycles = sorted(
+        set(nonempty(ledger.loc[selected_rows], "cycle")).difference({""})
+    )
+    selected_years = sorted(
+        {
+            value
+            for value in (cycle_year(item) for item in selected_cycles)
+            if value is not None
+        },
+        reverse=True,
+    )
+    cycle_support = pd.DataFrame(
+        [
+            {
+                "selection_mode": "frozen_environment_list_reuse",
+                "selected_environment_count": len(frozen_environments),
+                "selected_observation_rows": int(selected_rows.sum()),
+                "selected_cycles": ";".join(selected_cycles),
+                "selected_cycle_years": ";".join(map(str, selected_years)),
+                "trait_support_pass": bool(
+                    trait_support["frozen_reuse_support_status"].eq("PASS").all()
+                ),
+                "genotype_expert_support_pass": bool(
+                    expert_support["support_status"].eq("PASS").all()
+                ),
+                "failures": ";".join(failures),
+                "selected": True,
+            }
+        ]
+    )
+    preflight = {
+        "status": "pass" if not failures else "fail",
+        "policy": protocol["final_holdout_policy"],
+        "selection_mode": "frozen_environment_list_reuse",
+        "selected_cycles": selected_cycles,
+        "selected_cycle_years": selected_years,
+        "total_environment_count": total_environments,
+        "selected_environment_count": len(frozen_environments),
+        "selected_environment_fraction": len(frozen_environments)
+        / total_environments,
+        "minimum_environment_count": minimum_environment_count,
+        "maximum_environment_count": maximum_environment_count,
+        "environment_count_threshold_is_advisory_for_frozen_reuse": True,
+        "environment_count_meets_current_minimum": len(frozen_environments)
+        >= minimum_environment_count,
+        "environment_count_meets_current_maximum": len(frozen_environments)
+        <= maximum_environment_count,
+        "minimum_rows_per_trait": minimum_rows_per_trait,
+        "trait_environment_support_policy": protocol.get(
+            "trait_environment_support"
+        ),
+        "minimum_observed_trait_rows": int(trait_support["observation_rows"].min()),
+        "minimum_observed_trait_environments": int(
+            trait_support["holdout_environment_count"].min()
+        ),
+        "minimum_observed_development_trait_environments": int(
+            trait_support["development_environment_count"].min()
+        ),
+        "protected_genotype_experts": sorted(protected_ids),
+        "phenotype_values_used_for_assignment": False,
+        "failures": failures,
+    }
+    return (
+        selected_cycles,
+        set(frozen_environments),
+        trait_support,
+        cycle_support,
+        preflight,
+        expert_support,
+    )
+
+
 def hashed_folds(values: set[str], folds: int, salt: str) -> dict[int, set[str]]:
     result = {fold: set() for fold in range(folds)}
     for value in sorted(values):
@@ -893,6 +1039,14 @@ def main() -> None:
     parser.add_argument("--protocol", type=Path, default=None)
     parser.add_argument("--final-holdout-cycle")
     parser.add_argument(
+        "--frozen-final-holdout-environments",
+        type=Path,
+        help=(
+            "Previously sealed environment list to reuse exactly. The file must contain "
+            "env_id or entity_id; no new holdout selection is performed."
+        ),
+    )
+    parser.add_argument(
         "--protected-genotype-order",
         action="append",
         help="Frozen expert order as NAME=/path/to/order.tsv; repeat once per protected expert.",
@@ -930,7 +1084,43 @@ def main() -> None:
     if missing:
         raise SystemExit(f"Ledger is missing final-evaluation columns: {missing}")
     ledger = ledger[columns].copy()
-    if protocol["final_holdout_policy"] == "deterministic_environment_block_minimum_support":
+    frozen_holdout_path = (
+        args.frozen_final_holdout_environments.resolve()
+        if args.frozen_final_holdout_environments
+        else None
+    )
+    if frozen_holdout_path is not None:
+        if args.final_holdout_cycle:
+            raise SystemExit(
+                "--final-holdout-cycle cannot be combined with a frozen holdout list"
+            )
+        if not frozen_holdout_path.is_file():
+            raise FileNotFoundError(frozen_holdout_path)
+        frozen_table = pd.read_csv(frozen_holdout_path, sep="\t", dtype=str)
+        frozen_column = next(
+            (column for column in ["env_id", "entity_id"] if column in frozen_table),
+            None,
+        )
+        if frozen_column is None:
+            raise SystemExit(
+                "Frozen final-holdout file must contain env_id or entity_id"
+            )
+        frozen_values = nonempty(frozen_table, frozen_column)
+        if frozen_values.eq("").any() or frozen_values.duplicated().any():
+            raise SystemExit(
+                "Frozen final-holdout environment IDs are empty or duplicated"
+            )
+        (
+            final_cycles,
+            final_environments,
+            final_trait_support,
+            final_cycle_support,
+            final_preflight,
+            final_expert_support,
+        ) = evaluate_frozen_final_environment_block(
+            ledger, protocol, protected_ids, set(frozen_values)
+        )
+    elif protocol["final_holdout_policy"] == "deterministic_environment_block_minimum_support":
         if args.final_holdout_cycle:
             raise SystemExit(
                 "--final-holdout-cycle is incompatible with the frozen environment-block policy"
@@ -1160,6 +1350,15 @@ def main() -> None:
         ),
         "final_holdout_environment_ids_sha256": file_sha256(
             out_dir / "final_holdout_environment_ids.tsv"
+        ),
+        "frozen_final_holdout_source": (
+            {
+                "path": str(frozen_holdout_path),
+                "sha256": file_sha256(frozen_holdout_path),
+                "reused_exactly": True,
+            }
+            if frozen_holdout_path is not None
+            else None
         ),
         "final_holdout_genotype_expert_support_path": str(
             out_dir / "final_holdout_genotype_expert_support.tsv"

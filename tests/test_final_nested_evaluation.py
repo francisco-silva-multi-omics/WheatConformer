@@ -16,6 +16,7 @@ from build_environment_component_kernels import (
 from server_training_pipeline.build_final_evaluation_manifests import (
     choose_final_cycle_block,
     choose_final_environment_block,
+    evaluate_frozen_final_environment_block,
     genotype_expert_support_table,
     trait_environment_requirements,
     main as build_manifests,
@@ -280,6 +281,119 @@ def test_environment_block_preserves_recent_cycle_marker_support() -> None:
     assert expert_support["support_status"].eq("PASS").all()
     assert expert_support.loc["K_G_HMP", "development_unique_genotypes"] == 30
     assert expert_support.loc["K_G_HMP", "holdout_unique_genotypes"] == 30
+
+
+def test_frozen_holdout_reuse_does_not_reselect_after_ledger_expansion() -> None:
+    ledger = synthetic_ledger()
+    protocol = load_protocol().copy()
+    protocol["traits"] = ["DAYS_TO_HEADING", "GRAIN_YIELD"]
+    protocol["final_holdout_support"] = {
+        "minimum_environment_fraction": 0.15,
+        "minimum_environment_count": 10,
+        "maximum_environment_fraction": 0.4,
+        "minimum_rows_per_trait": 20,
+    }
+    protocol["trait_environment_support"] = {
+        "default_minimum_holdout_fraction": 0.15,
+        "trait_minimum_holdout_environments": {},
+        "minimum_development_environment_fraction": 0.5,
+        "minimum_development_environments": 10,
+    }
+    frozen = {f"e{index:02d}" for index in range(10)}
+    protected = {
+        "K_G_HMP": set(ledger["panel_sample_id"]),
+        "K_G_GBS": set(ledger["panel_sample_id"]),
+    }
+    expanded = pd.concat(
+        [
+            ledger,
+            ledger.assign(
+                env_kernel_id=lambda frame: "new_" + frame["env_kernel_id"]
+            ),
+        ],
+        ignore_index=True,
+    )
+    _, observed, support, _, preflight, expert_support = (
+        evaluate_frozen_final_environment_block(
+            expanded, protocol, protected, frozen
+        )
+    )
+    assert observed == frozen
+    assert preflight["status"] == "pass"
+    assert preflight["selection_mode"] == "frozen_environment_list_reuse"
+    assert preflight["environment_count_meets_current_minimum"] is False
+    assert support["frozen_reuse_support_status"].eq("PASS").all()
+    assert expert_support["support_status"].eq("PASS").all()
+
+
+def test_manifest_cli_records_frozen_holdout_source(tmp_path, monkeypatch) -> None:
+    ledger = synthetic_ledger()
+    ledger_path = tmp_path / "ledger.tsv"
+    ledger.to_csv(ledger_path, sep="\t", index=False)
+    protocol = json.loads(
+        Path("server_training_pipeline/final_evaluation_protocol.json").read_text()
+    )
+    protocol.update(
+        {
+            "protocol_version": "toy_frozen_holdout_reuse_v1",
+            "traits": ["DAYS_TO_HEADING", "GRAIN_YIELD"],
+            "climatology_eligible_traits": ["DAYS_TO_HEADING", "GRAIN_YIELD"],
+            "climatology_ineligible_traits": [],
+            "final_holdout_support": {
+                "minimum_environment_fraction": 0.15,
+                "minimum_environment_count": 10,
+                "maximum_environment_fraction": 0.4,
+                "minimum_rows_per_trait": 20,
+            },
+        }
+    )
+    protocol["trait_environment_support"][
+        "trait_minimum_holdout_environments"
+    ] = {}
+    protocol_path = tmp_path / "protocol.json"
+    protocol_path.write_text(json.dumps(protocol), encoding="utf-8")
+    holdout_path = tmp_path / "sealed_holdout.tsv"
+    pd.DataFrame({"env_id": [f"e{index:02d}" for index in range(10)]}).to_csv(
+        holdout_path, sep="\t", index=False
+    )
+    order_args = []
+    for name in ["K_G_HMP", "K_G_GBS"]:
+        path = tmp_path / f"{name}.tsv"
+        pd.DataFrame(
+            {"sample_id": sorted(ledger["panel_sample_id"].unique())}
+        ).to_csv(path, sep="\t", index=False)
+        order_args.extend(["--protected-genotype-order", f"{name}={path}"])
+    out_dir = tmp_path / "evaluation"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "build_final_evaluation_manifests",
+            "--ledger",
+            str(ledger_path),
+            "--protocol",
+            str(protocol_path),
+            "--frozen-final-holdout-environments",
+            str(holdout_path),
+            "--out-dir",
+            str(out_dir),
+            *order_args,
+        ],
+    )
+    build_manifests()
+    contract = json.loads(
+        (out_dir / "nested_evaluation_contract.json").read_text()
+    )
+    assert contract["frozen_final_holdout_source"]["reused_exactly"] is True
+    assert contract["frozen_final_holdout_source"]["sha256"] == hashlib.sha256(
+        holdout_path.read_bytes()
+    ).hexdigest()
+    output_ids = set(
+        pd.read_csv(out_dir / "final_holdout_environment_ids.tsv", sep="\t")[
+            "env_id"
+        ]
+    )
+    assert output_ids == {f"e{index:02d}" for index in range(10)}
 
 
 def test_v4_trait_environment_requirements_preserve_sparse_training_support() -> None:

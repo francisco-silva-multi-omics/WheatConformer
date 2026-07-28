@@ -107,6 +107,7 @@ def test_multitrait_ledger_maps_source_indices_and_writes_lineage(tmp_path: Path
             "toy_multitrait",
             "--min-trait-rows",
             "1",
+            "--canonicalize-panel-sample-id",
             "--write-tsv",
         ],
         cwd=ROOT,
@@ -118,12 +119,15 @@ def test_multitrait_ledger_maps_source_indices_and_writes_lineage(tmp_path: Path
     ledger = pd.read_csv(out_dir / "toy_multitrait_observations.tsv.gz", sep="\t")
     assert ledger["geno_compact_index"].tolist() == [0, 1, 0, 1]
     assert ledger["env_compact_index"].tolist() == [0, 0, 1, 1]
+    assert ledger["panel_sample_id"].tolist() == ["g1", "g2", "g1", "g2"]
+    assert ledger["panel_sample_id"].equals(ledger["genotype_id"])
     np.testing.assert_allclose(
         ledger.groupby("trait_name_canonical")["weight_g_e"].mean().to_numpy(),
         np.ones(2),
     )
     lineage = json.loads((out_dir / "toy_multitrait_lineage.json").read_text(encoding="utf-8"))
     assert lineage["output_rows"] == 4
+    assert lineage["panel_sample_id_policy"] == "certified_compact_genotype_order_id"
     summary = pd.read_csv(out_dir / "toy_multitrait_ledger_summary.tsv", sep="\t")
     summary_values = dict(zip(summary["metric"], summary["value"]))
     assert int(summary_values["removed_nonfinite_phenotype_rows"]) == 1

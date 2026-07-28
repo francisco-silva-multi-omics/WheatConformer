@@ -26,6 +26,7 @@ GBS_MODEL_DIR="${REACTION_GBS_MODEL_DIR:-model_kernels/stage1_gbs_sawyt_env_ke_d
 DTH_MODEL_DIR="${REACTION_DTH_MODEL_DIR:-model_kernels/stage1_pedigree_env_dth_v2}"
 TRAIT_ENV_MANIFEST="${REACTION_TRAIT_ENV_MANIFEST:-model_kernels/trait_environment_v2/trait_environment_kernel_manifest.tsv}"
 WINDOW_FEATURES="${REACTION_WINDOW_FEATURES:-environment/agronomic_api_weather_windows.tsv}"
+GLOBAL_ENVIRONMENT_DIR="${REACTION_GLOBAL_ENVIRONMENT_DIR:-environment}"
 CANONICAL_DIR="${REACTION_CANONICAL_DIR:-genotype_panels/pedigree_canonical_v3}"
 INPUT_DIR="${REACTION_INPUT_DIR:-model_kernels/reaction_norm_v1}"
 INNER_SCREEN_DIR="${REACTION_SCREEN_DIR:-model_kernels/reaction_norm_inner_screen_v1}"
@@ -62,12 +63,74 @@ log() { printf '[%s] %s\n' "$(timestamp)" "$*"; }
 for required in \
   "$EVALUATION_PROTOCOL" "$REACTION_PROTOCOL" "$ENVIRONMENT_PROTOCOL" "$OUTER_PROTOCOL" "$SUPPORT_POLICY" \
   "$LEDGER" "$TRAIT_ORDER" "$MANIFEST" "$CONTRACT" "$TRAIT_ENV_MANIFEST" \
-  "$WINDOW_FEATURES" "$ID_DIR/outer_training_environment_ids.tsv" \
+  "$WINDOW_FEATURES" \
   "$CANONICAL_DIR/K_A_CANONICAL_V3.npy" \
   "$CANONICAL_DIR/K_A_CANONICAL_V3_sample_order.tsv" \
-  "$ENVIRONMENT_DIR/K_geo.npy" "$ENVIRONMENT_DIR/K_E.qc.json"
+  "$GLOBAL_ENVIRONMENT_DIR/K_E.qc.json" \
+  "$BASE_MODEL_DIR/${BASE_PREFIX}_K_E_unique_order.tsv"
 do
   [[ -s "$required" ]] || { echo "Required outer-evaluation input is missing: $required" >&2; exit 2; }
+done
+
+if [[ ! -s "$ID_DIR/outer_training_environment_ids.tsv" ]]; then
+  log "EXPORT outer-training IDs scenario=$SCENARIO outer=$OUTER_FOLD"
+  mkdir -p "$ID_DIR"
+  "$PYTHON" -m server_training_pipeline.export_final_evaluation_fold \
+    --ledger "$LEDGER" \
+    --manifest "$MANIFEST" \
+    --contract "$CONTRACT" \
+    --scenario "$SCENARIO" \
+    --outer-fold "$OUTER_FOLD" \
+    --out-dir "$ID_DIR"
+fi
+
+readarray -t GLOBAL_ENVIRONMENT_PATHS < <("$PYTHON" - "$GLOBAL_ENVIRONMENT_DIR/K_E.qc.json" <<'PY'
+import json, sys
+qc = json.load(open(sys.argv[1]))
+print(qc["environment_input_dir"])
+print(qc["weather_feature_input_dir"])
+PY
+)
+GLOBAL_ENVIRONMENT_INPUT_DIR="${REACTION_ENVIRONMENT_INPUT_DIR:-${GLOBAL_ENVIRONMENT_PATHS[0]}}"
+GLOBAL_WEATHER_DIR="${REACTION_WEATHER_DIR:-${GLOBAL_ENVIRONMENT_PATHS[1]}}"
+TARGET_ENV_ORDER="$BASE_MODEL_DIR/${BASE_PREFIX}_K_E_unique_order.tsv"
+OUTER_ENV_IDS="$ID_DIR/outer_training_environment_ids.tsv"
+
+fold_environment_is_current() {
+  [[ -s "$ENVIRONMENT_DIR/K_E.qc.json" ]] || return 1
+  "$PYTHON" - "$ENVIRONMENT_DIR/K_E.qc.json" "$OUTER_ENV_IDS" "$TARGET_ENV_ORDER" \
+    "$CODE_ROOT/build_environment_component_kernels.py" <<'PY' >/dev/null 2>&1
+import hashlib, json, sys
+from pathlib import Path
+qc_path, fit_ids, target_ids, builder = map(Path, sys.argv[1:])
+sha = lambda path: hashlib.sha256(path.read_bytes()).hexdigest()
+qc = json.loads(qc_path.read_text())
+checks = [
+    qc.get("feature_fit_scope") == "training_environments_only",
+    qc.get("fit_environment_ids_sha256") == sha(fit_ids),
+    qc.get("target_environment_ids_sha256") == sha(target_ids),
+    qc.get("builder_sha256") == sha(builder),
+]
+raise SystemExit(0 if all(checks) else 1)
+PY
+}
+
+if [[ "$FORCE" == "1" ]] || ! fold_environment_is_current; then
+  log "BUILD fold-local generic environment components scenario=$SCENARIO outer=$OUTER_FOLD"
+  mkdir -p "$ENVIRONMENT_DIR"
+  "$PYTHON" "$CODE_ROOT/build_environment_component_kernels.py" \
+    --environment-dir "$GLOBAL_ENVIRONMENT_INPUT_DIR" \
+    --weather-dir "$GLOBAL_WEATHER_DIR" \
+    --out-dir "$ENVIRONMENT_DIR" \
+    --fit-environment-ids "$OUTER_ENV_IDS" \
+    --target-environment-ids "$TARGET_ENV_ORDER" \
+    --require-fetched-weather
+else
+  log "SKIP certified fold-local generic environment components scenario=$SCENARIO outer=$OUTER_FOLD"
+fi
+
+for required in "$ENVIRONMENT_DIR/K_geo.npy" "$ENVIRONMENT_DIR/K_E.qc.json"; do
+  [[ -s "$required" ]] || { echo "Required fold environment input is missing: $required" >&2; exit 2; }
 done
 
 "$PYTHON" - "$OUTER_PROTOCOL" \
