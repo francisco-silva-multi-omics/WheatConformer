@@ -13,12 +13,12 @@ LEDGER_DIR="${STAGE1_WEIGHT_LEDGER_DIR:-model_kernels/multitrait_stage1_recovere
 LEDGER_PREFIX="${STAGE1_WEIGHT_LEDGER_PREFIX:-multitrait_stage1_recovered_v1}"
 MODEL_DIR="${STAGE1_WEIGHT_MODEL_DIR:-model_kernels/stage1_canonical_v3_environment_alias_weight_v1}"
 MODEL_PREFIX="${STAGE1_WEIGHT_MODEL_PREFIX:-stage1_canonical_v3_environment_alias_weight_v1}"
-EVALUATION_DIR="${STAGE1_RECOVERY_EVALUATION_DIR:-model_kernels/stage1_recovery_nested_v1}"
-FREEZE_DIR="${STAGE1_RECOVERY_FREEZE_DIR:-audit/stage1_recovery_nested_v1}"
-OUTER_DIR="${STAGE1_RECOVERY_OUTER_DIR:-model_kernels/stage1_recovery_reaction_norm_outer_v1}"
-MODELS_DIR="${STAGE1_RECOVERY_MODELS_DIR:-trained_models/stage1_recovery_reaction_norm_outer_v1_runs}"
-SUMMARY_DIR="${STAGE1_RECOVERY_SUMMARY_DIR:-trained_models/stage1_recovery_reaction_norm_outer_v1_summary}"
-AUDIT_DIR="${STAGE1_RECOVERY_NESTED_AUDIT_DIR:-audit/stage1_recovery_reaction_norm_outer_v1}"
+EVALUATION_DIR="${STAGE1_RECOVERY_EVALUATION_DIR:-model_kernels/stage1_recovery_nested_v2}"
+FREEZE_DIR="${STAGE1_RECOVERY_FREEZE_DIR:-audit/stage1_recovery_nested_v2}"
+OUTER_DIR="${STAGE1_RECOVERY_OUTER_DIR:-model_kernels/stage1_recovery_reaction_norm_outer_v2}"
+MODELS_DIR="${STAGE1_RECOVERY_MODELS_DIR:-trained_models/stage1_recovery_reaction_norm_outer_v2_runs}"
+SUMMARY_DIR="${STAGE1_RECOVERY_SUMMARY_DIR:-trained_models/stage1_recovery_reaction_norm_outer_v2_summary}"
+AUDIT_DIR="${STAGE1_RECOVERY_NESTED_AUDIT_DIR:-audit/stage1_recovery_reaction_norm_outer_v2}"
 BASE_EVALUATION_DIR="${STAGE1_RECOVERY_BASE_EVALUATION_DIR:-model_kernels/final_nested_evaluation_v5_fixed}"
 BASE_MODELS_DIR="${STAGE1_RECOVERY_BASE_MODELS_DIR:-trained_models/reaction_norm_outer_evaluation_v3_runs}"
 GLOBAL_ENVIRONMENT_DIR="${STAGE1_RECOVERY_GLOBAL_ENVIRONMENT_DIR:-environment}"
@@ -122,6 +122,8 @@ sha256sum \
   "$EVALUATION_PROTOCOL" \
   "$OUTER_PROTOCOL" \
   "$CONTRACT" \
+  "$OUTER_DIR/trait_environment_frozen_extension_v1/K_E_TGW_V2_extension_qc.json" \
+  "$OUTER_DIR/trait_environment_frozen_extension_v1/trait_environment_kernel_manifest.tsv" \
   "$AUDIT_DIR/reaction_norm_outer_evaluation_provenance.json" \
   "$AUDIT_DIR/comparison/stage1_recovery_nested_provenance.json" \
   "$AUDIT_DIR/comparison/stage1_recovery_nested_summary.tsv" \

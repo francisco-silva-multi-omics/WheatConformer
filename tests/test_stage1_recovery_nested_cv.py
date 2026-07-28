@@ -168,6 +168,30 @@ def test_prepare_recovery_nested_protocol_preserves_architecture_and_assignments
     assert recovery_outer["selected_candidate"] == outer["selected_candidate"]
     assert recovery_outer["selected_configuration"] == outer["selected_configuration"]
     assert recovery_outer["outer_test_metrics_read_at_freeze"] is False
+    extension = recovery_outer["trait_environment_recovery_contract"]
+    assert extension["kernel"] == "K_E_TGW_V2"
+    assert extension["refit_feature_columns"] is False
+    assert extension["refit_feature_scaling"] is False
+    assert extension["phenotype_values_read"] is False
+    assert extension["outer_test_metrics_read"] is False
+    assert freeze["checks"][
+        "trait_environment_extension_implementation_frozen"
+    ] is True
+
+
+def test_recovery_launchers_use_isolated_v2_paths_and_frozen_tgw_extension() -> None:
+    root = Path(__file__).resolve().parents[1]
+    prepare = (root / "scripts/prepare_stage1_recovery_nested_cv.sh").read_text()
+    run = (root / "scripts/run_stage1_recovery_nested_cv.sh").read_text()
+    fold = (root / "scripts/run_multitrait_reaction_norm_outer_fold.sh").read_text()
+
+    assert "stage1_recovery_nested_v2" in prepare
+    assert "stage1_recovery_nested_v2" in run
+    assert "stage1_recovery_reaction_norm_outer_v2" in run
+    assert "extend_trait_environment_kernel.py" in prepare
+    assert "trait_environment_recovery_contract" in fold
+    assert "original_block_max_abs_delta" in fold
+    assert "TRAIT_ENV_MANIFEST=\"$EXTENDED_TRAIT_ENV_MANIFEST\"" in fold
 
 
 def write_ensemble(

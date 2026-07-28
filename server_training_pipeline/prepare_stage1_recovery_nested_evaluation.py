@@ -65,6 +65,11 @@ def main() -> None:
     parser.add_argument("--base-selection-lock", type=Path, required=True)
     parser.add_argument("--base-environment-selection-lock", type=Path, required=True)
     parser.add_argument("--frozen-final-holdout-environments", type=Path, required=True)
+    parser.add_argument(
+        "--trait-environment-extension-implementation",
+        type=Path,
+        default=Path(__file__).with_name("extend_trait_environment_kernel.py"),
+    )
     parser.add_argument("--out-dir", type=Path, required=True)
     parser.add_argument("--force", action="store_true")
     args = parser.parse_args()
@@ -82,6 +87,9 @@ def main() -> None:
             "base_selection_lock": args.base_selection_lock,
             "base_environment_selection_lock": args.base_environment_selection_lock,
             "frozen_final_holdout_environments": args.frozen_final_holdout_environments,
+            "trait_environment_extension_implementation": (
+                args.trait_environment_extension_implementation
+            ),
         }.items()
     }
     for path in paths.values():
@@ -252,7 +260,7 @@ def main() -> None:
     }
     evaluation.update(
         {
-            "protocol_version": "multitrait_stage1_recovery_nested_v1",
+            "protocol_version": "multitrait_stage1_recovery_nested_v2",
             "status": "frozen",
             "freeze_kind": "phenotype_blind_stage1_recovery_before_recovery_outer_test",
             "selection_data": "identifiers_uncertainty_metadata_and_kernel_orders_only",
@@ -308,7 +316,7 @@ def main() -> None:
     outer = dict(base_outer)
     outer.update(
         {
-            "protocol_version": "multitrait_reaction_norm_stage1_recovery_nested_v1",
+            "protocol_version": "multitrait_reaction_norm_stage1_recovery_nested_v2",
             "selection_data": "frozen_architecture_plus_phenotype_blind_stage1_recovery",
             "outer_test_metrics_read_at_freeze": False,
             "final_holdout_outcomes_read": False,
@@ -328,6 +336,19 @@ def main() -> None:
                 "recovery_selected_using_outer_metrics": False,
                 "further_hyperparameter_selection": False,
                 "common_support_comparison_required": True,
+            },
+            "trait_environment_recovery_contract": {
+                "kernel": "K_E_TGW_V2",
+                "policy": "frozen_feature_projection_preserve_original_block",
+                "implementation_sha256": file_sha256(
+                    paths["trait_environment_extension_implementation"]
+                ),
+                "original_block_max_abs_tolerance": 5e-6,
+                "refit_feature_columns": False,
+                "refit_feature_scaling": False,
+                "phenotype_values_read": False,
+                "outer_test_metrics_read": False,
+                "final_holdout_outcomes_read": False,
             },
         }
     )
@@ -407,6 +428,10 @@ def main() -> None:
         == base_outer["selected_environment_architecture"],
         "training_configuration_preserved": outer["selected_configuration"]
         == base_outer["selected_configuration"],
+        "trait_environment_extension_implementation_frozen": outer[
+            "trait_environment_recovery_contract"
+        ]["implementation_sha256"]
+        == file_sha256(paths["trait_environment_extension_implementation"]),
         "final_holdout_reselection_disabled": evaluation[
             "frozen_final_holdout_reuse"
         ]["reselect_holdout"]
@@ -416,7 +441,7 @@ def main() -> None:
     status = "PASS" if all(checks.values()) else "FAIL"
     freeze = {
         "status": status,
-        "protocol_version": "stage1_recovery_nested_freeze_v1",
+        "protocol_version": "stage1_recovery_nested_freeze_v2",
         "selection_data": "phenotype_blind_recovery_plus_previously_frozen_architecture",
         "phenotype_values_read_for_recovery": False,
         "outer_test_metrics_read": False,
@@ -442,6 +467,7 @@ def main() -> None:
         root,
         [
             paths["base_selection_lock"],
+            paths["trait_environment_extension_implementation"],
             paths["recovery_validation"],
             output_paths["evaluation_protocol"],
             output_paths["outer_protocol"],
@@ -454,6 +480,7 @@ def main() -> None:
         root,
         [
             paths["base_environment_selection_lock"],
+            paths["trait_environment_extension_implementation"],
             paths["recovery_validation"],
             output_paths["evaluation_protocol"],
             output_paths["outer_protocol"],

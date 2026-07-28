@@ -25,6 +25,7 @@ HMP_MODEL_DIR="${REACTION_HMP_MODEL_DIR:-model_kernels/stage1_hmp_env_ke_diag_no
 GBS_MODEL_DIR="${REACTION_GBS_MODEL_DIR:-model_kernels/stage1_gbs_sawyt_env_ke_diag_norm}"
 DTH_MODEL_DIR="${REACTION_DTH_MODEL_DIR:-model_kernels/stage1_pedigree_env_dth_v2}"
 TRAIT_ENV_MANIFEST="${REACTION_TRAIT_ENV_MANIFEST:-model_kernels/trait_environment_v2/trait_environment_kernel_manifest.tsv}"
+SOURCE_TRAIT_ENV_MANIFEST="$TRAIT_ENV_MANIFEST"
 WINDOW_FEATURES="${REACTION_WINDOW_FEATURES:-environment/agronomic_api_weather_windows.tsv}"
 GLOBAL_ENVIRONMENT_DIR="${REACTION_GLOBAL_ENVIRONMENT_DIR:-environment}"
 CANONICAL_DIR="${REACTION_CANONICAL_DIR:-genotype_panels/pedigree_canonical_v3}"
@@ -37,6 +38,8 @@ ENVIRONMENT_MODELS_DIR="${REACTION_ENVIRONMENT_MODELS_DIR:-trained_models/reacti
 FREEZE_DIR="${REACTION_SELECTION_FREEZE_DIR:-audit/reaction_norm_explicit_environment_v3_frozen}"
 OUTER_DIR="${REACTION_OUTER_DIR:-model_kernels/reaction_norm_outer_evaluation_v3}"
 OUTER_MODELS_DIR="${REACTION_OUTER_MODELS_DIR:-trained_models/reaction_norm_outer_evaluation_v3_runs}"
+TRAIT_ENV_EXTENSION_DIR="${REACTION_TRAIT_ENV_EXTENSION_DIR:-$OUTER_DIR/trait_environment_frozen_extension_v1}"
+TRAIT_ENV_EXTENSION_IMPLEMENTATION="$CODE_ROOT/server_training_pipeline/extend_trait_environment_kernel.py"
 FORCE="${REACTION_OUTER_FORCE:-0}"
 
 MANIFEST="$BASE_EVALUATION_DIR/nested_evaluation_entities.tsv"
@@ -98,6 +101,94 @@ GLOBAL_ENVIRONMENT_INPUT_DIR="${REACTION_ENVIRONMENT_INPUT_DIR:-${GLOBAL_ENVIRON
 GLOBAL_WEATHER_DIR="${REACTION_WEATHER_DIR:-${GLOBAL_ENVIRONMENT_PATHS[1]}}"
 TARGET_ENV_ORDER="$BASE_MODEL_DIR/${BASE_PREFIX}_K_E_unique_order.tsv"
 OUTER_ENV_IDS="$ID_DIR/outer_training_environment_ids.tsv"
+
+TRAIT_ENV_EXTENSION_REQUIRED="$("$PYTHON" - "$OUTER_PROTOCOL" <<'PY'
+import json, sys
+protocol = json.load(open(sys.argv[1]))
+print("1" if protocol.get("trait_environment_recovery_contract") else "0")
+PY
+)"
+
+if [[ "$TRAIT_ENV_EXTENSION_REQUIRED" == "1" ]]; then
+  EXTENDED_TRAIT_ENV_MANIFEST="$TRAIT_ENV_EXTENSION_DIR/trait_environment_kernel_manifest.tsv"
+  TRAIT_ENV_EXTENSION_QC="$TRAIT_ENV_EXTENSION_DIR/K_E_TGW_V2_extension_qc.json"
+
+  "$PYTHON" - "$OUTER_PROTOCOL" "$TRAIT_ENV_EXTENSION_IMPLEMENTATION" <<'PY'
+import hashlib, json, sys
+protocol = json.load(open(sys.argv[1]))
+contract = protocol["trait_environment_recovery_contract"]
+observed = hashlib.sha256(open(sys.argv[2], "rb").read()).hexdigest()
+if contract.get("implementation_sha256") != observed:
+    raise SystemExit(
+        "Frozen trait-environment extension implementation mismatch: "
+        f"expected={contract.get('implementation_sha256')} observed={observed}"
+    )
+if any(contract.get(key) is not False for key in [
+    "refit_feature_columns", "refit_feature_scaling", "phenotype_values_read",
+    "outer_test_metrics_read", "final_holdout_outcomes_read",
+]):
+    raise SystemExit("Frozen trait-environment recovery contract is not phenotype-blind")
+print("PASS frozen trait-environment extension implementation identity")
+PY
+
+  trait_environment_extension_is_current() {
+    [[ -s "$TRAIT_ENV_EXTENSION_QC" && -s "$EXTENDED_TRAIT_ENV_MANIFEST" ]] || return 1
+    "$PYTHON" - "$TRAIT_ENV_EXTENSION_QC" "$OUTER_PROTOCOL" \
+      "$SOURCE_TRAIT_ENV_MANIFEST" "$TARGET_ENV_ORDER" \
+      "$GLOBAL_ENVIRONMENT_INPUT_DIR/envdata.tsv" \
+      "$GLOBAL_ENVIRONMENT_INPUT_DIR/locdata.tsv" "$WINDOW_FEATURES" \
+      "$EXTENDED_TRAIT_ENV_MANIFEST" "$TRAIT_ENV_EXTENSION_IMPLEMENTATION" \
+      >/dev/null 2>&1 <<'PY'
+import hashlib, json, sys
+from pathlib import Path
+
+qc_path, protocol_path, source_manifest, target_order, envdata, locdata, windows, output_manifest, implementation = map(Path, sys.argv[1:])
+sha = lambda path: hashlib.sha256(path.read_bytes()).hexdigest()
+qc = json.loads(qc_path.read_text())
+contract = json.loads(protocol_path.read_text())["trait_environment_recovery_contract"]
+source_artifacts = qc.get("source_artifacts", {})
+output_artifacts = qc.get("output_artifacts", {})
+required_sources = [source_manifest, target_order, envdata, locdata, windows]
+checks = [
+    qc.get("status") == "PASS",
+    qc.get("kernel") == contract.get("kernel") == "K_E_TGW_V2",
+    qc.get("phenotype_values_read") is False,
+    qc.get("outer_test_metrics_read") is False,
+    qc.get("final_holdout_outcomes_read") is False,
+    qc.get("implementation_sha256") == contract.get("implementation_sha256") == sha(implementation),
+    float(qc.get("original_block_max_abs_delta", float("inf"))) <= float(contract["original_block_max_abs_tolerance"]),
+    int(qc.get("added_environment_count", 0)) > 0,
+    all(source_artifacts.get(str(path.resolve())) == sha(path.resolve()) for path in required_sources),
+    output_artifacts.get(str(output_manifest.resolve())) == sha(output_manifest.resolve()),
+]
+for path_text, expected in [*source_artifacts.items(), *output_artifacts.items()]:
+    path = Path(path_text)
+    checks.append(path.is_file() and sha(path) == expected)
+raise SystemExit(0 if all(checks) else 1)
+PY
+  }
+
+  if [[ "$FORCE" == "1" ]] || ! trait_environment_extension_is_current; then
+    log "EXTEND frozen K_E_TGW_V2 to recovered environment order"
+    "$PYTHON" -m server_training_pipeline.extend_trait_environment_kernel \
+      --root . \
+      --source-manifest "$SOURCE_TRAIT_ENV_MANIFEST" \
+      --target-order "$TARGET_ENV_ORDER" \
+      --envdata "$GLOBAL_ENVIRONMENT_INPUT_DIR/envdata.tsv" \
+      --locdata "$GLOBAL_ENVIRONMENT_INPUT_DIR/locdata.tsv" \
+      --window-features "$WINDOW_FEATURES" \
+      --out-dir "$TRAIT_ENV_EXTENSION_DIR" \
+      --kernel K_E_TGW_V2 \
+      --original-block-tolerance 5e-6
+  else
+    log "SKIP certified frozen K_E_TGW_V2 recovery extension"
+  fi
+  trait_environment_extension_is_current || {
+    echo "Frozen K_E_TGW_V2 recovery extension failed provenance verification" >&2
+    exit 2
+  }
+  TRAIT_ENV_MANIFEST="$EXTENDED_TRAIT_ENV_MANIFEST"
+fi
 
 fold_environment_is_current() {
   [[ -s "$ENVIRONMENT_DIR/K_E.qc.json" ]] || return 1
