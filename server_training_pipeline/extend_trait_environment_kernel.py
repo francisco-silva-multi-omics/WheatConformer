@@ -108,12 +108,11 @@ def extend_standardized_kernel(
             "Source kernel/order mismatch: "
             f"kernel={source_kernel.shape}; order={len(source_ids)}"
         )
-    missing_source_ids = sorted(set(source_ids) - set(target_ids))
-    if missing_source_ids:
-        raise ValueError(
-            "Recovered target order lost frozen source environments: "
-            f"{missing_source_ids[:10]}"
-        )
+    source_positions = {value: index for index, value in enumerate(source_ids)}
+    target_positions = {value: index for index, value in enumerate(target_ids)}
+    shared_ids = [value for value in target_ids if value in source_positions]
+    if not shared_ids:
+        raise ValueError("Source and recovered target environment orders do not overlap")
 
     source = source_features.copy()
     if "env_id" not in source.columns:
@@ -129,12 +128,29 @@ def extend_standardized_kernel(
 
     source = source.set_index("env_id").loc[source_ids, feature_columns].astype(np.float32)
     extended = projected_features.loc[target_ids, feature_columns].astype(np.float32).copy()
-    extended.loc[source_ids, feature_columns] = source.to_numpy(dtype=np.float32)
+    extended.loc[shared_ids, feature_columns] = source.loc[
+        shared_ids, feature_columns
+    ].to_numpy(dtype=np.float32)
     kernel = kernel_from_features(extended)
-    positions = np.asarray([target_ids.index(value) for value in source_ids], dtype=int)
-    source_block = kernel[np.ix_(positions, positions)]
+    target_shared_positions = np.asarray(
+        [target_positions[value] for value in shared_ids], dtype=int
+    )
+    source_shared_positions = np.asarray(
+        [source_positions[value] for value in shared_ids], dtype=int
+    )
+    extended_shared_block = kernel[
+        np.ix_(target_shared_positions, target_shared_positions)
+    ]
+    source_shared_block = source_kernel[
+        np.ix_(source_shared_positions, source_shared_positions)
+    ]
     max_abs_delta = float(
-        np.max(np.abs(source_block.astype(np.float64) - source_kernel.astype(np.float64)))
+        np.max(
+            np.abs(
+                extended_shared_block.astype(np.float64)
+                - source_shared_block.astype(np.float64)
+            )
+        )
     )
     return kernel, extended, max_abs_delta
 
@@ -241,6 +257,7 @@ def main() -> None:
     output_kernel = out_dir / f"{args.kernel}.npy"
     output_order = out_dir / f"{args.kernel}_order.tsv"
     output_features = out_dir / f"{args.kernel}_features.parquet"
+    output_reconciliation = out_dir / f"{args.kernel}_order_reconciliation.tsv"
     output_manifest = out_dir / "trait_environment_kernel_manifest.tsv"
     output_qc = out_dir / f"{args.kernel}_extension_qc.json"
     np.save(output_kernel, kernel)
@@ -250,27 +267,55 @@ def main() -> None:
     output_row = source_row.copy()
     output_row["kernel_path"] = str(output_kernel)
     output_row["order_path"] = str(output_order)
-    output_row["extension_policy"] = "frozen_feature_projection_preserve_original_block"
+    output_row["extension_policy"] = (
+        "frozen_feature_projection_preserve_shared_original_block"
+    )
     output_row["extension_qc_path"] = str(output_qc)
     pd.DataFrame([output_row]).to_csv(output_manifest, sep="\t", index=False)
 
-    source_ids = set(source_order["env_id"].astype(str))
-    added_ids = [value for value in target_ids if value not in source_ids]
+    source_id_set = set(source_order["env_id"].astype(str))
+    target_id_set = set(target_ids)
+    shared_ids = [value for value in target_ids if value in source_id_set]
+    source_only_ids = [
+        value for value in source_order["env_id"].astype(str) if value not in target_id_set
+    ]
+    added_ids = [value for value in target_ids if value not in source_id_set]
+    reconciliation = pd.DataFrame(
+        [
+            {"env_id": value, "order_reconciliation_status": "shared_frozen_source"}
+            for value in shared_ids
+        ]
+        + [
+            {
+                "env_id": value,
+                "order_reconciliation_status": "source_only_absent_from_recovered_target",
+            }
+            for value in source_only_ids
+        ]
+        + [
+            {"env_id": value, "order_reconciliation_status": "target_only_projected"}
+            for value in added_ids
+        ]
+    )
+    reconciliation.to_csv(output_reconciliation, sep="\t", index=False)
     added = extended_features.loc[added_ids] if added_ids else extended_features.iloc[0:0]
     added_nonzero = int(
         np.count_nonzero(np.linalg.norm(added.to_numpy(dtype=np.float64), axis=1) > 0)
     )
     qc = {
         "status": "PASS",
-        "protocol_version": "trait_environment_frozen_extension_v1",
+        "protocol_version": "trait_environment_frozen_extension_v2",
         "selection_data": "environment_identifiers_and_frozen_environment_features_only",
         "phenotype_values_read": False,
         "outer_test_metrics_read": False,
         "final_holdout_outcomes_read": False,
         "kernel": args.kernel,
         "trait": trait,
+        "extension_policy": "frozen_feature_projection_preserve_shared_original_block",
         "source_environment_count": len(source_order),
         "target_environment_count": len(target_order),
+        "shared_source_target_environment_count": len(shared_ids),
+        "source_only_environment_count": len(source_only_ids),
         "added_environment_count": len(added_ids),
         "added_environment_nonzero_feature_count": added_nonzero,
         "original_block_max_abs_delta": original_block_delta,
@@ -293,7 +338,13 @@ def main() -> None:
         },
         "output_artifacts": {
             str(path): file_sha256(path)
-            for path in [output_kernel, output_order, output_features, output_manifest]
+            for path in [
+                output_kernel,
+                output_order,
+                output_features,
+                output_reconciliation,
+                output_manifest,
+            ]
         },
         "implementation_sha256": file_sha256(Path(__file__)),
     }

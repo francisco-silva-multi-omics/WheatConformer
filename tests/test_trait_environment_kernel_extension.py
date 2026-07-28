@@ -89,25 +89,44 @@ def test_legacy_scaling_schema_uses_certified_feature_columns() -> None:
     assert projected.loc["missing", "temperature__missing"] == 1.0
 
 
-def test_extension_rejects_loss_of_a_frozen_environment() -> None:
+def test_extension_preserves_shared_block_when_source_only_ids_are_absent() -> None:
     source_order = pd.DataFrame({"env_id": ["e1", "e2"]})
     target_order = pd.DataFrame({"env_id": ["e1", "e3"]})
     features = pd.DataFrame({"env_id": ["e1", "e2"], "x": [-1.0, 1.0]})
     source_kernel = kernel_from_features(features[["x"]])
     projected = pd.DataFrame({"x": [-1.0, 0.0]}, index=["e1", "e3"])
 
+    extended, _, delta = extend_standardized_kernel(
+        source_kernel=source_kernel,
+        source_order=source_order,
+        source_features=features,
+        target_order=target_order,
+        projected_features=projected,
+    )
+
+    assert extended.shape == (2, 2)
+    assert delta == 0.0
+    assert extended[0, 0] == source_kernel[0, 0]
+
+
+def test_extension_rejects_disjoint_source_and_target_orders() -> None:
+    source_order = pd.DataFrame({"env_id": ["e1"]})
+    target_order = pd.DataFrame({"env_id": ["e2"]})
+    features = pd.DataFrame({"env_id": ["e1"], "x": [1.0]})
+    projected = pd.DataFrame({"x": [0.0]}, index=["e2"])
+
     try:
         extend_standardized_kernel(
-            source_kernel=source_kernel,
+            source_kernel=np.ones((1, 1), dtype=np.float32),
             source_order=source_order,
             source_features=features,
             target_order=target_order,
             projected_features=projected,
         )
     except ValueError as exc:
-        assert "lost frozen source environments" in str(exc)
+        assert "do not overlap" in str(exc)
     else:
-        raise AssertionError("Expected extension to reject a missing source environment")
+        raise AssertionError("Expected extension to reject disjoint orders")
 
 
 def test_extension_cli_projects_new_environment_without_refitting(
@@ -250,10 +269,24 @@ def test_extension_cli_projects_new_environment_without_refitting(
     qc = json.loads((out_dir / "K_E_TGW_V2_extension_qc.json").read_text())
     extended = np.load(out_dir / "K_E_TGW_V2.npy")
     assert qc["status"] == "PASS"
+    assert qc["protocol_version"] == "trait_environment_frozen_extension_v2"
+    assert (
+        qc["extension_policy"]
+        == "frozen_feature_projection_preserve_shared_original_block"
+    )
     assert qc["source_environment_count"] == 2
     assert qc["target_environment_count"] == 3
+    assert qc["shared_source_target_environment_count"] == 2
+    assert qc["source_only_environment_count"] == 0
     assert qc["added_environment_count"] == 1
     assert qc["added_environment_nonzero_feature_count"] == 1
     assert qc["original_block_max_abs_delta"] <= 5e-6
     assert extended.shape == (3, 3)
     assert np.linalg.eigvalsh(extended.astype(np.float64)).min() >= -1e-6
+    reconciliation = pd.read_csv(
+        out_dir / "K_E_TGW_V2_order_reconciliation.tsv", sep="\t"
+    )
+    assert reconciliation["order_reconciliation_status"].value_counts().to_dict() == {
+        "shared_frozen_source": 2,
+        "target_only_projected": 1,
+    }

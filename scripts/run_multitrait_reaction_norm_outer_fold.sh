@@ -38,7 +38,7 @@ ENVIRONMENT_MODELS_DIR="${REACTION_ENVIRONMENT_MODELS_DIR:-trained_models/reacti
 FREEZE_DIR="${REACTION_SELECTION_FREEZE_DIR:-audit/reaction_norm_explicit_environment_v3_frozen}"
 OUTER_DIR="${REACTION_OUTER_DIR:-model_kernels/reaction_norm_outer_evaluation_v3}"
 OUTER_MODELS_DIR="${REACTION_OUTER_MODELS_DIR:-trained_models/reaction_norm_outer_evaluation_v3_runs}"
-TRAIT_ENV_EXTENSION_DIR="${REACTION_TRAIT_ENV_EXTENSION_DIR:-$OUTER_DIR/trait_environment_frozen_extension_v1}"
+TRAIT_ENV_EXTENSION_DIR="${REACTION_TRAIT_ENV_EXTENSION_DIR:-$OUTER_DIR/trait_environment_frozen_extension_v2}"
 TRAIT_ENV_EXTENSION_IMPLEMENTATION="$CODE_ROOT/server_training_pipeline/extend_trait_environment_kernel.py"
 FORCE="${REACTION_OUTER_FORCE:-0}"
 
@@ -151,13 +151,22 @@ output_artifacts = qc.get("output_artifacts", {})
 required_sources = [source_manifest, target_order, envdata, locdata, windows]
 checks = [
     qc.get("status") == "PASS",
+    qc.get("protocol_version") == "trait_environment_frozen_extension_v2",
     qc.get("kernel") == contract.get("kernel") == "K_E_TGW_V2",
+    qc.get("extension_policy") == contract.get("policy") == "frozen_feature_projection_preserve_shared_original_block",
     qc.get("phenotype_values_read") is False,
     qc.get("outer_test_metrics_read") is False,
     qc.get("final_holdout_outcomes_read") is False,
     qc.get("implementation_sha256") == contract.get("implementation_sha256") == sha(implementation),
     float(qc.get("original_block_max_abs_delta", float("inf"))) <= float(contract["original_block_max_abs_tolerance"]),
+    int(qc.get("shared_source_target_environment_count", 0)) > 0,
     int(qc.get("added_environment_count", 0)) > 0,
+    int(qc.get("source_environment_count", -1))
+        == int(qc.get("shared_source_target_environment_count", -2))
+        + int(qc.get("source_only_environment_count", -3)),
+    int(qc.get("target_environment_count", -1))
+        == int(qc.get("shared_source_target_environment_count", -2))
+        + int(qc.get("added_environment_count", -3)),
     all(source_artifacts.get(str(path.resolve())) == sha(path.resolve()) for path in required_sources),
     output_artifacts.get(str(output_manifest.resolve())) == sha(output_manifest.resolve()),
 ]
