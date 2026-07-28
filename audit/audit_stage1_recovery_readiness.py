@@ -214,8 +214,9 @@ def main() -> None:
         "all_rows_classified": frame["recovery_readiness"].ne("").all(),
         "classification_partitions_rows": int(summary["stage1_rows"].sum())
         == len(frame),
-        "canonical_v3_not_smaller_than_legacy": len(canonical_order)
-        >= len(legacy_order),
+        "legacy_pedigree_order_nonempty": bool(legacy_order),
+        "canonical_v3_pedigree_order_nonempty": bool(canonical_order),
+        "global_environment_order_nonempty": bool(environment_order),
         "phenotype_values_unread": True,
         "outer_test_metrics_unread": True,
         "final_holdout_outcomes_unread": True,

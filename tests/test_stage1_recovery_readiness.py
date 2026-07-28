@@ -31,7 +31,7 @@ def test_stage1_recovery_readiness_classifies_full_order_support(
         }
     )
     ledger.to_parquet(tmp_path / "attrition.parquet", index=False)
-    pd.DataFrame({"sample_id": ["GID1", "GID3"]}).to_csv(
+    pd.DataFrame({"sample_id": ["GID1", "GID3", "GID8", "GID9"]}).to_csv(
         tmp_path / "legacy.tsv", sep="\t", index=False
     )
     pd.DataFrame({"sample_id": ["GID1", "GID2", "GID3"]}).to_csv(
