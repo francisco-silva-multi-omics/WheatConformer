@@ -59,6 +59,11 @@ def main() -> None:
             "The v1 balanced-loss trainer is restricted to inner selection; "
             "outer evaluation requires a separately frozen v5 contract"
         )
+    scenario = option_value(remaining, "--evaluation-scenario")
+    if scenario != protocol.get("selection_scenario"):
+        raise SystemExit(
+            "Balanced-loss scenario disagrees with the frozen selection scenario"
+        )
     reaction_candidate = option_value(remaining, "--reaction-candidate")
     environment_architecture = option_value(
         remaining, "--environment-architecture"

@@ -34,6 +34,28 @@ def policy(name: str, alpha_environment: float, alpha_genotype: float) -> dict:
     }
 
 
+def test_frozen_loss_screen_uses_the_frozen_reaction_selection_scenario() -> None:
+    root = Path(__file__).resolve().parents[1]
+    loss = json.loads(
+        (
+            root
+            / "server_training_pipeline"
+            / "reaction_norm_loss_balance_protocol_v1.json"
+        ).read_text(encoding="utf-8")
+    )
+    reaction = json.loads(
+        (
+            root / "server_training_pipeline" / "reaction_norm_protocol_v1.json"
+        ).read_text(encoding="utf-8")
+    )
+    scenarios = {
+        scenario
+        for phase in ("phase_1", "confirmation")
+        for scenario in loss[phase]["outer_folds_by_scenario"]
+    }
+    assert scenarios == {loss["selection_scenario"]} == {reaction["scenario"]}
+
+
 def training_frame() -> pd.DataFrame:
     return pd.DataFrame(
         {
@@ -92,6 +114,7 @@ def loss_protocol(path: Path, candidates: list[dict] | None = None) -> Path:
         "final_holdout_outcomes_read": False,
         "selected_reaction_candidate": "reaction_norm_identity_covariance",
         "selected_environment_architecture": "explicit_E_REACTION_NORM_V1",
+        "selection_scenario": "unseen_genotypes",
         "precision_weight_power": 0.0,
         "candidates": candidates
         or [
@@ -175,6 +198,8 @@ def test_balanced_wrapper_records_policy_and_restores_base_dataset(
             "trait_environment_balanced",
             "--evaluation-stage",
             "inner_selection",
+            "--evaluation-scenario",
+            "unseen_genotypes",
             "--reaction-candidate",
             "reaction_norm_identity_covariance",
             "--environment-architecture",

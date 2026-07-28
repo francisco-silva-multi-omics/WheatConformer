@@ -7,6 +7,7 @@
   "final_holdout_outcomes_read": false,
   "selected_reaction_candidate": "reaction_norm_identity_covariance",
   "selected_environment_architecture": "explicit_E_REACTION_NORM_V1",
+  "selection_scenario": "unseen_genotypes",
   "count_fit_partition": "inner_training_only",
   "precision_weight_power": 0.0,
   "trait_total_loss_mass": "equal",
@@ -34,24 +35,16 @@
     }
   ],
   "phase_1": {
-    "name": "representative_outer_training_folds",
+    "name": "representative_unseen_genotype_outer_training_fold",
     "outer_folds_by_scenario": {
-      "unseen_environments": [0],
-      "unseen_genotypes": [0],
-      "unseen_genotypes_and_environments": [0],
-      "temporal_holdout": [0],
-      "country_holdout": [0]
+      "unseen_genotypes": [0]
     },
     "inner_folds": 3
   },
   "confirmation": {
-    "name": "complete_inner_validation_grid",
+    "name": "complete_unseen_genotype_inner_validation_grid",
     "outer_folds_by_scenario": {
-      "unseen_environments": [0, 1, 2, 3, 4],
-      "unseen_genotypes": [0, 1, 2, 3, 4],
-      "unseen_genotypes_and_environments": [0, 1, 2, 3, 4],
-      "temporal_holdout": [0, 1, 2],
-      "country_holdout": [0, 1, 2, 3, 4]
+      "unseen_genotypes": [0, 1, 2, 3, 4]
     },
     "inner_folds": 3,
     "candidates": "current_reference_plus_phase_1_winner_only"

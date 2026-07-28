@@ -50,6 +50,11 @@ def main() -> None:
     environment = json.loads(args.environment_protocol.read_text(encoding="utf-8"))
     loss = json.loads(args.loss_balance_protocol.read_text(encoding="utf-8"))
     leverage = json.loads(args.leverage_provenance.read_text(encoding="utf-8"))
+    loss_scenarios = {
+        str(scenario)
+        for phase in ("phase_1", "confirmation")
+        for scenario in loss.get(phase, {}).get("outer_folds_by_scenario", {})
+    }
     checks = {
         "split_contract_frozen": contract.get("status") == "frozen",
         "ledger_matches_contract": contract.get("ledger_sha256")
@@ -77,6 +82,9 @@ def main() -> None:
             "final_holdout_outcomes_read"
         )
         is False,
+        "loss_selection_scenario_matches_reaction_protocol": loss_scenarios
+        == {str(reaction.get("scenario"))}
+        == {str(loss.get("selection_scenario"))},
         "leverage_audit_pass": leverage.get("status") == "PASS",
         "leverage_audit_phenotype_blind": leverage.get("phenotype_values_read")
         is False,
