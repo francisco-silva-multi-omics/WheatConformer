@@ -17,6 +17,7 @@ ENVIRONMENT_PROTOCOL="${REACTION_ENVIRONMENT_PROTOCOL:-$CODE_ROOT/server_trainin
 OUTER_PROTOCOL="${REACTION_OUTER_PROTOCOL:-$CODE_ROOT/server_training_pipeline/reaction_norm_outer_evaluation_protocol_v3.json}"
 HIERARCHY_PROTOCOL="${REACTION_TRIAL_HIERARCHY_PROTOCOL:-}"
 SUPPORT_POLICY="${REACTION_OUTER_SUPPORT_POLICY:-$CODE_ROOT/server_training_pipeline/outer_ensemble_support_policy.json}"
+SUPPORT_AMENDMENT="${REACTION_OUTER_SUPPORT_AMENDMENT:-}"
 BASE_EVALUATION_DIR="${REACTION_BASE_EVALUATION_DIR:-model_kernels/final_nested_evaluation_v5_fixed}"
 LEDGER="${REACTION_LEDGER:-model_kernels/multitrait_pedigree_env_uniform_tgw_certified/multitrait_pedigree_uniform_tgw_certified_observations.parquet}"
 TRAIT_ORDER="${REACTION_TRAIT_ORDER:-model_kernels/multitrait_pedigree_env_uniform_tgw_certified/multitrait_pedigree_uniform_tgw_certified_trait_order.tsv}"
@@ -84,6 +85,10 @@ do
 done
 if [[ -n "$HIERARCHY_PROTOCOL" && ! -s "$HIERARCHY_PROTOCOL" ]]; then
   echo "Required routed hierarchy protocol is missing: $HIERARCHY_PROTOCOL" >&2
+  exit 2
+fi
+if [[ -n "$SUPPORT_AMENDMENT" && ! -s "$SUPPORT_AMENDMENT" ]]; then
+  echo "Required outer support amendment is missing: $SUPPORT_AMENDMENT" >&2
   exit 2
 fi
 
@@ -635,11 +640,19 @@ done
 
 ensemble_name="final_nested_reaction_norm_${SCENARIO}_outer${OUTER_FOLD}"
 ensemble_dir="$OUTER_MODELS_DIR/$ensemble_name"
+support_amendment_args=()
+if [[ -n "$SUPPORT_AMENDMENT" ]]; then
+  support_amendment_args=(
+    --support-amendment "$SUPPORT_AMENDMENT"
+    --outer-protocol "$OUTER_PROTOCOL"
+  )
+fi
 "$PYTHON" -m server_training_pipeline.ensemble_nested_outer_predictions \
   --models-root "$OUTER_MODELS_DIR" \
   --run-glob "nested_outer_member_reaction_norm_${SCENARIO}_outer${OUTER_FOLD}_inner*" \
   --expected-inner-folds "$MEMBER_COUNT" \
   --support-policy "$SUPPORT_POLICY" \
+  "${support_amendment_args[@]}" \
   --out-dir "$ensemble_dir" \
   --prefix "$ensemble_name"
 

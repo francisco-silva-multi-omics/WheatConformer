@@ -200,6 +200,49 @@ def test_routed_outer_protocol_binds_canonical_git_text_bytes() -> None:
         )
 
 
+def test_routed_support_amendment_is_reporting_only_and_exploratory() -> None:
+    protocol_path = (
+        ROOT
+        / "server_training_pipeline"
+        / "reaction_norm_routed_hierarchy_outer_protocol_v1.json"
+    )
+    protocol = json.loads(protocol_path.read_text(encoding="utf-8"))
+    amendment = json.loads(
+        (
+            ROOT
+            / "server_training_pipeline"
+            / "routed_outer_ensemble_support_amendment_v1.json"
+        ).read_text(encoding="utf-8")
+    )
+    canonical_protocol = protocol_path.read_bytes().replace(b"\r\n", b"\n")
+    assert amendment["outer_protocol_sha256"] == hashlib.sha256(
+        canonical_protocol
+    ).hexdigest()
+    validator = (
+        ROOT
+        / "server_training_pipeline"
+        / "verify_routed_outer_support_amendment.py"
+    )
+    canonical_validator = validator.read_bytes().replace(b"\r\n", b"\n")
+    assert amendment["validator_sha256"] == hashlib.sha256(
+        canonical_validator
+    ).hexdigest()
+    assert amendment["minimum_test_members_unchanged"] == 2
+    assert amendment["action"] == (
+        "exclude_below_minimum_from_ensemble_and_metrics"
+    )
+    exploratory = {
+        trait
+        for trait, policy in protocol["trait_reporting_policy"].items()
+        if trait != "default" and str(policy).startswith("exploratory_")
+    }
+    assert set(amendment["allowed_exploratory_traits"]) == exploratory
+    assert amendment["outer_test_outcome_values_used"] is False
+    assert amendment["outer_test_metrics_used_for_selection"] is False
+    assert amendment["model_training_modified"] is False
+    assert amendment["model_selection_modified"] is False
+
+
 def test_routed_source_decision_requires_exact_artifact_hashes(tmp_path: Path) -> None:
     artifact = tmp_path / "decision.tsv"
     artifact.write_text("decision\naccepted\n", encoding="utf-8")
@@ -376,7 +419,9 @@ def test_routed_outer_launcher_freezes_route_and_keeps_holdout_sealed() -> None:
     assert "REACTION_TRIAL_HIERARCHY_PROTOCOL" in suite
     assert "verify_reaction_norm_outer_evaluation" in suite
     assert "final holdout remains sealed" in suite
+    assert "routed_outer_ensemble_support_amendment_v1.json" in suite
     assert "REACTION_TRIAL_HIERARCHY_PROTOCOL" in fold
+    assert "REACTION_OUTER_SUPPORT_AMENDMENT" in fold
     assert 'RUN_CANDIDATE="$SELECTED_CANDIDATE"' in fold
     assert "train_multitrait_reaction_norm_trial_hierarchy_tf" in fold
     assert (

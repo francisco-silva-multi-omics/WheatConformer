@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import shutil
 import sys
 from pathlib import Path
 
@@ -34,6 +35,9 @@ from server_training_pipeline.select_nested_hyperparameters import main as selec
 from server_training_pipeline.observation_weights import (
     apply_precision_weight_transform,
     fit_precision_weight_transform,
+)
+from server_training_pipeline.verify_routed_outer_support_amendment import (
+    main as verify_support_amendment,
 )
 
 
@@ -818,3 +822,150 @@ def test_outer_ensemble_support_policy_averages_available_members(
     member_two.to_csv(member_two_path, sep="\t", index=False)
     with pytest.raises(ValueError, match="insufficient structurally eligible members"):
         ensemble_outer()
+
+    outer_protocol = tmp_path / "outer_protocol.json"
+    outer_protocol.write_text(
+        json.dumps(
+            {
+                "status": "frozen",
+                "scenarios": {"temporal_holdout": 1},
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    validator_path = (
+        Path(__file__).resolve().parents[1]
+        / "server_training_pipeline"
+        / "verify_routed_outer_support_amendment.py"
+    )
+    amendment = tmp_path / "support_amendment.json"
+    amendment.write_text(
+        json.dumps(
+            {
+                "policy_version": "test_amendment",
+                "status": "frozen_reporting_amendment",
+                "parent_support_policy_sha256": hashlib.sha256(
+                    policy.read_bytes()
+                ).hexdigest(),
+                "outer_protocol_sha256": hashlib.sha256(
+                    outer_protocol.read_bytes()
+                ).hexdigest(),
+                "validator_sha256": hashlib.sha256(
+                    validator_path.read_bytes()
+                ).hexdigest(),
+                "minimum_test_members_unchanged": 2,
+                "action": "exclude_below_minimum_from_ensemble_and_metrics",
+                "allowed_exploratory_traits": ["SPARSE"],
+                "outer_test_outcome_values_used": False,
+                "outer_test_metrics_read": False,
+                "outer_test_metrics_used_for_selection": False,
+                "model_training_modified": False,
+                "model_selection_modified": False,
+                "final_holdout_outcomes_read": False,
+                "fail_on_primary_trait_exclusion": True,
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "ensemble_nested_outer_predictions",
+            "--models-root",
+            str(models),
+            "--run-glob",
+            "member_*",
+            "--expected-inner-folds",
+            "3",
+            "--support-policy",
+            str(policy),
+            "--support-amendment",
+            str(amendment),
+            "--outer-protocol",
+            str(outer_protocol),
+            "--out-dir",
+            str(out),
+            "--prefix",
+            "combined",
+        ],
+    )
+    disallowed_amendment = json.loads(amendment.read_text(encoding="utf-8"))
+    disallowed_amendment["allowed_exploratory_traits"] = ["OTHER_EXPLORATORY"]
+    amendment.write_text(json.dumps(disallowed_amendment), encoding="utf-8")
+    with pytest.raises(ValueError, match=r"disallowed_primary_traits=\['SPARSE'\]"):
+        ensemble_outer()
+    disallowed_amendment["allowed_exploratory_traits"] = ["SPARSE"]
+    amendment.write_text(json.dumps(disallowed_amendment), encoding="utf-8")
+    ensemble_outer()
+    repaired = (
+        pd.read_parquet(out / "combined_predictions.parquet")
+        if (out / "combined_predictions.parquet").exists()
+        else pd.read_csv(out / "combined_predictions.tsv.gz", sep="\t")
+    )
+    repaired_test = repaired[repaired["split"].eq("test")]
+    assert "single_member_test" not in set(
+        repaired_test["canonical_observation_id"]
+    )
+    assert repaired_test["ensemble_member_count"].min() == 2
+    exclusions = pd.read_csv(
+        out / "combined_structural_exclusions.tsv", sep="\t"
+    )
+    assert exclusions[["canonical_observation_id", "trait_name_canonical"]].to_dict(
+        "records"
+    ) == [
+        {
+            "canonical_observation_id": "single_member_test",
+            "trait_name_canonical": "SPARSE",
+        }
+    ]
+    repaired_metadata = json.loads(
+        (out / "combined_run_metadata.json").read_text(encoding="utf-8")
+    )
+    assert repaired_metadata["ensemble"]["excluded_test_observation_count"] == 1
+    assert repaired_metadata["ensemble"]["excluded_test_traits"] == ["SPARSE"]
+    assert repaired_metadata["ensemble"]["support_amendment"][
+        "outer_test_outcome_values_used"
+    ] is False
+
+    for inner in range(3):
+        shutil.copytree(
+            models / f"member_{inner}",
+            models
+            / (
+                "nested_outer_member_reaction_norm_temporal_holdout_"
+                f"outer0_inner{inner}"
+            ),
+        )
+    shutil.copytree(
+        out,
+        models / "final_nested_reaction_norm_temporal_holdout_outer0",
+    )
+    amendment_audit = tmp_path / "amendment_audit"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "verify_routed_outer_support_amendment",
+            "--models-dir",
+            str(models),
+            "--support-amendment",
+            str(amendment),
+            "--support-policy",
+            str(policy),
+            "--outer-protocol",
+            str(outer_protocol),
+            "--out-dir",
+            str(amendment_audit),
+        ],
+    )
+    verify_support_amendment()
+    amendment_provenance = json.loads(
+        (
+            amendment_audit
+            / "routed_outer_support_amendment_provenance.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert amendment_provenance["status"] == "PASS"
+    assert amendment_provenance["excluded_rows"] == 1

@@ -16,6 +16,7 @@ KNOWN_HIERARCHY_PROTOCOL="$CODE_ROOT/server_training_pipeline/reaction_norm_tria
 TRANSFER_GUARD_PROTOCOL="$CODE_ROOT/server_training_pipeline/reaction_norm_trial_hierarchy_cross_scenario_protocol_v1.json"
 OUTER_PROTOCOL="$CODE_ROOT/server_training_pipeline/reaction_norm_routed_hierarchy_outer_protocol_v1.json"
 SUPPORT_POLICY="$CODE_ROOT/server_training_pipeline/outer_ensemble_support_policy.json"
+SUPPORT_AMENDMENT="$CODE_ROOT/server_training_pipeline/routed_outer_ensemble_support_amendment_v1.json"
 EVALUATION_DIR="${ROUTED_HIERARCHY_EVALUATION_DIR:-model_kernels/reaction_norm_trial_hierarchy_evaluation_v1}"
 LEDGER_DIR="${ROUTED_HIERARCHY_LEDGER_DIR:-model_kernels/multitrait_stage1_recovered_v1}"
 LEDGER_PREFIX="${ROUTED_HIERARCHY_LEDGER_PREFIX:-multitrait_stage1_recovered_v1}"
@@ -41,6 +42,7 @@ BASE_TRAINER="$CODE_ROOT/server_training_pipeline/train_multitrait_reaction_norm
 FACTORIZATION="$CODE_ROOT/server_training_pipeline/kernel_factorization.py"
 RUN_VERIFIER="$CODE_ROOT/server_training_pipeline/verify_reaction_norm_run.py"
 OUTER_VERIFIER="$CODE_ROOT/server_training_pipeline/verify_reaction_norm_outer_evaluation.py"
+SUPPORT_AMENDMENT_VERIFIER="$CODE_ROOT/server_training_pipeline/verify_routed_outer_support_amendment.py"
 mkdir -p "$FREEZE_DIR" "$OUTER_DIR" "$MODELS_DIR" "$SUMMARY_DIR" "$AUDIT_DIR" logs
 
 timestamp() { date '+%Y-%m-%d %H:%M:%S'; }
@@ -49,10 +51,11 @@ log() { printf '[%s] %s\n' "$(timestamp)" "$*"; }
 for required in \
   "$REACTION_PROTOCOL" "$ENVIRONMENT_PROTOCOL" "$EVALUATION_PROTOCOL" \
   "$KNOWN_HIERARCHY_PROTOCOL" "$TRANSFER_GUARD_PROTOCOL" "$OUTER_PROTOCOL" \
-  "$SUPPORT_POLICY" "$LEDGER" "$TRAIT_ORDER" "$MANIFEST" "$CONTRACT" \
+  "$SUPPORT_POLICY" "$SUPPORT_AMENDMENT" "$LEDGER" "$TRAIT_ORDER" "$MANIFEST" "$CONTRACT" \
   "$FINAL_HOLDOUT" "$KNOWN_CONFIRMATION" "$TRANSFER_GUARD" \
   "$BASE_MODEL_DIR/${BASE_PREFIX}_K_E_unique_order.tsv" "$TRAIT_ENV_MANIFEST" \
-  "$TRAINER" "$BASE_TRAINER" "$FACTORIZATION" "$RUN_VERIFIER" "$OUTER_VERIFIER"
+  "$TRAINER" "$BASE_TRAINER" "$FACTORIZATION" "$RUN_VERIFIER" "$OUTER_VERIFIER" \
+  "$SUPPORT_AMENDMENT_VERIFIER"
 do
   [[ -s "$required" ]] || { echo "Missing routed outer input: $required" >&2; exit 2; }
 done
@@ -80,6 +83,7 @@ export REACTION_ENVIRONMENT_PROTOCOL="$ENVIRONMENT_PROTOCOL"
 export REACTION_OUTER_PROTOCOL="$OUTER_PROTOCOL"
 export REACTION_TRIAL_HIERARCHY_PROTOCOL="$OUTER_PROTOCOL"
 export REACTION_OUTER_SUPPORT_POLICY="$SUPPORT_POLICY"
+export REACTION_OUTER_SUPPORT_AMENDMENT="$SUPPORT_AMENDMENT"
 export REACTION_BASE_EVALUATION_DIR="$EVALUATION_DIR"
 export REACTION_LEDGER="$LEDGER"
 export REACTION_TRAIT_ORDER="$TRAIT_ORDER"
@@ -107,6 +111,12 @@ for scenario_line in "${SCENARIO_GRID[@]}"; do
       . "$scenario" "$outer_fold"
   done
 done
+
+log "VERIFY phenotype-blind routed structural exclusions before metric summarization"
+"$PYTHON" -m server_training_pipeline.verify_routed_outer_support_amendment \
+  --models-dir "$MODELS_DIR" --support-amendment "$SUPPORT_AMENDMENT" \
+  --support-policy "$SUPPORT_POLICY" --outer-protocol "$OUTER_PROTOCOL" \
+  --out-dir "$AUDIT_DIR/support_amendment"
 
 log "SUMMARIZE locked routed outer-test predictions"
 "$PYTHON" -m server_training_pipeline.summarize_nested_evaluation \
