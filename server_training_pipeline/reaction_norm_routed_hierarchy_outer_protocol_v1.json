@@ -182,7 +182,7 @@
   "implementation": {
     "hierarchy_trainer_sha256": "0314319c0de9e7f6e3d7757b0a9d3aa242cd5602f4937e457583dbe78bd2cd8c",
     "base_trainer_sha256": "1de81976c65e315f73cf256e7c055ad583742344d915b61c0e2eeb0837752a8b",
-    "factorization_sha256": "ee89c928eeb134c7dc721dc2e7d83f15af9602d485a2c6ce58a53e1d18a7566c",
+    "factorization_sha256": "7af3d084b692e96cac4832bcbc8a71a7f2ea1ea86cd23bdb1d17d1f1bc2f64df",
     "run_verifier_sha256": "7e9422f6e3585e2096a4e55c45e863dfc0d61708913489fbf867801b9d2b4f1d",
     "outer_verifier_sha256": "6d158c38f5cd459fb0954e11773549eaced5ba6ff9350e7574f1f849abb297fc"
   },

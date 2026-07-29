@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 from pathlib import Path
 
 import numpy as np
@@ -161,11 +162,47 @@ def test_routed_outer_protocol_uses_hierarchy_only_for_known_environments() -> N
     assert protocol["model_contract"]["outer_model_fit_count"] == 69
 
 
+def test_routed_outer_protocol_binds_canonical_git_text_bytes() -> None:
+    protocol = json.loads(
+        (
+            ROOT
+            / "server_training_pipeline"
+            / "reaction_norm_routed_hierarchy_outer_protocol_v1.json"
+        ).read_text(encoding="utf-8")
+    )
+    implementations = {
+        "hierarchy_trainer_sha256": (
+            ROOT
+            / "server_training_pipeline"
+            / "train_multitrait_reaction_norm_trial_hierarchy_tf.py"
+        ),
+        "base_trainer_sha256": (
+            ROOT
+            / "server_training_pipeline"
+            / "train_multitrait_reaction_norm_tf.py"
+        ),
+        "factorization_sha256": (
+            ROOT / "server_training_pipeline" / "kernel_factorization.py"
+        ),
+        "run_verifier_sha256": (
+            ROOT / "server_training_pipeline" / "verify_reaction_norm_run.py"
+        ),
+        "outer_verifier_sha256": (
+            ROOT
+            / "server_training_pipeline"
+            / "verify_reaction_norm_outer_evaluation.py"
+        ),
+    }
+    for label, path in implementations.items():
+        canonical_bytes = path.read_bytes().replace(b"\r\n", b"\n")
+        assert hashlib.sha256(canonical_bytes).hexdigest() == (
+            protocol["implementation"][label]
+        )
+
+
 def test_routed_source_decision_requires_exact_artifact_hashes(tmp_path: Path) -> None:
     artifact = tmp_path / "decision.tsv"
     artifact.write_text("decision\naccepted\n", encoding="utf-8")
-    import hashlib
-
     digest = hashlib.sha256(artifact.read_bytes()).hexdigest()
     provenance = tmp_path / "provenance.json"
     provenance.write_text(
