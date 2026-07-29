@@ -1,0 +1,80 @@
+{
+  "protocol_version": "reaction_norm_rcp_projection_v1",
+  "status": "planning_only_projection_blocked_pending_covariate_certification",
+  "phenotype_values_allowed": false,
+  "outer_test_outcomes_allowed": false,
+  "final_holdout_outcomes_allowed": false,
+  "model_selection_allowed": false,
+  "historical_environment_architecture": "E_REACTION_NORM_V1",
+  "future_environment_architecture": "E_REACTION_NORM_RCP_V1",
+  "scenario_labels_allowed": [
+    "RCP2.6",
+    "RCP4.5",
+    "RCP6.0",
+    "RCP8.5",
+    "SSP1-2.6",
+    "SSP2-4.5",
+    "SSP3-7.0",
+    "SSP5-8.5"
+  ],
+  "projection_unit": "site_x_climate_model_x_scenario_x_period_x_management_policy_x_sowing_policy",
+  "required_daily_climate_variables": [
+    "tasmin",
+    "tasmax",
+    "pr",
+    "rsds",
+    "relative_humidity_or_specific_humidity_plus_surface_pressure"
+  ],
+  "optional_daily_climate_variables": [
+    "sfcWind",
+    "mrso",
+    "mrro"
+  ],
+  "bias_correction": {
+    "required": true,
+    "fit_reference": "historical_observed_or_reanalysis_at_the_same_site",
+    "fit_partition": "historical_data_only",
+    "method_must_be_recorded": true
+  },
+  "sowing_policy": {
+    "required": true,
+    "allowed": [
+      "fixed_historical_day_of_year",
+      "explicit_scenario_day_of_year",
+      "rule_based_temperature_or_moisture_trigger"
+    ],
+    "target_phenology_dates_forbidden": true
+  },
+  "management_policy": {
+    "required": true,
+    "allowed": [
+      "fixed_historical_management",
+      "explicit_management_scenario"
+    ],
+    "silent_historical_copy_for_unknown_future_management_forbidden": true
+  },
+  "ensemble_policy": {
+    "retain_climate_model_and_realization_dimension": true,
+    "average_features_before_prediction": false,
+    "report_modelwise_predictions_and_ensemble_quantiles": true
+  },
+  "range_certification": {
+    "reference": "fold_local_outer_training_E_REACTION_NORM_V1",
+    "minimum_feature_population_fraction": 1.0,
+    "maximum_environment_fraction_with_any_nonfinite_feature": 0.0,
+    "moderate_absolute_z": 3.0,
+    "extreme_absolute_z": 5.0,
+    "hard_absolute_z_limit": 8.0,
+    "maximum_source_feature_fraction_above_extreme_z_per_environment": 0.1,
+    "require_every_fold_reference": true,
+    "projection_allowed_only_after_status": "PASS"
+  },
+  "output_contract": {
+    "raw_matrix": "E_REACTION_NORM_RCP_V1_raw.parquet",
+    "fold_standardized_matrix_pattern": "folds/{scenario}/outer_{fold}/E_REACTION_NORM_RCP_V1.parquet",
+    "feature_population_lineage": "E_REACTION_NORM_RCP_V1_feature_population_lineage.tsv",
+    "range_feature_diagnostics": "E_REACTION_NORM_RCP_V1_range_by_feature.tsv",
+    "range_environment_diagnostics": "E_REACTION_NORM_RCP_V1_range_by_environment.tsv",
+    "certification": "E_REACTION_NORM_RCP_V1_covariate_certification.json"
+  }
+}
