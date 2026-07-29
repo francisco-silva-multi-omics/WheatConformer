@@ -18,6 +18,35 @@ from .train_multitrait_multikernel_tf import regression_metrics
 REFERENCE = "current_reaction_norm"
 
 
+def scenario_noninferiority_pass(
+    scenario_summary: pd.DataFrame,
+    candidate: str,
+    acceptance: dict[str, object],
+) -> bool:
+    required = set(map(str, acceptance.get("required_scenarios", [])))
+    if not required:
+        return True
+    selected = scenario_summary[
+        scenario_summary["candidate"].eq(candidate)
+        & scenario_summary["scenario"].isin(required)
+    ]
+    return bool(
+        set(selected["scenario"]) == required
+        and selected["relative_normalized_rmse_gain_mean"].ge(
+            -float(acceptance["maximum_scenario_relative_nrmse_loss"])
+        ).all()
+        and selected["normalized_rmse_win_rate"].ge(
+            float(acceptance["minimum_scenario_fold_win_rate"])
+        ).all()
+        and selected["pearson_gain_mean"].ge(
+            -float(acceptance["maximum_scenario_pearson_drop"])
+        ).all()
+        and selected["calibration_error_delta_mean"].le(
+            float(acceptance["maximum_scenario_calibration_error_increase"])
+        ).all()
+    )
+
+
 def load_run(run_dir: Path) -> tuple[dict[str, object], pd.DataFrame, pd.DataFrame]:
     metadata = json.loads(
         unique_file(run_dir, "*_run_metadata.json").read_text(encoding="utf-8")
@@ -291,6 +320,23 @@ def main() -> None:
         )
         .reset_index()
     )
+    scenario_summary = (
+        paired.groupby(["candidate", "scenario"], sort=True)
+        .agg(
+            paired_scenario_folds=("inner_fold", "size"),
+            relative_normalized_rmse_gain_mean=(
+                "relative_normalized_rmse_gain",
+                "mean",
+            ),
+            normalized_rmse_win_rate=(
+                "relative_normalized_rmse_gain",
+                lambda values: float((values > 0).mean()),
+            ),
+            pearson_gain_mean=("pearson_gain", "mean"),
+            calibration_error_delta_mean=("calibration_error_delta", "mean"),
+        )
+        .reset_index()
+    )
     trait_summary = (
         trait_paired.groupby(["candidate", "trait_name_canonical"], sort=True)
         .agg(
@@ -323,6 +369,7 @@ def main() -> None:
             subset_summary["candidate"].eq(row.candidate)
             & subset_summary["recovery_subset"].eq("retained_reference")
         ]
+        required_scenarios = set(acceptance.get("required_scenarios", []))
         guards = {
             "overall_gain": row.relative_normalized_rmse_gain_mean
             >= float(acceptance["minimum_relative_normalized_rmse_gain"]),
@@ -339,6 +386,10 @@ def main() -> None:
                 -float(acceptance["maximum_primary_trait_relative_nrmse_loss"])
             ).all(),
         }
+        if required_scenarios:
+            guards["scenario_noninferiority"] = scenario_noninferiority_pass(
+                scenario_summary, str(row.candidate), acceptance
+            )
         decisions.append(
             {
                 "candidate": row.candidate,
@@ -372,6 +423,8 @@ def main() -> None:
         "subsets": args.out_dir / "trial_hierarchy_inner_screen_subset_metrics.tsv",
         "trait_summary": args.out_dir / "trial_hierarchy_inner_screen_trait_summary.tsv",
         "subset_summary": args.out_dir / "trial_hierarchy_inner_screen_subset_summary.tsv",
+        "scenario_summary": args.out_dir
+        / "trial_hierarchy_inner_screen_scenario_summary.tsv",
         "decision": args.out_dir / "trial_hierarchy_inner_screen_decision.tsv",
     }
     for frame, key in (
@@ -381,6 +434,7 @@ def main() -> None:
         (subsets, "subsets"),
         (trait_summary, "trait_summary"),
         (subset_summary, "subset_summary"),
+        (scenario_summary, "scenario_summary"),
         (decision, "decision"),
     ):
         frame.to_csv(artifacts[key], sep="\t", index=False)

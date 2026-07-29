@@ -76,7 +76,15 @@ def main() -> None:
             "requires a separately frozen protocol"
         )
     scenario = option_value(remaining, "--evaluation-scenario")
-    if scenario != protocol.get("selection_scenario"):
+    allowed_scenarios = set(
+        map(
+            str,
+            protocol.get(
+                "selection_scenarios", [protocol.get("selection_scenario", "")]
+            ),
+        )
+    )
+    if scenario not in allowed_scenarios:
         raise SystemExit("Hierarchy scenario disagrees with its frozen protocol")
     if option_value(remaining, "--reaction-candidate") != protocol.get(
         "selected_reaction_candidate"
@@ -262,7 +270,12 @@ def main() -> None:
     base.make_dataset = hierarchical_dataset
     original_argv = sys.argv
     try:
-        sys.argv = [original_argv[0], *remaining]
+        sys.argv = [
+            original_argv[0],
+            *remaining,
+            "--inner-selection-scenario-protocol",
+            str(protocol_path),
+        ]
         base.main()
     finally:
         sys.argv = original_argv

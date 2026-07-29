@@ -15,6 +15,9 @@ from server_training_pipeline.final_evaluation_contract import load_protocol
 from server_training_pipeline.prepare_reaction_norm_trial_hierarchy_screen import (
     write_freeze,
 )
+from server_training_pipeline.summarize_reaction_norm_trial_hierarchy_screen import (
+    scenario_noninferiority_pass,
+)
 from server_training_pipeline.trial_hierarchy import (
     fit_hierarchy_support,
     hierarchy_indices,
@@ -64,6 +67,66 @@ def test_trial_hierarchy_protocol_is_frozen_before_metrics() -> None:
     assert hierarchy["outer_test_metrics_read"] is False
     assert hierarchy["final_holdout_outcomes_read"] is False
     assert hierarchy["selected_loss"] == "current_trait_row_balanced"
+
+
+def test_cross_scenario_guard_is_frozen_and_bound_to_confirmation() -> None:
+    protocol = json.loads(
+        (
+            ROOT
+            / "server_training_pipeline"
+            / "reaction_norm_trial_hierarchy_cross_scenario_protocol_v1.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert protocol["status"] == "frozen_before_inner_validation"
+    assert protocol["outer_test_metrics_read"] is False
+    assert protocol["final_holdout_outcomes_read"] is False
+    assert set(protocol["selection_scenarios"]) == {
+        "unseen_environments",
+        "unseen_genotypes_and_environments",
+        "temporal_holdout",
+        "country_holdout",
+    }
+    assert protocol["source_confirmation"]["selected_candidate"] == (
+        "trial_and_environment_intercepts"
+    )
+    assert set(protocol["acceptance"]["required_scenarios"]) == set(
+        protocol["selection_scenarios"]
+    )
+
+
+def test_cross_scenario_guard_requires_every_scenario_to_be_noninferior() -> None:
+    scenarios = [
+        "unseen_environments",
+        "unseen_genotypes_and_environments",
+        "temporal_holdout",
+        "country_holdout",
+    ]
+    summary = pd.DataFrame(
+        {
+            "candidate": ["candidate"] * 4,
+            "scenario": scenarios,
+            "relative_normalized_rmse_gain_mean": [0.02, 0.01, 0.0, -0.005],
+            "normalized_rmse_win_rate": [1.0, 0.67, 0.5, 0.34],
+            "pearson_gain_mean": [0.01, 0.0, -0.005, -0.009],
+            "calibration_error_delta_mean": [-0.01, 0.0, 0.005, 0.009],
+        }
+    )
+    acceptance = {
+        "required_scenarios": scenarios,
+        "maximum_scenario_relative_nrmse_loss": 0.01,
+        "minimum_scenario_fold_win_rate": 1.0 / 3.0,
+        "maximum_scenario_pearson_drop": 0.01,
+        "maximum_scenario_calibration_error_increase": 0.01,
+    }
+    assert scenario_noninferiority_pass(summary, "candidate", acceptance)
+    degraded = summary.copy()
+    degraded.loc[degraded["scenario"].eq("temporal_holdout"), "pearson_gain_mean"] = -0.02
+    assert not scenario_noninferiority_pass(degraded, "candidate", acceptance)
+    assert not scenario_noninferiority_pass(
+        summary[summary["scenario"].ne("country_holdout")],
+        "candidate",
+        acceptance,
+    )
 
 
 def test_empty_protected_expert_tables_preserve_schema() -> None:
@@ -177,6 +240,22 @@ def test_launcher_is_inner_only_and_uses_exact_kernel_opt_ins() -> None:
     assert '--hyperparameter-label "$candidate"' not in source
     assert "outer_evaluation" not in source
     assert "final-holdout" in source
+
+
+def test_cross_scenario_launcher_refits_environment_and_remains_inner_only() -> None:
+    source = (
+        ROOT
+        / "scripts"
+        / "run_reaction_norm_trial_hierarchy_cross_scenario_guard.sh"
+    ).read_text(encoding="utf-8")
+    assert "build_environment_component_kernels.py" in source
+    assert "build_reaction_norm_environment_v1" in source
+    assert "--fit-environment-ids \"$OUTER_ENV_IDS\"" in source
+    assert "--only-kernel" in source
+    assert "--evaluation-stage inner_selection" in source
+    assert "--evaluation-stage outer_evaluation" not in source
+    assert "--hierarchy-confirmation-provenance" in source
+    assert "trial_hierarchy_inner_cross_" in source
 
 
 def test_failed_freeze_can_be_replaced_but_pass_freeze_is_immutable(

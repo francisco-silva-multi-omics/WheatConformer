@@ -44,6 +44,7 @@ def main() -> None:
     parser.add_argument("--reaction-protocol", type=Path, required=True)
     parser.add_argument("--environment-protocol", type=Path, required=True)
     parser.add_argument("--hierarchy-protocol", type=Path, required=True)
+    parser.add_argument("--hierarchy-confirmation-provenance", type=Path)
     parser.add_argument("--loss-balance-provenance", type=Path, required=True)
     parser.add_argument("--readiness-ledger", type=Path, required=True)
     parser.add_argument("--trainer", type=Path, required=True)
@@ -61,6 +62,8 @@ def main() -> None:
         args.readiness_ledger,
         args.trainer,
     ]
+    if args.hierarchy_confirmation_provenance is not None:
+        paths.append(args.hierarchy_confirmation_provenance)
     for path in paths:
         if not path.is_file():
             raise FileNotFoundError(path)
@@ -77,6 +80,32 @@ def main() -> None:
         for phase in ("phase_1", "confirmation")
         for scenario in hierarchy.get(phase, {}).get("outer_folds_by_scenario", {})
     }
+    allowed_hierarchy_scenarios = set(
+        map(
+            str,
+            hierarchy.get(
+                "selection_scenarios", [hierarchy.get("selection_scenario", "")]
+            ),
+        )
+    )
+    confirmation = (
+        json.loads(
+            args.hierarchy_confirmation_provenance.read_text(encoding="utf-8")
+        )
+        if args.hierarchy_confirmation_provenance is not None
+        else None
+    )
+    source_confirmation = hierarchy.get("source_confirmation")
+    confirmation_artifacts_pass = True
+    if source_confirmation is not None and confirmation is not None:
+        confirmation_dir = args.hierarchy_confirmation_provenance.parent
+        confirmation_artifacts_pass = all(
+            (confirmation_dir / name).is_file()
+            and file_sha256(confirmation_dir / name) == expected
+            for name, expected in source_confirmation[
+                "required_artifact_sha256"
+            ].items()
+        )
     checks = {
         "evaluation_contract_frozen": contract.get("status") == "frozen",
         "ledger_matches_contract": contract.get("ledger_sha256")
@@ -97,9 +126,8 @@ def main() -> None:
         == "frozen_before_inner_validation",
         "hierarchy_protocol_frozen": hierarchy.get("status")
         == "frozen_before_inner_validation",
-        "hierarchy_scenario_matches_reaction": hierarchy_scenarios
-        == {str(hierarchy.get("selection_scenario"))}
-        == {str(reaction.get("scenario"))},
+        "hierarchy_scenario_contract": hierarchy_scenarios
+        == allowed_hierarchy_scenarios,
         "reaction_candidate_fixed": hierarchy.get("selected_reaction_candidate")
         == "reaction_norm_identity_covariance",
         "environment_architecture_fixed": hierarchy.get(
@@ -123,6 +151,23 @@ def main() -> None:
             "final_holdout_outcomes_read"
         )
         is False,
+        "confirmation_binding_presence": (source_confirmation is None)
+        == (confirmation is None),
+        "confirmation_binding_status": source_confirmation is None
+        or (
+            confirmation is not None
+            and confirmation.get("status") == "PASS"
+            and confirmation.get("phase") == source_confirmation.get("phase")
+            and confirmation.get("selected_candidate")
+            == source_confirmation.get("selected_candidate")
+            and int(confirmation.get("paired_inner_fold_count", -1))
+            == int(source_confirmation.get("paired_inner_fold_count", -2))
+            and confirmation.get("hierarchy_protocol_sha256")
+            == source_confirmation.get("hierarchy_protocol_sha256")
+            and confirmation.get("outer_test_metrics_read") is False
+            and confirmation.get("final_holdout_outcomes_read") is False
+            and confirmation_artifacts_pass
+        ),
     }
     failed = sorted(name for name, passed in checks.items() if not passed)
     freeze = {
