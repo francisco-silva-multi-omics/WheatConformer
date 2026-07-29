@@ -38,6 +38,7 @@ mkdir -p "$REPORTING_DIR" "$RCP_PLAN_DIR"
 
 echo "REPORT frozen routed predictions without further selection"
 "$PYTHON" -m server_training_pipeline.report_reaction_norm_routed_diagnostics \
+  --root . \
   --models-root "$MODELS_DIR" \
   --run-glob 'final_nested_reaction_norm_*' \
   --outer-dir "$OUTER_DIR" \

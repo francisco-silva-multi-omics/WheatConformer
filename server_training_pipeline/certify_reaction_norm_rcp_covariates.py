@@ -10,6 +10,7 @@ import numpy as np
 import pandas as pd
 
 from .final_evaluation_contract import file_sha256
+from .report_reaction_norm_routed_diagnostics import resolve_provenance_source
 
 
 FORBIDDEN_OUTCOME_COLUMNS = {
@@ -31,6 +32,7 @@ def main() -> None:
         description="Certify future reaction-norm covariates against every fold-local historical range."
     )
     parser.add_argument("--future-raw-matrix", type=Path, required=True)
+    parser.add_argument("--root", type=Path, default=Path("."))
     parser.add_argument("--projection-plan", type=Path, required=True)
     parser.add_argument("--outer-dir", type=Path, required=True)
     parser.add_argument("--outer-protocol", type=Path, required=True)
@@ -119,14 +121,14 @@ def main() -> None:
                 if missingness_path.exists() and missingness_path.stat().st_size > 0
                 else pd.DataFrame()
             )
-            fit_source = Path(
-                str(
-                    json.loads(
-                        (reference / "E_REACTION_NORM_V1_provenance.json").read_text(
-                            encoding="utf-8"
-                        )
-                    )["sources"]["fit_environment_ids"]["path"]
+            reference_provenance = json.loads(
+                (reference / "E_REACTION_NORM_V1_provenance.json").read_text(
+                    encoding="utf-8"
                 )
+            )
+            fit_source = resolve_provenance_source(
+                reference_provenance["sources"]["fit_environment_ids"],
+                data_root=args.root.resolve(),
             )
             fit_frame = pd.read_csv(fit_source, sep="\t", dtype=str)
             fit_column = "env_id" if "env_id" in fit_frame else fit_frame.columns[0]

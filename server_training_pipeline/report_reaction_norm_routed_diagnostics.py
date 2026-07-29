@@ -37,6 +37,37 @@ def read_ids(path: Path, preferred: str = "env_id") -> pd.Index:
     return pd.Index(values[values.ne("")].drop_duplicates(), dtype="object")
 
 
+def resolve_provenance_source(
+    source: dict[str, object], *, data_root: Path
+) -> Path:
+    recorded = Path(str(source["path"]))
+    candidates = [recorded]
+    parts = list(recorded.parts)
+    for anchor in ("model_kernels", "audit", "environment"):
+        if anchor in parts:
+            candidates.append(data_root.joinpath(*parts[parts.index(anchor) :]))
+            break
+    expected_sha256 = str(source.get("sha256", ""))
+    for candidate in dict.fromkeys(path.resolve() for path in candidates):
+        if not candidate.is_file():
+            continue
+        if expected_sha256 and file_sha256(candidate) != expected_sha256:
+            continue
+        return candidate
+    raise FileNotFoundError(
+        "Could not resolve the checksum-matched provenance source: "
+        f"recorded={recorded}; data_root={data_root}"
+    )
+
+
+def fit_environment_ids(environment_dir: Path, *, data_root: Path) -> pd.Index:
+    provenance = read_json(environment_dir / "E_REACTION_NORM_V1_provenance.json")
+    source = provenance.get("sources", {}).get("fit_environment_ids")
+    if not isinstance(source, dict):
+        raise ValueError("E_REACTION_NORM_V1 provenance has no fit-environment source")
+    return read_ids(resolve_provenance_source(source, data_root=data_root))
+
+
 def finite_pair(frame: pd.DataFrame, prediction_column: str) -> tuple[np.ndarray, np.ndarray]:
     y = pd.to_numeric(frame["phenotype_value"], errors="coerce").to_numpy(dtype=float)
     prediction = pd.to_numeric(frame[prediction_column], errors="coerce").to_numpy(
@@ -536,6 +567,7 @@ def main() -> None:
         description="Produce reporting-only diagnostics for the frozen routed reaction norm."
     )
     parser.add_argument("--models-root", type=Path, required=True)
+    parser.add_argument("--root", type=Path, default=Path("."))
     parser.add_argument("--run-glob", default="final_nested_reaction_norm_*")
     parser.add_argument("--outer-dir", type=Path, required=True)
     parser.add_argument("--outer-protocol", type=Path, required=True)
@@ -656,7 +688,9 @@ def main() -> None:
                     sep="\t",
                     dtype=str,
                 ),
-                read_ids(fold_dir / "ids" / "outer_training_environment_ids.tsv"),
+                fit_environment_ids(
+                    environment_dir, data_root=args.root.resolve()
+                ),
                 test_ids,
                 scenario=scenario,
                 outer_fold=outer_fold,

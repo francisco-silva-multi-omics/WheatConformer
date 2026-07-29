@@ -19,7 +19,9 @@ from server_training_pipeline.report_reaction_norm_routed_diagnostics import (
     environment_range_diagnostics,
     top_k_regret,
     within_environment_diagnostics,
+    resolve_provenance_source,
 )
+from server_training_pipeline.final_evaluation_contract import file_sha256
 
 
 PROTOCOL = json.loads(
@@ -159,6 +161,17 @@ def test_rcp_population_plan_separates_static_and_projected_features() -> None:
     assert classify_population(geo)[0] == "site_registry_static"
     assert classify_population(weather)[0] == "recompute_from_bias_corrected_daily_climate"
     assert classify_population(missing)[0] == "derived_missingness_indicator"
+
+
+def test_provenance_source_falls_back_to_current_data_root(tmp_path: Path) -> None:
+    current = tmp_path / "model_kernels" / "evaluation" / "ids.tsv"
+    current.parent.mkdir(parents=True)
+    current.write_text("env_id\ne1\n", encoding="utf-8")
+    source = {
+        "path": "/retired/server/root/model_kernels/evaluation/ids.tsv",
+        "sha256": file_sha256(current),
+    }
+    assert resolve_provenance_source(source, data_root=tmp_path) == current.resolve()
 
 
 def test_rcp_plan_and_range_certification_are_fold_local(
