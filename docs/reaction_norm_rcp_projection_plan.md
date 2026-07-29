@@ -10,6 +10,22 @@ the populated covariates pass every fold-local historical range check in
 The final holdout, outer-test outcomes, and model-selection metrics are not inputs
 to this process.
 
+Before future covariates are populated, run the phenotype-blind feature-readiness
+audit. It reconciles the fold-specific 551/553-style feature contracts, optionally
+compares earlier feature manifests, detects duplicated raw sources, and assigns
+block-specific range rules. A `PASS` from this audit means that the inventory is
+complete; it does not authorize future matrices or predictions.
+
+```bash
+bash scripts/run_reaction_norm_rcp_feature_readiness_audit.sh /path/to/data
+```
+
+Sparse management and binary lineage fields are checked by physical domain,
+support, prevalence, and declared scenario policy. Their fold-standardized z-scores
+remain diagnostic and are not interchangeable with the hard z gate used for
+continuous climate axes. Frozen duplicated columns must be populated identically;
+deduplication belongs in a separately selected environment-design version.
+
 ## Projection Unit
 
 One row represents:
