@@ -317,6 +317,7 @@ PY
   hierarchy_train_args=(
     --trial-hierarchy-protocol "$HIERARCHY_PROTOCOL"
     --trial-hierarchy-candidate "$RUN_CANDIDATE"
+    --reaction-candidate "$SELECTED_CANDIDATE"
   )
   hierarchy_verify_args=(
     --trial-hierarchy-protocol "$HIERARCHY_PROTOCOL"

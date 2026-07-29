@@ -379,6 +379,13 @@ def test_routed_outer_launcher_freezes_route_and_keeps_holdout_sealed() -> None:
     assert "REACTION_TRIAL_HIERARCHY_PROTOCOL" in fold
     assert 'RUN_CANDIDATE="$SELECTED_CANDIDATE"' in fold
     assert "train_multitrait_reaction_norm_trial_hierarchy_tf" in fold
+    assert (
+        'hierarchy_train_args=(\n'
+        '    --trial-hierarchy-protocol "$HIERARCHY_PROTOCOL"\n'
+        '    --trial-hierarchy-candidate "$RUN_CANDIDATE"\n'
+        '    --reaction-candidate "$SELECTED_CANDIDATE"\n'
+        "  )"
+    ) in fold
 
 
 def test_failed_freeze_can_be_replaced_but_pass_freeze_is_immutable(
