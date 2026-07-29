@@ -12,6 +12,9 @@ from server_training_pipeline.build_final_evaluation_manifests import (
     nested_genotype_expert_support_table,
 )
 from server_training_pipeline.final_evaluation_contract import load_protocol
+from server_training_pipeline.freeze_reaction_norm_routed_hierarchy_selection import (
+    source_decision_checks,
+)
 from server_training_pipeline.prepare_reaction_norm_trial_hierarchy_screen import (
     write_freeze,
 )
@@ -127,6 +130,71 @@ def test_cross_scenario_guard_requires_every_scenario_to_be_noninferior() -> Non
         "candidate",
         acceptance,
     )
+
+
+def test_routed_outer_protocol_uses_hierarchy_only_for_known_environments() -> None:
+    protocol = json.loads(
+        (
+            ROOT
+            / "server_training_pipeline"
+            / "reaction_norm_routed_hierarchy_outer_protocol_v1.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert protocol["status"] == "frozen_after_inner_validation_before_outer_test"
+    assert protocol["outer_test_metrics_read_at_freeze"] is False
+    assert protocol["outer_test_metrics_used_for_routing"] is False
+    assert protocol["final_holdout_outcomes_read"] is False
+    routes = {
+        scenario: value["trial_hierarchy_candidate"]
+        for scenario, value in protocol["scenario_routes"].items()
+    }
+    assert routes == {
+        "unseen_environments": "current_reaction_norm",
+        "unseen_genotypes": "trial_and_environment_intercepts",
+        "unseen_genotypes_and_environments": "current_reaction_norm",
+        "temporal_holdout": "current_reaction_norm",
+        "country_holdout": "current_reaction_norm",
+    }
+    assert protocol["model_contract"]["future_environment_route"] == (
+        "current_reaction_norm"
+    )
+    assert protocol["model_contract"]["outer_model_fit_count"] == 69
+
+
+def test_routed_source_decision_requires_exact_artifact_hashes(tmp_path: Path) -> None:
+    artifact = tmp_path / "decision.tsv"
+    artifact.write_text("decision\naccepted\n", encoding="utf-8")
+    import hashlib
+
+    digest = hashlib.sha256(artifact.read_bytes()).hexdigest()
+    provenance = tmp_path / "provenance.json"
+    provenance.write_text(
+        json.dumps(
+            {
+                "status": "PASS",
+                "phase": "confirmation",
+                "selected_candidate": "winner",
+                "paired_inner_fold_count": 3,
+                "hierarchy_protocol_sha256": "protocol",
+                "outer_test_metrics_read": False,
+                "final_holdout_outcomes_read": False,
+            }
+        ),
+        encoding="utf-8",
+    )
+    specification = {
+        "phase": "confirmation",
+        "selected_candidate": "winner",
+        "paired_inner_fold_count": 3,
+        "protocol_sha256": "protocol",
+        "required_artifact_sha256": {"decision.tsv": digest},
+    }
+    checks, paths = source_decision_checks(provenance, specification)
+    assert all(checks.values())
+    assert set(paths) == {provenance, artifact}
+    artifact.write_text("changed\n", encoding="utf-8")
+    checks, _ = source_decision_checks(provenance, specification)
+    assert checks["artifact_hashes"] is False
 
 
 def test_empty_protected_expert_tables_preserve_schema() -> None:
@@ -256,6 +324,24 @@ def test_cross_scenario_launcher_refits_environment_and_remains_inner_only() -> 
     assert "--evaluation-stage outer_evaluation" not in source
     assert "--hierarchy-confirmation-provenance" in source
     assert "trial_hierarchy_inner_cross_" in source
+
+
+def test_routed_outer_launcher_freezes_route_and_keeps_holdout_sealed() -> None:
+    suite = (
+        ROOT
+        / "scripts"
+        / "run_reaction_norm_routed_hierarchy_outer_suite.sh"
+    ).read_text(encoding="utf-8")
+    fold = (
+        ROOT / "scripts" / "run_multitrait_reaction_norm_outer_fold.sh"
+    ).read_text(encoding="utf-8")
+    assert "freeze_reaction_norm_routed_hierarchy_selection" in suite
+    assert "REACTION_TRIAL_HIERARCHY_PROTOCOL" in suite
+    assert "verify_reaction_norm_outer_evaluation" in suite
+    assert "final holdout remains sealed" in suite
+    assert "REACTION_TRIAL_HIERARCHY_PROTOCOL" in fold
+    assert 'RUN_CANDIDATE="$SELECTED_CANDIDATE"' in fold
+    assert "train_multitrait_reaction_norm_trial_hierarchy_tf" in fold
 
 
 def test_failed_freeze_can_be_replaced_but_pass_freeze_is_immutable(

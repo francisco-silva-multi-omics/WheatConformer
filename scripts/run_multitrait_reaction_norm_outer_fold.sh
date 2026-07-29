@@ -15,6 +15,7 @@ EVALUATION_PROTOCOL="${REACTION_EVALUATION_PROTOCOL:-$CODE_ROOT/server_training_
 REACTION_PROTOCOL="${REACTION_PROTOCOL:-$CODE_ROOT/server_training_pipeline/reaction_norm_protocol_v1.json}"
 ENVIRONMENT_PROTOCOL="${REACTION_ENVIRONMENT_PROTOCOL:-$CODE_ROOT/server_training_pipeline/reaction_norm_environment_protocol_v1.json}"
 OUTER_PROTOCOL="${REACTION_OUTER_PROTOCOL:-$CODE_ROOT/server_training_pipeline/reaction_norm_outer_evaluation_protocol_v3.json}"
+HIERARCHY_PROTOCOL="${REACTION_TRIAL_HIERARCHY_PROTOCOL:-}"
 SUPPORT_POLICY="${REACTION_OUTER_SUPPORT_POLICY:-$CODE_ROOT/server_training_pipeline/outer_ensemble_support_policy.json}"
 BASE_EVALUATION_DIR="${REACTION_BASE_EVALUATION_DIR:-model_kernels/final_nested_evaluation_v5_fixed}"
 LEDGER="${REACTION_LEDGER:-model_kernels/multitrait_pedigree_env_uniform_tgw_certified/multitrait_pedigree_uniform_tgw_certified_observations.parquet}"
@@ -41,6 +42,13 @@ OUTER_MODELS_DIR="${REACTION_OUTER_MODELS_DIR:-trained_models/reaction_norm_oute
 TRAIT_ENV_EXTENSION_DIR="${REACTION_TRAIT_ENV_EXTENSION_DIR:-$OUTER_DIR/trait_environment_frozen_extension_v2}"
 TRAIT_ENV_EXTENSION_IMPLEMENTATION="$CODE_ROOT/server_training_pipeline/extend_trait_environment_kernel.py"
 FORCE="${REACTION_OUTER_FORCE:-0}"
+
+TRAINER_MODULE="server_training_pipeline.train_multitrait_reaction_norm_tf"
+TRAINER_PATH="$CODE_ROOT/server_training_pipeline/train_multitrait_reaction_norm_tf.py"
+if [[ -n "$HIERARCHY_PROTOCOL" ]]; then
+  TRAINER_MODULE="server_training_pipeline.train_multitrait_reaction_norm_trial_hierarchy_tf"
+  TRAINER_PATH="$CODE_ROOT/server_training_pipeline/train_multitrait_reaction_norm_trial_hierarchy_tf.py"
+fi
 
 MANIFEST="$BASE_EVALUATION_DIR/nested_evaluation_entities.tsv"
 CONTRACT="$BASE_EVALUATION_DIR/nested_evaluation_contract.json"
@@ -74,18 +82,20 @@ for required in \
 do
   [[ -s "$required" ]] || { echo "Required outer-evaluation input is missing: $required" >&2; exit 2; }
 done
-
-if [[ ! -s "$ID_DIR/outer_training_environment_ids.tsv" ]]; then
-  log "EXPORT outer-training IDs scenario=$SCENARIO outer=$OUTER_FOLD"
-  mkdir -p "$ID_DIR"
-  "$PYTHON" -m server_training_pipeline.export_final_evaluation_fold \
-    --ledger "$LEDGER" \
-    --manifest "$MANIFEST" \
-    --contract "$CONTRACT" \
-    --scenario "$SCENARIO" \
-    --outer-fold "$OUTER_FOLD" \
-    --out-dir "$ID_DIR"
+if [[ -n "$HIERARCHY_PROTOCOL" && ! -s "$HIERARCHY_PROTOCOL" ]]; then
+  echo "Required routed hierarchy protocol is missing: $HIERARCHY_PROTOCOL" >&2
+  exit 2
 fi
+
+log "VERIFY outer-training IDs scenario=$SCENARIO outer=$OUTER_FOLD"
+mkdir -p "$ID_DIR"
+"$PYTHON" -m server_training_pipeline.export_final_evaluation_fold \
+  --ledger "$LEDGER" \
+  --manifest "$MANIFEST" \
+  --contract "$CONTRACT" \
+  --scenario "$SCENARIO" \
+  --outer-fold "$OUTER_FOLD" \
+  --out-dir "$ID_DIR"
 
 readarray -t GLOBAL_ENVIRONMENT_PATHS < <(
   "$PYTHON" -m server_training_pipeline.resolve_environment_kernel_sources \
@@ -285,6 +295,34 @@ for assignment in "${OUTER_SETTINGS[@]}"; do
     scenario_seed_offset) SCENARIO_SEED_OFFSET="$value" ;;
   esac
 done
+
+RUN_CANDIDATE="$SELECTED_CANDIDATE"
+hierarchy_train_args=()
+hierarchy_verify_args=()
+if [[ -n "$HIERARCHY_PROTOCOL" ]]; then
+  RUN_CANDIDATE="$("$PYTHON" - "$OUTER_PROTOCOL" "$HIERARCHY_PROTOCOL" "$SCENARIO" <<'PY'
+import hashlib, json, sys
+outer_path, hierarchy_path, scenario = sys.argv[1:]
+if hashlib.sha256(open(outer_path, "rb").read()).hexdigest() != hashlib.sha256(
+    open(hierarchy_path, "rb").read()
+).hexdigest():
+    raise SystemExit("Routed hierarchy protocol must equal the outer protocol")
+protocol = json.load(open(outer_path))
+route = protocol.get("scenario_routes", {}).get(scenario)
+if not isinstance(route, dict):
+    raise SystemExit(f"Missing routed hierarchy policy for {scenario}")
+print(route["trial_hierarchy_candidate"])
+PY
+)"
+  hierarchy_train_args=(
+    --trial-hierarchy-protocol "$HIERARCHY_PROTOCOL"
+    --trial-hierarchy-candidate "$RUN_CANDIDATE"
+  )
+  hierarchy_verify_args=(
+    --trial-hierarchy-protocol "$HIERARCHY_PROTOCOL"
+    --trial-hierarchy-candidate "$RUN_CANDIDATE"
+  )
+fi
 
 if [[ "${REACTION_SELECTION_ALREADY_VERIFIED:-0}" != "1" ]]; then
   if [[ ! -s "$SELECTION_LOCK" || ! -s "$SELECTION_CHECKSUMS" ]]; then
@@ -503,7 +541,8 @@ verify_member() {
   "$PYTHON" -m server_training_pipeline.verify_reaction_norm_run \
     --run-dir "$run_dir" \
     --prefix "$prefix" \
-    --candidate "$SELECTED_CANDIDATE" \
+    --candidate "$RUN_CANDIDATE" \
+    --reaction-candidate "$SELECTED_CANDIDATE" \
     --stage outer_evaluation \
     --seed "$seed" \
     --scenario "$SCENARIO" \
@@ -519,7 +558,8 @@ verify_member() {
     --environment-architecture "${SELECTED_ENVIRONMENT_ARCHITECTURE}" \
     --environment-design-certification "$REACTION_ENV_DIR/E_REACTION_NORM_V1_certification.json" \
     --certification-summary "$CERTIFICATION" \
-    --trainer "$CODE_ROOT/server_training_pipeline/train_multitrait_reaction_norm_tf.py" \
+    "${hierarchy_verify_args[@]}" \
+    --trainer "$TRAINER_PATH" \
     --factorization-implementation "$CODE_ROOT/server_training_pipeline/kernel_factorization.py"
 }
 
@@ -581,7 +621,8 @@ for ((inner_fold=0; inner_fold<MEMBER_COUNT; inner_fold++)); do
   fi
   mkdir -p "$run_dir"
   log "TRAIN frozen outer member scenario=$SCENARIO outer=$OUTER_FOLD inner=$inner_fold"
-  "$PYTHON" -m server_training_pipeline.train_multitrait_reaction_norm_tf \
+  "$PYTHON" -m "$TRAINER_MODULE" \
+    "${hierarchy_train_args[@]}" \
     "${common[@]}" \
     --inner-fold "$inner_fold" \
     --seed "$seed" \

@@ -58,37 +58,72 @@ def main() -> None:
 
     protocol_path = custom.trial_hierarchy_protocol.resolve()
     protocol = json.loads(protocol_path.read_text(encoding="utf-8"))
-    if protocol.get("status") != "frozen_before_inner_validation":
-        raise SystemExit("Trial-hierarchy protocol is not frozen")
-    if protocol.get("outer_test_metrics_read") is not False:
+    stage = option_value(remaining, "--evaluation-stage")
+    expected_status = (
+        "frozen_before_inner_validation"
+        if stage == "inner_selection"
+        else "frozen_after_inner_validation_before_outer_test"
+    )
+    if protocol.get("status") != expected_status:
+        raise SystemExit("Trial-hierarchy protocol has the wrong frozen status")
+    outer_unread = (
+        protocol.get("outer_test_metrics_read") is False
+        if stage == "inner_selection"
+        else protocol.get("outer_test_metrics_read_at_freeze") is False
+        and protocol.get("outer_test_metrics_used_for_routing") is False
+    )
+    if not outer_unread:
         raise SystemExit("Trial-hierarchy protocol has read outer-test metrics")
     if protocol.get("final_holdout_outcomes_read") is not False:
         raise SystemExit("Trial-hierarchy protocol has read final-holdout outcomes")
-    candidates = {str(value["name"]): value for value in protocol["candidates"]}
+    candidates = {
+        str(value["name"]): value
+        for value in protocol.get(
+            "hierarchy_candidates", protocol.get("candidates", [])
+        )
+    }
     if custom.trial_hierarchy_candidate not in candidates:
         raise SystemExit("Trial-hierarchy candidate is absent from its protocol")
     candidate = candidates[custom.trial_hierarchy_candidate]
     validate_hierarchy_candidate(candidate)
 
-    if option_value(remaining, "--evaluation-stage") != "inner_selection":
-        raise SystemExit(
-            "Trial-hierarchy v1 is restricted to inner selection; outer evaluation "
-            "requires a separately frozen protocol"
-        )
     scenario = option_value(remaining, "--evaluation-scenario")
-    allowed_scenarios = set(
-        map(
-            str,
-            protocol.get(
-                "selection_scenarios", [protocol.get("selection_scenario", "")]
-            ),
+    if stage == "inner_selection":
+        allowed_scenarios = set(
+            map(
+                str,
+                protocol.get(
+                    "selection_scenarios", [protocol.get("selection_scenario", "")]
+                ),
+            )
         )
+        if scenario not in allowed_scenarios:
+            raise SystemExit("Hierarchy scenario disagrees with its frozen protocol")
+    elif stage == "outer_evaluation":
+        outer_path = Path(
+            option_value(remaining, "--outer-evaluation-protocol")
+        ).resolve()
+        if outer_path != protocol_path:
+            raise SystemExit(
+                "Routed hierarchy protocol must be the outer-evaluation protocol"
+            )
+        route = protocol.get("scenario_routes", {}).get(scenario)
+        if not isinstance(route, dict):
+            raise SystemExit("Hierarchy outer route is absent for the scenario")
+        if route.get("trial_hierarchy_candidate") != custom.trial_hierarchy_candidate:
+            raise SystemExit("Hierarchy candidate disagrees with the frozen route")
+        if route.get("reaction_candidate") != protocol.get("selected_candidate"):
+            raise SystemExit("Hierarchy route changes the frozen reaction candidate")
+        if route.get("environment_architecture") != protocol.get(
+            "selected_environment_architecture"
+        ):
+            raise SystemExit("Hierarchy route changes the environment architecture")
+    else:
+        raise SystemExit("Trial hierarchy supports inner selection or locked outer evaluation")
+    selected_reaction_candidate = protocol.get(
+        "selected_reaction_candidate", protocol.get("selected_candidate")
     )
-    if scenario not in allowed_scenarios:
-        raise SystemExit("Hierarchy scenario disagrees with its frozen protocol")
-    if option_value(remaining, "--reaction-candidate") != protocol.get(
-        "selected_reaction_candidate"
-    ):
+    if option_value(remaining, "--reaction-candidate") != selected_reaction_candidate:
         raise SystemExit("Hierarchy and reaction candidates disagree")
     if option_value(remaining, "--environment-architecture") != protocol.get(
         "selected_environment_architecture"
@@ -270,12 +305,12 @@ def main() -> None:
     base.make_dataset = hierarchical_dataset
     original_argv = sys.argv
     try:
-        sys.argv = [
-            original_argv[0],
-            *remaining,
-            "--inner-selection-scenario-protocol",
-            str(protocol_path),
-        ]
+        scenario_authorization = (
+            ["--inner-selection-scenario-protocol", str(protocol_path)]
+            if stage == "inner_selection"
+            else []
+        )
+        sys.argv = [original_argv[0], *remaining, *scenario_authorization]
         base.main()
     finally:
         sys.argv = original_argv
@@ -295,6 +330,8 @@ def main() -> None:
         "candidate": custom.trial_hierarchy_candidate,
         "candidate_contract": candidate,
         "support_fit_partition": "inner_training_only",
+        "evaluation_stage": stage,
+        "scenario_route": protocol.get("scenario_routes", {}).get(scenario, {}),
         "phenotype_values_used_for_support": False,
         "outer_test_metrics_read": False,
         "final_holdout_outcomes_read": False,
