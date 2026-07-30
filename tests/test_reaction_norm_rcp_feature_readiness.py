@@ -9,6 +9,7 @@ import pandas as pd
 from server_training_pipeline.audit_reaction_norm_rcp_feature_readiness import (
     canonical_source_identity,
     classify_feature,
+    is_irrigation_management_source,
     main as audit_readiness,
 )
 from server_training_pipeline.plan_reaction_norm_rcp_projection import main as plan_rcp
@@ -76,6 +77,32 @@ def test_feature_classification_separates_historical_and_sparse_fields() -> None
     assert classify_feature(legacy_rain_count)["projectability_class"] == (
         "historical_only_unprojectable"
     )
+    development_target_relative = pd.Series(
+        manifest_row(
+            "development__observed__PRECIPITATION_FROM_SOWING_TO_MATURITY",
+            "observed__PRECIPITATION_FROM_SOWING_TO_MATURITY",
+            "envdata.tsv",
+            "development",
+        )
+    )
+    moisture_with_irrigation_in_name = pd.Series(
+        manifest_row(
+            "development__observed__MOISTURE_AVAILB_BEFORE_SOWING_EXCL_PRE_IRRIGATION",
+            "observed__MOISTURE_AVAILB_BEFORE_SOWING_EXCL_PRE_IRRIGATION",
+            "envdata.tsv",
+            "development",
+        )
+    )
+    assert classify_feature(development_target_relative)["projectability_class"] == (
+        "historical_only_unprojectable"
+    )
+    assert classify_feature(moisture_with_irrigation_in_name)["projectability_class"] == (
+        "historical_only_unprojectable"
+    )
+    assert not is_irrigation_management_source(
+        "observed__MOISTURE_AVAILB_BEFORE_SOWING_EXCL_PRE_IRRIGATION"
+    )
+    assert is_irrigation_management_source("observed__PRE_SOWING_IRRIGATION")
 
 
 def test_duplicate_identity_recognizes_observed_envdata_copy() -> None:

@@ -76,5 +76,47 @@ PY
 cat "$OUT_DIR/RCP_feature_readiness_certification.json"
 column -t -s $'\t' "$OUT_DIR/RCP_feature_block_summary.tsv"
 column -t -s $'\t' "$OUT_DIR/RCP_legacy_feature_reconciliation.tsv" || true
+"$PYTHON" - "$OUT_DIR" <<'PY'
+import sys
+from pathlib import Path
+
+import pandas as pd
+
+root = Path(sys.argv[1])
+lineage = pd.read_csv(root / "RCP_feature_readiness_lineage.tsv", sep="\t")
+ranges = pd.read_csv(root / "RCP_historical_range_rule_audit.tsv", sep="\t")
+
+print("\n=== HISTORICAL-ONLY FROZEN FEATURES ===")
+blocked = lineage[
+    lineage["projectability_class"].eq("historical_only_unprojectable")
+    & ~lineage["is_missingness_indicator"].astype(str).str.lower().isin({"true", "1", "yes"})
+]
+print(
+    blocked[[
+        "feature",
+        "source_feature",
+        "duplicate_group_id",
+        "classification_note",
+    ]].sort_values("feature").to_string(index=False)
+)
+
+print("\n=== CONTINUOUS FEATURES EXCEEDING CURRENT GLOBAL HARD Z ===")
+extreme = ranges[
+    ranges["historical_range_rule_status"].eq(
+        "HISTORICAL_BASELINE_EXCEEDS_GLOBAL_HARD_Z"
+    )
+]
+print(
+    extreme[[
+        "feature",
+        "feature_block",
+        "historical_scenarios",
+        "historical_max_abs_z",
+        "historical_outside_training_range_fraction_weighted",
+    ]]
+    .sort_values("historical_max_abs_z", ascending=False)
+    .to_string(index=False)
+)
+PY
 echo "DONE phenotype-blind RCP feature-readiness audit"
 echo "RCP covariate population and prediction remain blocked"

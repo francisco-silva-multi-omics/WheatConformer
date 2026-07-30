@@ -147,6 +147,19 @@ def is_binary_management(text: str) -> bool:
     ) and not any(token in text for token in ("NUMBER_", "AMOUNT", "KG_HA", "%"))
 
 
+def is_irrigation_management_source(source_feature: object) -> bool:
+    token = normalize_source_token(source_feature)
+    return token in {
+        "IRRIGATED",
+        "NUMBER_POST_SOWING_IRRIGATIONS",
+        "NUMBER_PRE_SOWING_IRRIGATIONS",
+        "IRRIGATION_AFTER_SOWING",
+        "PRE_SOWING_IRRIGATION",
+        "CALCULATED_OF_TOTAL_WATER_APPLIED_BY_IRRIGATION",
+        "ESTIMATE_OF_TOTAL_WATER_APPLIED_BY_IRRIGATION",
+    }
+
+
 def classify_feature(row: pd.Series) -> dict[str, object]:
     feature = str(row["feature"])
     source = str(row["source_feature"])
@@ -197,7 +210,7 @@ def classify_feature(row: pd.Series) -> dict[str, object]:
             "population_requirement": "fixed_historical_management_or_explicit_future_scenario",
             "classification_note": "Do not use fold-standardized z as the hard gate for sparse or zero-inflated management fields.",
         }
-    if "IRRIG" in text and "envdata" in artifact:
+    if is_irrigation_management_source(source) and "envdata" in artifact:
         binary = is_binary_management(text)
         return {
             "projectability_class": "explicit_management_scenario",
@@ -218,7 +231,13 @@ def classify_feature(row: pd.Series) -> dict[str, object]:
             "population_requirement": "climate,sowing,coordinate,and_management_source_lineage",
             "classification_note": "Projected climate is available but is not observed API weather or historical climatology.",
         }
-    if "SOWING_DAYOFYEAR" in text or (block == "development" and "SOWING" in text):
+    source_token = normalize_source_token(source)
+    if block == "development" and source_token in {
+        "SOWING_DAYOFYEAR",
+        "SOWING_DAYOFYEAR_SIN",
+        "SOWING_DAYOFYEAR_COS",
+        "HAS_SOWING_DATE",
+    }:
         return {
             "projectability_class": "explicit_sowing_policy",
             "future_input_kind": "sowing_policy",
@@ -437,6 +456,16 @@ def annotate_duplicate_groups(lineage: pd.DataFrame) -> tuple[pd.DataFrame, pd.D
                     == "exact_source_duplicate"
                     else "manual_semantic_and_unit_review_before_population"
                 ),
+                "projectability_classes": ";".join(
+                    sorted(frame["projectability_class"].astype(str).unique())
+                ),
+                "range_rule_classes": ";".join(
+                    sorted(frame["range_rule_class"].astype(str).unique())
+                ),
+                "classification_consistent": frame["projectability_class"].nunique()
+                == 1
+                and frame["range_rule_class"].nunique() == 1
+                and frame["population_contract_status"].nunique() == 1,
             }
         )
     return local, pd.DataFrame(duplicate_rows)
@@ -810,6 +839,14 @@ def main() -> None:
     checks["exact_duplicate_values_consistent"] = duplicate_consistency.empty or duplicate_consistency[
         "status"
     ].eq("PASS").all()
+    checks["exact_duplicate_classification_consistent"] = duplicate_groups.empty or (
+        duplicate_groups.loc[
+            duplicate_groups["duplicate_group_type"].eq("exact_source_duplicate"),
+            "classification_consistent",
+        ]
+        .fillna(False)
+        .all()
+    )
     if not duplicate_groups.empty:
         pair_summary = (
             duplicate_consistency.groupby("duplicate_group_id", sort=True)
