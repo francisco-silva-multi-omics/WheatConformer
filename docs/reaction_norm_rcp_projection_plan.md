@@ -41,6 +41,21 @@ explicit 12-month period. A `PASS` means that the reconstruction inventory and w
 queue are internally complete; `historical_replacement_contract_ready` remains the
 separate authorization gate.
 
+Fetch the deduplicated daily backcast inventory with a bounded pilot first:
+
+```bash
+REACTION_RCP_DAILY_LIMIT=25 \
+  bash scripts/run_reaction_norm_rcp_daily_backcast_fetch.sh /path/to/data
+```
+
+After the pilot request index is clean, resume the same cache for all pending
+requests with `REACTION_RCP_DAILY_LIMIT=0`. The fetch uses Open-Meteo ERA5 with
+explicit GMT dates, writes one checksum-addressable Parquet cache per request, and
+refuses dates before the frozen 1940 coverage boundary instead of clipping them.
+Daily precipitation and ET0 are requested directly. Shallow and deeper soil
+moisture are additionally aggregated from hourly values for the antecedent-moisture
+requests. Completing this archive still does not authorize RCP covariate population.
+
 Sparse management and binary lineage fields are checked by physical domain,
 support, prevalence, and declared scenario policy. Their fold-standardized z-scores
 remain diagnostic and are not interchangeable with the hard z gate used for
