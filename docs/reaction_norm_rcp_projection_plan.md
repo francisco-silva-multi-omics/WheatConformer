@@ -20,6 +20,27 @@ complete; it does not authorize future matrices or predictions.
 bash scripts/run_reaction_norm_rcp_feature_readiness_audit.sh /path/to/data
 ```
 
+The next gate is the historical reconstruction audit:
+
+```bash
+bash scripts/run_reaction_norm_rcp_historical_reconstruction_audit.sh /path/to/data
+```
+
+This audit is also phenotype-blind. It checks the fixed sowing-relative
+precipitation replacement on outer-training environments, fits harvest-anchor
+season-length fallbacks from outer-training metadata only, audits the units and
+undefined period of the two legacy annual-precipitation fields, and writes both a
+fold-lineage work queue and a deduplicated daily-request inventory. It does not
+fetch daily data, create an RCP matrix, inspect outcomes, or run predictions.
+
+The harvest-relative monthly fields require daily precipitation. The pre-sowing
+moisture field requires antecedent precipitation and ET0, declared irrigation, and
+optionally soil moisture. Trial-season aggregates cannot substitute for either
+request. Annual precipitation remains blocked until daily backcasts adjudicate an
+explicit 12-month period. A `PASS` means that the reconstruction inventory and work
+queue are internally complete; `historical_replacement_contract_ready` remains the
+separate authorization gate.
+
 Sparse management and binary lineage fields are checked by physical domain,
 support, prevalence, and declared scenario policy. Their fold-standardized z-scores
 remain diagnostic and are not interchangeable with the hard z gate used for
