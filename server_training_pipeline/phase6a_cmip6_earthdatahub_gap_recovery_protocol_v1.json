@@ -1,0 +1,66 @@
+{
+  "protocol_version": "phase6a_cmip6_earthdatahub_gap_recovery_v1",
+  "status": "FROZEN_PROVIDER_CONCORDANCE_REQUIRED_BEFORE_GAP_RECOVERY",
+  "selection_data": "frozen_cmip6_identity_provider_metadata_and_exact_overlap_only",
+  "target": {
+    "request_id": "cc53a57abadeaaf5ae1c7b07d56651c05f6cd732243455d9d3a273041a3e0b5d",
+    "source_id": "CMCC-CM2-SR5",
+    "experiment_id": "ssp126",
+    "member_id": "r1i1p1f1",
+    "table_id": "day",
+    "variable_id": "rsds",
+    "grid_label": "gn",
+    "esgf_version": "20200717",
+    "calendar": "365_day",
+    "fetch_start": "2015-01-01",
+    "fetch_end": "2100-12-31",
+    "expected_time_count": 31390,
+    "unavailable_exact_file": "rsds_day_CMCC-CM2-SR5_ssp126_r1i1p1f1_gn_20400101-20641231.nc",
+    "unavailable_exact_file_sha256": "e5cfadbc45662196cdc146cdf20ba8eb9ddb2599aa54c29f494f36f1cb13f949"
+  },
+  "earth_data_hub": {
+    "dataset_url": "https://data.earthdatahub.destine.eu/cmip6/CMCC-CM2-SR5-ScenarioMIP-r1i1p1f1-day-gn-v0.zarr",
+    "catalog_url": "https://earthdatahub.destine.eu/collections/cmip6/datasets/CMCC-CM2-SR5-ScenarioMIP-r1i1p1f1-day-gn",
+    "catalog_last_update": "2026-07-10",
+    "provider_version": "v0",
+    "declared_processing": "compressed_zarr_with_near_zero_precision_loss",
+    "authentication": "http_basic_username_edh_token_from_process_environment",
+    "token_may_be_persisted": false,
+    "token_may_be_logged": false
+  },
+  "parent_artifacts": {
+    "server_training_pipeline/phase6a_cmip6_member_fetch_protocol_v1.json": "116db05dd920133dbdfc03d3dffb4bb2eea25a3fb6848ca5eea05904914fd85b",
+    "audit/v2/phase6a_cmip6_metadata_inventory_v1/cmip6_selected_asset_manifest.tsv": "abf96f271b9241527cf883d9e77c37da58f270b74ed2008852852af2b443202f",
+    "audit/v2/phase6a_cmip6_member_resolved_fetch_v1/cmip6_esgf_exact_file_transport_manifest.tsv": "4d623ac24fce416b9ac76ee8514811e16f4109b95b90da1e136e806a1321a13a",
+    "audit/v2/phase6a_environment_source_contract_v10/soilgrids_request_inventory.tsv": "a5691554f81eef5bd91e05a5ded2f0faf0a97453a17ad337ff1803d98bdd2f5d",
+    "environment/v2/phase6a_cmip6_member_resolved_daily_v1/tmp_http/cc53a57abadeaaf5/parts/8fa9c4c2c7eb1751.nc": "c011d61647ec0661528fd8a979c9669ac944954b0575bd41ec2cb6b3edd6dd33",
+    "environment/v2/phase6a_cmip6_member_resolved_daily_v1/tmp_http/cc53a57abadeaaf5/parts/8fa9c4c2c7eb1751.json": "f4ba9c5b9896dda02fe0123d123a0cdc937a124993a6d52badaef782b382d0e8"
+  },
+  "exact_overlap": {
+    "start": "2015-01-01",
+    "end": "2039-12-31",
+    "expected_days": 9125,
+    "expected_sites": 907,
+    "minimum_compared_values": 8000000
+  },
+  "acceptance_thresholds": {
+    "maximum_source_latitude_delta_degrees": 0.000001,
+    "maximum_source_longitude_delta_degrees": 0.000001,
+    "maximum_missing_mask_disagreement_fraction": 0.0,
+    "maximum_absolute_bias_w_m2": 0.01,
+    "maximum_rmse_w_m2": 0.05,
+    "maximum_p99_absolute_delta_w_m2": 0.1,
+    "maximum_absolute_delta_w_m2": 0.5,
+    "minimum_pearson_correlation": 0.999999
+  },
+  "accepted_output_transport": "EARTHDATAHUB_ZARR_V3_CONCORDANCE_CERTIFIED",
+  "asset_replacement_policy": "replace_entire_target_site_time_asset_only_after_exact_overlap_concordance_passes",
+  "phenotype_values_read": false,
+  "inner_validation_metrics_read": false,
+  "outer_test_outcomes_read": false,
+  "outer_test_metrics_read": false,
+  "final_holdout_outcomes_read": false,
+  "future_climate_values_may_be_read_for_archive_recovery": true,
+  "future_covariate_matrices_generated": false,
+  "future_predictions_generated": false
+}

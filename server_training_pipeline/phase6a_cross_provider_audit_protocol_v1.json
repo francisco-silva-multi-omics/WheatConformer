@@ -1,0 +1,44 @@
+{
+  "protocol_version": "phase6a_cross_provider_audit_v1",
+  "status": "FROZEN_DIAGNOSTIC_CDS_AUTHORITATIVE",
+  "selection_data": "normalized_historical_climate_values_only",
+  "authoritative_provider": "CDS_ERA5_Land",
+  "diagnostic_provider": "Open_Meteo_ERA5",
+  "join_keys": [
+    "latitude_5dp",
+    "longitude_5dp",
+    "request_start_date",
+    "request_end_date"
+  ],
+  "wet_day_threshold_mm": 1.0,
+  "variables": {
+    "tasmin_c": "temperature_2m_min",
+    "tasmean_c": "temperature_2m_mean",
+    "tasmax_c": "temperature_2m_max",
+    "precipitation_mm_day": "precipitation_sum",
+    "solar_radiation_mj_m2_day": "shortwave_radiation_sum",
+    "relative_humidity_percent": "relative_humidity_2m_mean",
+    "wind_speed_m_s": "wind_speed_10m_mean"
+  },
+  "diagnostic_thresholds": {
+    "tasmin_c": {"minimum_correlation": 0.8, "maximum_absolute_bias": 3.0, "maximum_rmse": 6.0},
+    "tasmean_c": {"minimum_correlation": 0.8, "maximum_absolute_bias": 3.0, "maximum_rmse": 6.0},
+    "tasmax_c": {"minimum_correlation": 0.8, "maximum_absolute_bias": 3.0, "maximum_rmse": 6.0},
+    "precipitation_mm_day": {"minimum_correlation": 0.3, "maximum_absolute_bias": 5.0, "maximum_rmse": 20.0, "minimum_wet_day_agreement": 0.65},
+    "solar_radiation_mj_m2_day": {"minimum_correlation": 0.75, "maximum_absolute_bias": 5.0, "maximum_rmse": 8.0},
+    "relative_humidity_percent": {"minimum_correlation": 0.6, "maximum_absolute_bias": 15.0, "maximum_rmse": 25.0},
+    "wind_speed_m_s": {"minimum_correlation": 0.5, "maximum_absolute_bias": 3.0, "maximum_rmse": 5.0}
+  },
+  "decision_policy": "diagnostic_disagreement_is_flagged_but_does_not_replace_or_average_the_authoritative_CDS_archive",
+  "parent_artifacts": {
+    "server_training_pipeline/phase6a_daily_normalization_contract_v1.json": "af01c984b6cf6dcbb5f6e6d53808c30f77f9332d908f8e2323f4545531c8d685",
+    "audit/v2/phase6a_projection_core_raw_archive_v1/historical_provider_raw_archive_manifest.tsv": "05eba67f46b25073833cf5232bc4bcf1e6f1bb7479c4ae17c629e2ad3dcaeea4"
+  },
+  "phenotype_values_read": false,
+  "inner_validation_metrics_read": false,
+  "outer_test_outcomes_read": false,
+  "outer_test_metrics_read": false,
+  "final_holdout_outcomes_read": false,
+  "future_covariate_matrices_generated": false,
+  "future_predictions_generated": false
+}

@@ -1,0 +1,73 @@
+{
+  "protocol_version": "phase6a_projection_core_raw_archive_v1",
+  "status": "FROZEN_BEFORE_RAW_ARCHIVE_CERTIFICATION",
+  "selection_data": "frozen_environment_identifiers_catalog_metadata_and_raw_climate_values_only",
+  "reference_period": {
+    "start": "1981-01-01",
+    "end": "2010-12-31"
+  },
+  "expected": {
+    "cmip6_assets": 455,
+    "cmip6_historical_assets": 91,
+    "cmip6_future_assets": 364,
+    "cmip6_models": 13,
+    "cmip6_variables": 7,
+    "cmip6_ssps": 4,
+    "sites": 907,
+    "cds_trial_window_requests": 7094,
+    "openmeteo_trial_window_requests": 7094
+  },
+  "required_cmip6_variables": [
+    "tasmin",
+    "tas",
+    "tasmax",
+    "pr",
+    "rsds",
+    "hurs",
+    "sfcWind"
+  ],
+  "required_ssps": [
+    "ssp126",
+    "ssp245",
+    "ssp370",
+    "ssp585"
+  ],
+  "accepted_calendars": [
+    "365_day",
+    "noleap",
+    "gregorian",
+    "proleptic_gregorian"
+  ],
+  "parent_artifacts": {
+    "audit/v2/phase6a_cmip6_metadata_inventory_v1/cmip6_selected_asset_manifest.tsv": "abf96f271b9241527cf883d9e77c37da58f270b74ed2008852852af2b443202f",
+    "audit/v2/phase6a_cmip6_member_resolved_fetch_v1/cmip6_member_resolved_transport_inventory.tsv": "73cb3a8f4ac4945980f6c76c02bbf10576efa93effcb9c5b639a4da20bca960e",
+    "environment/v2/phase6a_cds_era5_land_daily_full_v1/cds_era5_land_fetch_index.tsv": "0016b6b45e5e5aeff0f57f53b1e3d044b79e56404fdd5563ddace89d76303b67",
+    "environment/v2/phase6a_openmeteo_era5_daily_full_v1/daily_request_fetch_index.tsv": "b626b38a51ca3d9ffbc077f594d49ba79806f31c6b040609220a117dc6d93b91",
+    "audit/v2/phase6a_soilgrids_missing_resolution_v1/soilgrids_missing_resolution_certification.json": "d7e7c8149d3cf227ac10e7eb725128f18d601ef386b96e00514563f4e5c56b80",
+    "environment/v2/phase6a_soilgrids_missing_resolution_v1/soilgrids_missing_resolution_index.tsv": "f854e36e6ce03055b6f87e4e8fbb84c0fc53596850c516dd9a96ce88483d3d48",
+    "server_training_pipeline/phase6a_soilgrids_missing_resolution_protocol_v1.json": "6b70f66925fc6fe58cf99c26b4121f510fb4af5f0cdc487aae35837deecb62e4",
+    "audit/v2/phase6a_environment_source_contract_v10/soilgrids_request_inventory.tsv": "a5691554f81eef5bd91e05a5ded2f0faf0a97453a17ad337ff1803d98bdd2f5d",
+    "audit/v2/phase6a_environment_source_contract_v10/environment_source_contract.json": "4d5e5648da228c92c9eaacb63903214d400057f8599c56452b9054041ed7b565"
+  },
+  "archives": {
+    "cmip6": "environment/v2/phase6a_cmip6_member_resolved_daily_v1",
+    "cds_trial_windows": "environment/v2/phase6a_cds_era5_land_daily_full_v1",
+    "openmeteo_trial_windows": "environment/v2/phase6a_openmeteo_era5_daily_full_v1",
+    "soilgrids_resolution": "environment/v2/phase6a_soilgrids_missing_resolution_v1"
+  },
+  "soil_policy": {
+    "RECOVERED_NEAREST_VALID_SOIL_CELL": "eligible_with_distance_and_source_fallback_masks",
+    "CANDIDATE_DISTANCE_REVIEW": "explicit_missing_soil_mask_and_disable_soil_dependent_water_balance",
+    "MASKED_NO_VALID_SOIL_CELL_WITHIN_RADIUS": "explicit_missing_soil_mask_and_disable_soil_dependent_water_balance",
+    "observations_excluded": 0,
+    "silent_numeric_imputation_allowed": false
+  },
+  "bias_reference_policy": "requires_continuous_authoritative_CDS_ERA5_Land_daily_coverage_for_every_site_from_1981_01_01_through_2010_12_31",
+  "phenotype_values_read": false,
+  "inner_validation_metrics_read": false,
+  "outer_test_outcomes_read": false,
+  "outer_test_metrics_read": false,
+  "final_holdout_outcomes_read": false,
+  "future_covariate_matrices_generated": false,
+  "future_predictions_generated": false
+}

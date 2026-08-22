@@ -1,0 +1,106 @@
+{
+  "protocol_version": "phase6b_member_resolved_future_covariates_v1",
+  "status": "FROZEN_BEFORE_FUTURE_CLIMATE_VALUE_MATERIALIZATION",
+  "parent_release": "E_PROJECTION_CORE_V1_REMEDIATED_V2",
+  "selection_data": "certified_climate_asset_identifiers_historical_environment_metadata_and_static_inputs_only",
+  "future_periods": {
+    "2031_2060": [2031, 2060],
+    "2071_2100": [2071, 2100]
+  },
+  "ssp_experiments": {
+    "ssp126": "SSP1-2.6",
+    "ssp245": "SSP2-4.5",
+    "ssp370": "SSP3-7.0",
+    "ssp585": "SSP5-8.5"
+  },
+  "required_variables": [
+    "tasmin",
+    "tas",
+    "tasmax",
+    "pr",
+    "rsds",
+    "hurs",
+    "sfcWind"
+  ],
+  "canonical_variable_mapping": {
+    "tasmin": "tasmin_c",
+    "tas": "tasmean_c",
+    "tasmax": "tasmax_c",
+    "pr": "precipitation_mm_day",
+    "rsds": "solar_radiation_mj_m2_day",
+    "hurs": "relative_humidity_percent",
+    "sfcWind": "wind_speed_m_s"
+  },
+  "sowing_anchor_policy": {
+    "source": "nonphenotypic_Stage_1_v2_environment_metadata_only",
+    "method": "observed_month_day_medoid_minimizing_total_circular_day_distance",
+    "tie_break": "highest_observed_frequency_then_lexicographically_first_month_day",
+    "february_29_native_calendar_rule": "use_February_29_when_present_else_February_28",
+    "missing_anchor_policy": "retain_location_with_missing_features_and_UNSUPPORTED_class",
+    "phenology_outcomes_allowed": false
+  },
+  "elevation_policy": {
+    "method": "median_of_nonphenotypic_historical_environment_elevations_at_exact_location",
+    "missing_policy": "retain_location_with_PET_missing_and_UNSUPPORTED_class"
+  },
+  "calendar_policy": "anchor_each_sowing_year_on_the_source_native_calendar_and_apply_integer_daily_offsets_without_inventing_days",
+  "season_window": [-30, 179],
+  "period_aggregation": {
+    "method": "derive_each_annual_season_feature_first_then_arithmetic_mean_within_period",
+    "minimum_complete_annual_seasons": 29,
+    "terminal_year_policy": "retain_period_when_at_least_29_complete_seasons_exist;_never_extrapolate_beyond_2100",
+    "gcm_averaging_before_feature_derivation": false,
+    "gcm_averaging_before_applicability_audit": false
+  },
+  "bias_adjustment": {
+    "parameter_contract": "phase6a_bias_adjustment_v2",
+    "fit_period": "1981-01-01/2010-12-31",
+    "future_values_used_during_fit": false,
+    "apply_separately_by_source_member_site_month_variable": true
+  },
+  "daily_extreme_reference": {
+    "source": "normalized_CDS_ERA5_Land_1981_2010",
+    "lower_quantile": 0.001,
+    "upper_quantile": 0.999,
+    "fit_before_future_value_materialization": true
+  },
+  "matrix_identity": [
+    "source_id",
+    "member_id",
+    "SSP",
+    "location_id",
+    "period"
+  ],
+  "expected_source_count": 13,
+  "expected_ssp_count": 4,
+  "expected_period_count": 2,
+  "expected_location_count": 907,
+  "expected_matrix_count": 104,
+  "applicability_domain_contract": "phase6a_applicability_domain_v1",
+  "applicability_classification": {
+    "SUPPORTED": {
+      "maximum_range_exceedance_fraction": 0.05,
+      "maximum_robust_rms": 4.0,
+      "maximum_mahalanobis_threshold": "historical_99th_percentile"
+    },
+    "EXTRAPOLATIVE": {
+      "maximum_range_exceedance_fraction": 0.2,
+      "maximum_robust_rms": 8.0,
+      "maximum_mahalanobis_threshold": "1.5_times_historical_99.9th_percentile"
+    },
+    "UNSUPPORTED": "required_climate_or_anchor_input_missing_or_any_extrapolative_limit_exceeded"
+  },
+  "soil_policy": "use_certified_exact_or_within_2km_recovery;_otherwise_mask_soil_and_disable_soil_dependent_features_without_row_exclusion",
+  "management_policy": "no_management_scenario_in_v1;_mark_unobserved_and_keep_water_balance_disabled",
+  "clipping_before_applicability_classification_allowed": false,
+  "member_dimension_must_remain_resolved": true,
+  "ensemble_weighting": "equal_weight_per_source_id_only_during_later_reporting",
+  "future_covariate_generation_allowed": true,
+  "future_prediction_allowed": false,
+  "phenotype_values_read": false,
+  "inner_validation_metrics_read": false,
+  "outer_test_outcomes_read": false,
+  "outer_test_metrics_read": false,
+  "final_holdout_outcomes_read": false,
+  "future_predictions_generated": 0
+}

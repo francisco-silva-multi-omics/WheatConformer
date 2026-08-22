@@ -1,0 +1,51 @@
+{
+  "protocol_version": "phase6a_soilgrids_missing_resolution_v1",
+  "selection_data": "stage1_v2_location_identifiers_and_soilgrids_values_only",
+  "source_product": "SoilGrids250m_v2_Q0.5",
+  "search_resolution_m": 250,
+  "maximum_search_radius_m": 5000,
+  "automatic_acceptance_distance_m": 2000,
+  "high_confidence_distance_m": 500,
+  "properties": [
+    "wv0033",
+    "wv1500",
+    "cfvo",
+    "bdod"
+  ],
+  "depths": [
+    "0-5cm",
+    "5-15cm",
+    "15-30cm",
+    "30-60cm",
+    "60-100cm"
+  ],
+  "statistic": "Q0.5",
+  "automatic_acceptance_rules": [
+    "nearest cell is within 2000 m of the certified trial coordinate",
+    "all 20 property-depth cells are finite and inside physical domains",
+    "wv0033 is greater than wv1500 at every depth",
+    "the exact SoilGrids member, statistic, units and 250 m grid are retained"
+  ],
+  "terminal_classes": [
+    "RECOVERED_NEAREST_VALID_SOIL_CELL",
+    "CANDIDATE_DISTANCE_REVIEW",
+    "MASKED_NO_VALID_SOIL_CELL_WITHIN_RADIUS"
+  ],
+  "downstream_policy": {
+    "RECOVERED_NEAREST_VALID_SOIL_CELL": "eligible_with_distance_and_imputation_masks",
+    "CANDIDATE_DISTANCE_REVIEW": "masked_until_metadata_or_location_review",
+    "MASKED_NO_VALID_SOIL_CELL_WITHIN_RADIUS": "explicit_soil_missing_mask",
+    "FAILED_RETRYABLE": "not_resolved"
+  },
+  "row_policy": "retain_all_observations_regardless_of_soil_status",
+  "numeric_fill_policy": "any_required_fill_is_fit_on_each_training_partition_only_and_must_retain_source_missingness_and_fallback_masks",
+  "forbidden_inputs": [
+    "phenotype_values",
+    "inner_validation_metrics",
+    "outer_test_outcomes",
+    "outer_test_metrics",
+    "final_holdout_outcomes",
+    "future_climate_values",
+    "model_predictions"
+  ]
+}

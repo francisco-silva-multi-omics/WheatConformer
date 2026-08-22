@@ -1,0 +1,31 @@
+{
+  "protocol_version": "phase5_ka_temporal_country_extension_v1",
+  "stage1_version": "Stage-1 v2",
+  "selection_data": "identifiers_and_frozen_pedigree_operator_only",
+  "phenotype_values_read": false,
+  "inner_validation_metrics_read": false,
+  "outer_test_outcomes_read": false,
+  "final_holdout_outcomes_read": false,
+  "model_training_performed": false,
+  "source_operator_policy": "reuse_phase5_sparse_pedigree_operator_byte_for_byte",
+  "extension_scenarios": [
+    "TEMPORAL_YEAR",
+    "COUNTRY_HOLDOUT"
+  ],
+  "required_extension_states": 60,
+  "required_existing_replay_states": 90,
+  "required_combined_states": 150,
+  "state_binding_fields": [
+    "training_and_application_pedigree_gid_partition",
+    "training_mean_raw_relationship_diagonal_scale",
+    "entity_order_signature",
+    "deterministic_state_hash"
+  ],
+  "numerical_certification": {
+    "sample_dimension": 256,
+    "maximum_symmetry_error": 1e-10,
+    "minimum_eigenvalue": -1e-8,
+    "stored_diagonal_maximum_absolute_delta": 1e-12
+  },
+  "immutable_parent_releases_modified": false
+}

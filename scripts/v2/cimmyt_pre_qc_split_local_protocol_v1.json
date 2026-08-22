@@ -1,0 +1,54 @@
+{
+  "protocol_version": "cimmyt_pre_qc_split_local_v1",
+  "stage1_version": "Stage-1_v2",
+  "source": {
+    "persistent_id": "hdl:11529/10695/5",
+    "dataset_version": "2.1",
+    "filename": "CIMMYT-2013-2018.hmp.txt.zip.gz",
+    "description_marker_rows": 91680,
+    "fixed_external_marker_vocabulary_policy": "A phenotype-blind published marker vocabulary may be fixed before splitting; all frequency, missingness, heterozygosity, imputation, scaling, and factorization parameters must be fitted from each training state only."
+  },
+  "sample_qc": {
+    "minimum_raw_call_rate": 0.5,
+    "fit_scope": "source_intrinsic_per_sample_without_phenotypes"
+  },
+  "marker_qc": {
+    "minimum_training_call_rate": 0.8,
+    "minimum_training_minor_allele_frequency": 0.01,
+    "maximum_training_heterozygosity": 0.1,
+    "minimum_observed_training_calls": 10,
+    "fit_scope": "training_GIDs_only_per_frozen_state"
+  },
+  "imputation": {
+    "method": "training_allele_frequency_2p",
+    "fit_scope": "training_GIDs_only_per_frozen_state",
+    "held_out_values_used": false
+  },
+  "kernel": {
+    "formula": "K=ZZT/(2*sum(p*(1-p)))",
+    "minimum_training_GIDs": 20,
+    "materialization": "on_demand_from_shared_raw_calls_and_state_parameters",
+    "diagnostic_sketch_markers": 32
+  },
+  "required_state_count": 150,
+  "required_checks": [
+    "source_checksum_and_nested_member_CRC",
+    "exact_91680_marker_rows",
+    "unique_source_sample_axis",
+    "exact_Stage1_v2_primary_GID_join",
+    "one_physical_source_stream",
+    "training_only_marker_QC_in_all_states",
+    "training_only_allele_frequency_in_all_states",
+    "training_only_imputation_parameters_in_all_states",
+    "finite_positive_VanRaden_denominator_in_all_supported_states",
+    "no_phenotype_or_evaluation_outcome_access"
+  ],
+  "prohibited_inputs": [
+    "phenotype_values",
+    "inner_validation_metrics",
+    "outer_test_outcomes",
+    "outer_test_metrics",
+    "final_holdout_outcomes",
+    "future_climate_values"
+  ]
+}

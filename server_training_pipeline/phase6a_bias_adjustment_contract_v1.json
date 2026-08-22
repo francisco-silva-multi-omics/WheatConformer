@@ -1,0 +1,80 @@
+{
+  "protocol_version": "phase6a_bias_adjustment_v1",
+  "status": "FROZEN_BEFORE_FUTURE_VALUE_ACCESS",
+  "selection_data": "historical_climate_values_and_certified_site_identifiers_only",
+  "reference_period": [
+    "1981-01-01",
+    "2010-12-31"
+  ],
+  "fit_scope": "separate_source_id_site_calendar_month_variable",
+  "quantile_probabilities": [
+    0.001,
+    0.005,
+    0.01,
+    0.02,
+    0.05,
+    0.1,
+    0.2,
+    0.3,
+    0.4,
+    0.5,
+    0.6,
+    0.7,
+    0.8,
+    0.9,
+    0.95,
+    0.98,
+    0.99,
+    0.995,
+    0.999
+  ],
+  "methods": {
+    "tasmin_c": "historical_cdf_additive_quantile_delta",
+    "tasmean_c": "historical_cdf_additive_quantile_delta",
+    "tasmax_c": "historical_cdf_additive_quantile_delta",
+    "precipitation_mm_day": "historical_wet_day_frequency_correction_plus_multiplicative_quantile_delta",
+    "solar_radiation_mj_m2_day": "historical_log1p_multiplicative_quantile_delta",
+    "relative_humidity_percent": "historical_bounded_logit_additive_quantile_delta",
+    "wind_speed_m_s": "historical_log1p_multiplicative_quantile_delta"
+  },
+  "future_application_rule": "rank_each_value_against_the_frozen_historical_model_CDF_and_apply_the_frozen_reference_minus_or_ratio_delta;_do_not_fit_or_reestimate_parameters_from_future_SSP_values",
+  "precipitation": {
+    "wet_day_threshold_mm": 0.1,
+    "dry_day_frequency_policy": "deterministic_monthly_threshold_from_frozen_historical_model_and_reference_wet_fractions",
+    "ratio_floor_mm": 0.01,
+    "maximum_frozen_multiplier": 20.0
+  },
+  "positive_domain": {
+    "transform": "log1p",
+    "minimum": 0.0,
+    "maximum_frozen_multiplier": 10.0
+  },
+  "bounded_humidity": {
+    "lower_percent": 0.1,
+    "upper_percent": 99.9,
+    "transform": "logit_of_fraction"
+  },
+  "calendar_policy": "fit_distributions_by_native_calendar_month_without_inserting_or_deleting_days",
+  "minimum_support": {
+    "observed_days_per_site_month_variable": 600,
+    "wet_days_per_site_month_for_precipitation_quantiles": 100
+  },
+  "parameter_storage": "one_checksum_bound_NetCDF_per_source_id_with_site_month_variable_quantile_dimensions",
+  "era5_role": "authoritative_historical_reference",
+  "open_meteo_role": "independent_diagnostic_only_never_averaged_or_used_to_replace_CDS",
+  "no_clipping_of_future_inputs_before_OOD_audit": true,
+  "future_SSP_values_read_during_parameter_fit": false,
+  "phenotype_values_read": false,
+  "inner_validation_metrics_read": false,
+  "outer_test_outcomes_read": false,
+  "outer_test_metrics_read": false,
+  "final_holdout_outcomes_read": false,
+  "future_covariate_matrices_generated": false,
+  "future_predictions_generated": false,
+  "parent_artifacts": {
+    "server_training_pipeline/phase6a_daily_normalization_contract_v1.json": "af01c984b6cf6dcbb5f6e6d53808c30f77f9332d908f8e2323f4545531c8d685",
+    "server_training_pipeline/phase6a_cds_bias_reference_protocol_v1.json": "04dfb1f36c5dfa3cafc059260b289d665ae522f90223208863d70999eac18b66",
+    "audit/v2/phase6a_projection_core_raw_archive_v1/raw_archive_certification.json": "89537713c32ce4d5e4db8ed1be0c1e65d7de09c5a0475d39101f1d6b22af091c",
+    "audit/v2/phase6a_daily_normalization_v1/cmip6_historical_normalization_index.tsv": "f246535bc901758430f8d9aa80196f63fb546029a640fe333ac5d3f9cb4100ca"
+  }
+}

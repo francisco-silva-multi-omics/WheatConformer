@@ -1,0 +1,64 @@
+{
+  "protocol_version": "phase6a_daily_normalization_v1",
+  "status": "FROZEN_HISTORICAL_NORMALIZATION_STAGING_ONLY",
+  "selection_data": "certified_raw_climate_values_and_source_metadata_only",
+  "reference_period": [
+    "1981-01-01",
+    "2010-12-31"
+  ],
+  "canonical_schema": {
+    "tasmin_c": "degC",
+    "tasmean_c": "degC",
+    "tasmax_c": "degC",
+    "precipitation_mm_day": "mm/day",
+    "solar_radiation_mj_m2_day": "MJ/m2/day",
+    "relative_humidity_percent": "%",
+    "wind_speed_m_s": "m/s",
+    "surface_pressure_pa": "Pa_optional_diagnostic"
+  },
+  "conversions": {
+    "CMIP6_tas_tasmin_tasmax": "degC=K-273.15",
+    "CMIP6_pr": "mm/day=kg_m-2_s-1*86400",
+    "CMIP6_rsds": "MJ_m-2_day-1=W_m-2*0.0864",
+    "CMIP6_hurs": "percent=source_percent",
+    "CMIP6_sfcWind": "m_s-1=source_m_s-1",
+    "CDS_temperature": "daily_min_mean_max_of_hourly_t2m_K_then_subtract_273.15",
+    "CDS_precipitation": "sum_deaccumulated_hourly_tp_m_then_multiply_1000",
+    "CDS_radiation": "sum_deaccumulated_hourly_ssrd_J_m-2_then_multiply_1e-6",
+    "CDS_relative_humidity": "daily_mean_of_100*es(dewpoint_C)/es(temperature_C)",
+    "CDS_wind": "daily_mean_of_sqrt(u10^2+v10^2)",
+    "CDS_pressure": "daily_mean_surface_pressure_Pa"
+  },
+  "physical_domains": {
+    "tasmin_c": [-90.0, 60.0],
+    "tasmean_c": [-90.0, 60.0],
+    "tasmax_c": [-90.0, 70.0],
+    "precipitation_mm_day": [0.0, 1000.0],
+    "solar_radiation_mj_m2_day": [0.0, 60.0],
+    "relative_humidity_percent": [0.0, 100.0],
+    "wind_speed_m_s": [0.0, 100.0],
+    "surface_pressure_pa": [30000.0, 110000.0]
+  },
+  "tiny_negative_tolerances": {
+    "CDS_tp_m_per_hour": -0.000001,
+    "CDS_ssrd_J_m2_per_hour": -10.0,
+    "CMIP6_pr_kg_m2_s": -1e-10,
+    "CMIP6_rsds_W_m2": -0.01
+  },
+  "tiny_negative_policy": "clip_to_zero_only_within_the_preregistered_tolerance;_reject_more_negative_values;_preserve_unmodified_raw_values_in_checksum_bound_parent_assets",
+  "calendar_policy": "retain_native_CMIP6_calendars_without_inserting_or_deleting_days",
+  "raw_preservation_policy": "immutable_raw_archives_remain_checksum_bound;_CDS_normalized_rows_also_retain_daily_raw_unit_aggregates",
+  "future_policy": "future_CMIP6_assets_are_not_normalized_or_used_in_this_historical_staging_step",
+  "parent_artifacts": {
+    "audit/v2/phase6a_projection_core_raw_archive_v1/raw_archive_certification.json": "89537713c32ce4d5e4db8ed1be0c1e65d7de09c5a0475d39101f1d6b22af091c",
+    "audit/v2/phase6a_projection_core_raw_archive_v1/cmip6_raw_archive_manifest.tsv": "df94f33c38b553552e3b956bc5da096cf5b9268e2d899c11c3f0b2c3a39ba2ce",
+    "audit/v2/phase6a_projection_core_raw_archive_v1/historical_provider_raw_archive_manifest.tsv": "05eba67f46b25073833cf5232bc4bcf1e6f1bb7479c4ae17c629e2ad3dcaeea4"
+  },
+  "phenotype_values_read": false,
+  "inner_validation_metrics_read": false,
+  "outer_test_outcomes_read": false,
+  "outer_test_metrics_read": false,
+  "final_holdout_outcomes_read": false,
+  "future_covariate_matrices_generated": false,
+  "future_predictions_generated": false
+}

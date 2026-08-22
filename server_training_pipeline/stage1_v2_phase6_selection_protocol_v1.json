@@ -1,0 +1,184 @@
+{
+  "protocol_version": "stage1_v2_phase6_model_selection_v1",
+  "stage1_version": "Stage-1 v2",
+  "selection_scope": "five_nested_inner_folds_only",
+  "scenario_order": [
+    "GNEW_EOBS",
+    "GOBS_ENEW",
+    "GNEW_ENEW",
+    "TEMPORAL_YEAR",
+    "COUNTRY_HOLDOUT"
+  ],
+  "primary_traits": [
+    "1000_GRAIN_WEIGHT",
+    "DAYS_TO_HEADING",
+    "DAYS_TO_MATURITY",
+    "GRAIN_YIELD",
+    "PLANT_HEIGHT"
+  ],
+  "exploratory_traits": [
+    "ABOVE_GROUND_BIOMASS",
+    "TEST_WEIGHT"
+  ],
+  "candidate_stages": {
+    "phase_1_individual": [
+      "ka_identity_location_baseline",
+      "ka_historical_environment",
+      "ka_seeds_historical_environment",
+      "h_seeds_historical_environment",
+      "ka_cimmyt_preqc_historical_environment",
+      "ka_projection_core",
+      "ka_seeds_projection_core",
+      "h_seeds_projection_core"
+    ],
+    "phase_2_combination": [
+      "ka_seeds_cimmyt_historical_environment"
+    ]
+  },
+  "candidates": {
+    "ka_identity_location_baseline": {
+      "model_class": "multitrait_reaction_norm",
+      "genotype_components": ["K_A"],
+      "environment_components": ["K_E_IDENTITY", "K_E_EXACT_LOCATION"],
+      "projection_compatible": false
+    },
+    "ka_historical_environment": {
+      "model_class": "multitrait_reaction_norm",
+      "genotype_components": ["K_A"],
+      "environment_components": ["HISTORICAL_PARITY_COMPONENTS"],
+      "projection_compatible": false
+    },
+    "ka_seeds_historical_environment": {
+      "model_class": "multitrait_reaction_norm",
+      "genotype_components": ["K_A", "K_G_SEEDS_DARTSEQ_V2"],
+      "environment_components": ["HISTORICAL_PARITY_COMPONENTS"],
+      "projection_compatible": false
+    },
+    "h_seeds_historical_environment": {
+      "model_class": "multitrait_reaction_norm",
+      "genotype_components": ["H_SEEDS"],
+      "environment_components": ["HISTORICAL_PARITY_COMPONENTS"],
+      "projection_compatible": false,
+      "unsupported_state_behavior": "retain_K_A_backbone_and_mask_Seeds_precision_correction"
+    },
+    "ka_cimmyt_preqc_historical_environment": {
+      "model_class": "multitrait_reaction_norm",
+      "genotype_components": ["K_A", "K_G_CIMMYT_PRE_QC"],
+      "environment_components": ["HISTORICAL_PARITY_COMPONENTS"],
+      "projection_compatible": false
+    },
+    "ka_projection_core": {
+      "model_class": "multitrait_reaction_norm",
+      "genotype_components": ["K_A"],
+      "environment_components": ["E_PROJECTION_CORE_V1"],
+      "projection_compatible": true
+    },
+    "ka_seeds_projection_core": {
+      "model_class": "multitrait_reaction_norm",
+      "genotype_components": ["K_A", "K_G_SEEDS_DARTSEQ_V2"],
+      "environment_components": ["E_PROJECTION_CORE_V1"],
+      "projection_compatible": true
+    },
+    "h_seeds_projection_core": {
+      "model_class": "multitrait_reaction_norm",
+      "genotype_components": ["H_SEEDS"],
+      "environment_components": ["E_PROJECTION_CORE_V1"],
+      "projection_compatible": true,
+      "unsupported_state_behavior": "retain_K_A_backbone_and_mask_Seeds_precision_correction"
+    },
+    "ka_seeds_cimmyt_historical_environment": {
+      "model_class": "multitrait_reaction_norm",
+      "genotype_components": ["K_A", "K_G_SEEDS_DARTSEQ_V2", "K_G_CIMMYT_PRE_QC"],
+      "environment_components": ["HISTORICAL_PARITY_COMPONENTS"],
+      "projection_compatible": false,
+      "eligibility": "only_if_both_individual_marker_candidates_pass_phase_1"
+    }
+  },
+  "deferred_components": {
+    "K_z": "regulatory_eligibility_v2_deferred_before_inner_metrics",
+    "CIMMYT_GBS_GLOBALLY_PREFILTERED": "superseded_by_split_local_pre_qc_candidate",
+    "EYT_HAPLOTYPE": "source_block_definition_and_SNP_provenance_unresolved",
+    "80K": "authoritative_same_dataset_sample_to_GID_crosswalk_unresolved",
+    "SAWYT_DARTAG_MAS": "insufficient_or_targeted_marker_support_for_genome_wide_kernel"
+  },
+  "hyperparameter_configurations": {
+    "frozen_capacity_16": {
+      "latent_dim": 16,
+      "reaction_rank": 16,
+      "max_rank_genotype": 128,
+      "max_rank_environment": 64,
+      "learning_rate": 0.001,
+      "weight_decay": 0.0001,
+      "batch_size": 8192,
+      "epochs_max": 200,
+      "early_stopping_patience": 25
+    },
+    "capacity_32": {
+      "latent_dim": 32,
+      "reaction_rank": 32,
+      "max_rank_genotype": 128,
+      "max_rank_environment": 64,
+      "learning_rate": 0.001,
+      "weight_decay": 0.0001,
+      "batch_size": 8192,
+      "epochs_max": 200,
+      "early_stopping_patience": 25
+    },
+    "reaction_rank_64_regularized": {
+      "latent_dim": 32,
+      "reaction_rank": 64,
+      "max_rank_genotype": 128,
+      "max_rank_environment": 128,
+      "learning_rate": 0.0003,
+      "weight_decay": 0.001,
+      "batch_size": 8192,
+      "epochs_max": 200,
+      "early_stopping_patience": 25
+    }
+  },
+  "screen_schedule": {
+    "phase_1": "outer_fold_1_five_inner_folds_all_individual_candidates_matched_seeds",
+    "confirmation": "all_125_inner_states_phase_1_architecture_winners_only",
+    "phase_2_combination": "all_125_inner_states_only_if_both_marker_components_individually_advance"
+  },
+  "selection_metrics": {
+    "primary": "macro_trait_scenario_normalized_rmse",
+    "tiebreaker": "macro_trait_scenario_pearson",
+    "minimum_relative_nrmse_gain": 0.01,
+    "minimum_paired_inner_fold_win_rate": 0.6666666666666666,
+    "maximum_mean_pearson_drop": 0.005,
+    "maximum_calibration_error_increase": 0.0
+  },
+  "guards": {
+    "primary_trait_maximum_relative_nrmse_loss": 0.01,
+    "within_environment_centered_spearman_maximum_drop": 0.002,
+    "within_environment_pairwise_accuracy_maximum_drop": 0.002,
+    "information_class_maximum_relative_nrmse_loss": 0.02,
+    "projection_inactive_environment_maximum_relative_nrmse_loss": 0.02,
+    "minimum_rows_for_guard": 500,
+    "minimum_groups_for_ranking_guard": 30,
+    "inactive_component_rows_must_be_reported": true,
+    "missing_component_is_never_zero_similarity": true
+  },
+  "mandatory_reporting_subsets": [
+    "PEDIGREE_ONLY",
+    "MARKER_SUPPORTED",
+    "PEDIGREE_AND_MARKER",
+    "NEITHER_PRODUCTION_PEDIGREE_NOR_DENSE_MARKERS",
+    "RECOVERED_IDENTITY_OR_COMPONENT",
+    "PROJECTION_CORE_ACTIVE",
+    "PROJECTION_CORE_INACTIVE_814_ENVIRONMENTS"
+  ],
+  "outer_test_policy": {
+    "open_once_after_inner_selection_freeze": true,
+    "outer_metrics_used_for_selection": false,
+    "refit_on_complete_outer_training_partition": true
+  },
+  "final_holdout_policy": {
+    "sealed_until_historical_and_projection_compatible_models_are_frozen": true
+  },
+  "matched_seed_required": true,
+  "matched_validation_observation_required": true,
+  "matched_component_mask_required": true,
+  "addition_of_unregistered_candidates_after_metric_access_allowed": false
+}

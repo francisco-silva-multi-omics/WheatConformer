@@ -1,0 +1,23 @@
+{
+  "protocol_version": "phase6a_cds_bias_reference_transport_v1",
+  "status": "FROZEN_OPERATIONAL_AMENDMENT",
+  "parent_protocol_path": "server_training_pipeline/phase6a_cds_bias_reference_protocol_v1.json",
+  "parent_protocol_sha256": "04dfb1f36c5dfa3cafc059260b289d665ae522f90223208863d70999eac18b66",
+  "maximum_pending_requests": 20,
+  "default_worker_count": 8,
+  "client_policy": "one_cdsapi_client_per_worker_thread",
+  "publication_policy": "thread_local_staging_then_serialized_content_addressed_atomic_publication",
+  "resume_policy": "validate_existing_receipts_and_fetch_only_pending_request_ids",
+  "scientific_request_identity_changed": false,
+  "request_payload_changed": false,
+  "request_inventory_changed": false,
+  "archive_validation_changed": false,
+  "credentials_or_token_logged": false,
+  "phenotype_values_read": false,
+  "inner_validation_metrics_read": false,
+  "outer_test_outcomes_read": false,
+  "outer_test_metrics_read": false,
+  "final_holdout_outcomes_read": false,
+  "future_covariate_matrices_generated": false,
+  "future_predictions_generated": false
+}

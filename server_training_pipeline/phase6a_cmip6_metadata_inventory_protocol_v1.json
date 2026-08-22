@@ -1,0 +1,78 @@
+{
+  "protocol_version": "phase6a_cmip6_metadata_inventory_v1",
+  "status": "FROZEN_METADATA_ONLY_BEFORE_CMIP6_VALUE_ACCESS",
+  "selection_data": "public_catalog_metadata_only",
+  "parent_environment_source_contract": "audit/v2/phase6a_environment_source_contract_v10/environment_source_contract.json",
+  "catalogues": {
+    "cds_collection": "https://cds.climate.copernicus.eu/api/catalogue/v1/collections/projections-cmip6",
+    "esgf_search": "https://esgf-node.llnl.gov/esg-search/search"
+  },
+  "required_frequency": "day",
+  "required_table_id": "day",
+  "historical_experiment_id": "historical",
+  "required_ssp_experiment_ids": [
+    "ssp126",
+    "ssp245",
+    "ssp370",
+    "ssp585"
+  ],
+  "required_projection_core_variables": [
+    "tasmin",
+    "tasmax",
+    "tas",
+    "pr",
+    "rsds",
+    "sfcWind"
+  ],
+  "humidity_alternatives": [
+    [
+      "hurs"
+    ],
+    [
+      "huss",
+      "ps"
+    ]
+  ],
+  "historical_bias_reference_start": "1981-01-01",
+  "historical_bias_reference_end": "2010-12-31",
+  "future_required_start_year": 2015,
+  "future_required_end_year": 2100,
+  "accepted_calendars": [
+    "standard",
+    "gregorian",
+    "proleptic_gregorian",
+    "noleap",
+    "365_day",
+    "360_day"
+  ],
+  "selection_rule": {
+    "source_scope": "every_source_id_with_complete_required_assets",
+    "members_per_source_id": 1,
+    "preferred_variant_label": "r1i1p1f1",
+    "fallback_variant_rule": "lexicographically_first_complete_variant_label",
+    "grid_rule": "lexicographically_first_complete_grid_label_within_selected_variant",
+    "replica_rule": "latest_version_then_nonreplica_then_lexicographic_catalog_record_id",
+    "humidity_rule": "prefer_hurs_when_complete_else_require_huss_plus_ps",
+    "scenario_specific_ensembles_allowed": false,
+    "model_weighting": "equal_weight_per_source_id",
+    "projected_behavior_selection_forbidden": true
+  },
+  "calendar_audit": {
+    "source": "OPeNDAP_DAS_METADATA_HEADER_ONLY",
+    "one_representative_tas_file_per_experiment": true,
+    "climate_array_access_forbidden": true,
+    "maximum_header_bytes": 2097152,
+    "historical_future_calendar_must_match": true
+  },
+  "prohibitions": {
+    "climate_values_read": false,
+    "future_covariates_generated": false,
+    "predictions_generated": false,
+    "phenotype_values_read": false,
+    "inner_validation_metrics_read": false,
+    "outer_test_outcomes_read": false,
+    "outer_test_metrics_read": false,
+    "final_holdout_outcomes_read": false
+  },
+  "ready_status": "READY_MEMBER_RESOLVED_CMIP6_FETCH"
+}

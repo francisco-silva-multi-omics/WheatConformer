@@ -1,0 +1,50 @@
+{
+  "protocol_version": "phase6a_cmip6_mri_historical_pr_repair_v1",
+  "status": "FROZEN_EXACT_ESGF_GAP_REPAIR",
+  "selection_data": "frozen_cmip6_manifest_identity_and_raw_time_axis_only",
+  "target": {
+    "request_id": "c72e40a9a45b643c94afcddbf289c7aa2470aa691576fa8dc740fb5086c53a3f",
+    "source_id": "MRI-ESM2-0",
+    "experiment_id": "historical",
+    "member_id": "r2i1p1f1",
+    "variable_id": "pr",
+    "grid_label": "gn",
+    "version": "20190603",
+    "calendar": "proleptic_gregorian",
+    "required_start": "1981-01-01",
+    "required_end": "2014-12-31",
+    "expected_time_count": 12418,
+    "site_count": 907
+  },
+  "incomplete_parent": {
+    "start": "1981-01-01",
+    "end": "1999-12-31",
+    "time_count": 6939,
+    "asset_sha256": "50ddb7514e7c680a5e95b8b3b499ae00748b20c503496c82f81838fb54b728bb",
+    "receipt_sha256": "25cc99972f7ae6df116256000d53695610fffbb3d158ce3435d9a931e996d315"
+  },
+  "exact_esgf_file": {
+    "title": "pr_day_MRI-ESM2-0_historical_r2i1p1f1_gn_20000101-20141231.nc",
+    "start": "2000-01-01",
+    "end": "2014-12-31",
+    "bytes": 941338636,
+    "sha256": "52f8bfa414531047fe672c5a7fcefeed713e7d8412fbc4245bc06a5b5e40f331",
+    "urls": [
+      "https://g-52ba3.fd635.8443.data.globus.org/css03_data/CMIP6/CMIP/MRI/MRI-ESM2-0/historical/r2i1p1f1/day/pr/gn/v20190603/pr_day_MRI-ESM2-0_historical_r2i1p1f1_gn_20000101-20141231.nc",
+      "http://esgf-node.ornl.gov/thredds/fileServer/css03_data/CMIP6/CMIP/MRI/MRI-ESM2-0/historical/r2i1p1f1/day/pr/gn/v20190603/pr_day_MRI-ESM2-0_historical_r2i1p1f1_gn_20000101-20141231.nc",
+      "http://esgf-data03.diasjp.net/thredds/fileServer/esg_dataroot/CMIP6/CMIP/MRI/MRI-ESM2-0/historical/r2i1p1f1/day/pr/gn/v20190603/pr_day_MRI-ESM2-0_historical_r2i1p1f1_gn_20000101-20141231.nc"
+    ]
+  },
+  "parent_artifacts": {
+    "audit/v2/phase6a_cmip6_metadata_inventory_v1/cmip6_selected_asset_manifest.tsv": "abf96f271b9241527cf883d9e77c37da58f270b74ed2008852852af2b443202f",
+    "server_training_pipeline/phase6a_cmip6_member_fetch_protocol_v1.json": "116db05dd920133dbdfc03d3dffb4bb2eea25a3fb6848ca5eea05904914fd85b"
+  },
+  "replacement_policy": "atomic_replace_generated_site_asset_and_receipt_only_after_exact_file_hash_identity_site_axis_and_native_calendar_checks_pass",
+  "phenotype_values_read": false,
+  "inner_validation_metrics_read": false,
+  "outer_test_outcomes_read": false,
+  "outer_test_metrics_read": false,
+  "final_holdout_outcomes_read": false,
+  "future_covariate_matrices_generated": false,
+  "future_predictions_generated": false
+}

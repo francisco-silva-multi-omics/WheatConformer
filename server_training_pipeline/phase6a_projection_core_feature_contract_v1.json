@@ -1,0 +1,97 @@
+{
+  "protocol_version": "phase6a_projection_core_feature_v1",
+  "status": "FROZEN_HISTORICAL_BACKCAST_ONLY",
+  "selection_data": "certified_environment_identifiers_daily_climate_static_soil_and_management_metadata_only",
+  "environment_axis": "Stage_1_v2_environment_id",
+  "window_anchor": "observed_nonphenotypic_sowing_date_or_separately_certified_prospective_sowing_scenario",
+  "fixed_windows_days_relative_to_sowing": {
+    "antecedent_30": [-30, -1],
+    "w00_29": [0, 29],
+    "w30_59": [30, 59],
+    "w60_89": [60, 89],
+    "w90_119": [90, 119],
+    "w120_149": [120, 149],
+    "w150_179": [150, 179]
+  },
+  "daily_inputs": [
+    "tasmin_c",
+    "tasmean_c",
+    "tasmax_c",
+    "precipitation_mm_day",
+    "solar_radiation_mj_m2_day",
+    "relative_humidity_percent",
+    "wind_speed_m_s",
+    "surface_pressure_pa"
+  ],
+  "derived_daily_inputs": {
+    "gdd_base_0": "max(tasmean_c-0,0)",
+    "gdd_base_5": "max(tasmean_c-5,0)",
+    "gdd_base_10": "max(tasmean_c-10,0)",
+    "frost_day": "tasmin_c<0",
+    "heat_day_30": "tasmax_c>=30",
+    "extreme_heat_day_35": "tasmax_c>=35",
+    "vpd_kpa": "saturation_vapor_pressure(tasmean_c)*(1-relative_humidity_percent/100)",
+    "pet_fao56_mm_day": "FAO56_Penman_Monteith_from_temperature_radiation_humidity_wind_pressure_or_elevation"
+  },
+  "window_summaries": [
+    "temperature_mean_min_max",
+    "precipitation_sum",
+    "wet_day_count_ge_1mm",
+    "dry_day_count_lt_1mm",
+    "radiation_sum_and_mean",
+    "relative_humidity_mean",
+    "wind_speed_mean",
+    "gdd_sums",
+    "frost_heat_extreme_heat_day_counts",
+    "vpd_mean_max_and_high_vpd_day_count_ge_2kPa",
+    "pet_sum",
+    "climatic_water_balance_precipitation_minus_pet"
+  ],
+  "soil_water_balance": {
+    "soil_source": "certified_SoilGrids_depth_profile",
+    "available_water_capacity": "depth_weighted_wv0033_minus_wv1500_corrected_for_coarse_fragments",
+    "bucket_initialization": "antecedent_30_day_precipitation_minus_PET_capped_to_zero_and_AWC",
+    "daily_update": "clip(previous_storage+precipitation+declared_irrigation-PET,0,AWC)",
+    "automatic_soil_policy": "use_exact_or_frozen_nearest_valid_cell_only_within_2000m",
+    "distance_review_policy": "do_not_use_numerically_until_separate_review",
+    "missing_policy": "emit_missing_soil_mask_and_disable_soil_dependent_water_balance;_never_median_impute"
+  },
+  "management_policy": {
+    "historical": "retain_only_canonical_unit_values_with_explicit_observed_mask",
+    "future": "explicit_management_scenario_axis_or_exclude_from_projection_core",
+    "unknown": "missing_mask_no_climate_based_imputation",
+    "quarantined_outlier_policy": "exclude_value_retain_outlier_mask"
+  },
+  "confidence_masks": [
+    "climate_required_complete",
+    "sowing_date_observed",
+    "window_complete",
+    "soil_exact",
+    "soil_nearest_within_2km",
+    "soil_missing",
+    "water_balance_enabled",
+    "management_observed",
+    "bias_parameter_eligible"
+  ],
+  "calendar_policy": "apply_integer_offsets_on_each_source_native_daily_axis_without_inventing_or_removing_days",
+  "forbidden_inputs": [
+    "phenotype_values",
+    "observed_heading_date_for_heading_target",
+    "observed_maturity_date_for_maturity_target",
+    "yield_or_trait_derived_window_boundaries",
+    "outer_test_outcomes",
+    "final_holdout_outcomes",
+    "future_SSP_values_during_parameter_fitting"
+  ],
+  "historical_sources": [
+    "normalized_CDS_ERA5_Land_authoritative",
+    "bias_adjusted_member_resolved_historical_CMIP6"
+  ],
+  "future_source_plan": "one_matrix_per_source_id_member_id_SSP_location_period_after_transfer_certification_only",
+  "phenotype_values_read": false,
+  "outer_test_outcomes_read": false,
+  "outer_test_metrics_read": false,
+  "final_holdout_outcomes_read": false,
+  "future_covariate_matrices_generated": false,
+  "future_predictions_generated": false
+}

@@ -1,0 +1,32 @@
+{
+  "protocol_version": "phase6a_cds_bias_reference_transport_v2",
+  "status": "FROZEN_OPERATIONAL_AMENDMENT",
+  "parent_protocol_path": "server_training_pipeline/phase6a_cds_bias_reference_protocol_v1.json",
+  "parent_protocol_sha256": "04dfb1f36c5dfa3cafc059260b289d665ae522f90223208863d70999eac18b66",
+  "parent_transport_amendment_path": "server_training_pipeline/phase6a_cds_bias_reference_transport_amendment_v1.json",
+  "parent_transport_amendment_sha256": "6d92027066da9a65ea16c0afc2e50b77ecb862ef9953b35a815009c7b31af403",
+  "maximum_pending_requests": 20,
+  "default_worker_count": 4,
+  "tested_worker_counts": {
+    "1": "PASS_1_OF_1",
+    "2": "PASS_2_OF_2",
+    "4": "PASS_4_OF_4",
+    "8": "UNSTABLE_ABORTED_AFTER_INITIAL_RETRYABLE_FAILURES"
+  },
+  "worker_selection_reason": "Use the highest incrementally tested stable concurrency rather than the account queue ceiling",
+  "client_policy": "one_cdsapi_client_per_worker_thread",
+  "publication_policy": "thread_local_staging_then_serialized_content_addressed_atomic_publication",
+  "resume_policy": "validate_existing_receipts_and_fetch_only_pending_request_ids",
+  "scientific_request_identity_changed": false,
+  "request_payload_changed": false,
+  "request_inventory_changed": false,
+  "archive_validation_changed": false,
+  "credentials_or_token_logged": false,
+  "phenotype_values_read": false,
+  "inner_validation_metrics_read": false,
+  "outer_test_outcomes_read": false,
+  "outer_test_metrics_read": false,
+  "final_holdout_outcomes_read": false,
+  "future_covariate_matrices_generated": false,
+  "future_predictions_generated": false
+}
