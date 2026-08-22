@@ -1,0 +1,29 @@
+{
+  "protocol_version": "stage1_v2_phase6_execution_v2_cpu_parallel",
+  "scientific_selection_protocol_unchanged": true,
+  "candidate_grid_unchanged": true,
+  "hyperparameter_grid_unchanged": true,
+  "batch_size_unchanged": true,
+  "seed_grid_unchanged": true,
+  "early_stopping_unchanged": true,
+  "metric_and_guard_rules_unchanged": true,
+  "prior_local_execution_status": "STOPPED_SUPERSEDED_EXECUTION_ONLY",
+  "prior_local_completed_run_count": 7,
+  "prior_local_partial_run_count": 1,
+  "prior_partial_inner_metrics_known": true,
+  "prior_partial_inner_metrics_used_for_execution_change": false,
+  "prior_partial_inner_metrics_used_for_model_selection": false,
+  "execution_change_basis": "resource_utilization_and_wall_clock_only",
+  "allowed_execution_changes": [
+    "remove_per_batch_host_synchronization_without_changing_optimizer_update_order",
+    "synchronize_validation_predictions_once_per_evaluation",
+    "configure_tensorflow_and_blas_threads_per_worker",
+    "run_distinct_grid_members_in_parallel",
+    "prewarm_shared_phenotype_blind_factor_caches_before_parallel_training"
+  ],
+  "old_run_reuse_allowed": false,
+  "all_120_runs_must_be_recomputed": true,
+  "outer_test_outcomes_read": false,
+  "outer_test_metrics_read": false,
+  "final_holdout_outcomes_read": false
+}

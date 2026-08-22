@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Iterable
@@ -120,7 +121,8 @@ def _one(frame: pd.DataFrame, key: str, value: str, label: str) -> pd.Series:
 
 
 def load_selection_protocol(root: Path) -> dict[str, Any]:
-    path = root / SELECTION_PROTOCOL
+    code_root = Path(os.environ.get("WHEATCONFORMER_CODE_ROOT", root)).resolve()
+    path = code_root / SELECTION_PROTOCOL
     protocol = json.loads(path.read_text(encoding="utf-8"))
     if protocol.get("protocol_version") != "stage1_v2_phase6_model_selection_v1":
         raise ValueError("Unexpected Stage-1 v2 selection protocol")

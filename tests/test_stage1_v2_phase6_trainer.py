@@ -1,11 +1,16 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
-from scripts.v2.run_stage1_v2_phase6_phase1 import phase1_grid
+from scripts.v2.run_stage1_v2_phase6_phase1 import (
+    metadata_matches,
+    phase1_grid,
+    recommended_cpu_parallelism,
+)
 from server_training_pipeline.stage1_v2_trainer_interface import load_selection_protocol
 from server_training_pipeline.train_stage1_v2_phase6_tf import (
     FactorBlock,
@@ -26,6 +31,48 @@ def test_phase1_grid_is_exact_and_uses_matched_fold_seeds() -> None:
     }
     assert grid.groupby("inner_fold")["seed"].nunique().eq(1).all()
     assert grid.groupby(["candidate", "configuration_label"]).size().eq(5).all()
+
+
+def test_server_cpu_parallelism_is_bounded_by_physical_cores() -> None:
+    assert recommended_cpu_parallelism(10) == (4, 2)
+    assert recommended_cpu_parallelism(20) == (4, 5)
+    workers, threads = recommended_cpu_parallelism(40)
+    assert workers == 6
+    assert workers * threads <= 40
+
+
+def test_resume_rejects_superseded_execution_protocol(tmp_path: Path) -> None:
+    row = pd.Series(
+        {
+            "state_id": "GNEW_EOBS__OUTER1__INNER1",
+            "candidate": "ka_identity_location_baseline",
+            "configuration_label": "compact",
+            "seed": 62111,
+        }
+    )
+    metadata = {
+        "status": "PASS",
+        **row.to_dict(),
+        "code_commit": "commit",
+        "selection_protocol_sha256": "selection",
+        "trainer_sha256": "trainer",
+        "execution_protocol_sha256": "old-execution",
+        "execution_backend": "wsl_gpu",
+        "outer_test_outcomes_read": False,
+        "outer_test_metrics_read": False,
+        "final_holdout_outcomes_read": False,
+    }
+    path = tmp_path / "run_metadata.json"
+    path.write_text(json.dumps(metadata), encoding="utf-8")
+    assert not metadata_matches(
+        path,
+        row,
+        commit="commit",
+        protocol_sha="selection",
+        trainer_sha="trainer",
+        execution_protocol_sha="new-execution",
+        runtime_mode="server_cpu",
+    )
 
 
 def test_gnew_eobs_roles_are_disjoint_and_environment_observed() -> None:

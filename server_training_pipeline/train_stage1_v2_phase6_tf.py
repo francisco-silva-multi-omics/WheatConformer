@@ -38,7 +38,10 @@ PHENOTYPES = Path(
 INFORMATION_MASKS = PHASE5 / "model_inputs/information_class_masks.parquet"
 AUTHORITATIVE_WEIGHTS = PHASE5 / "model_inputs/authoritative_weights.parquet"
 KA_NODE_REGISTRY = PHASE5 / "pedigree/pedigree_node_registry.tsv"
-PHASE1_ROOT = Path("model_kernels/stage1_v2_phase6_phase1_v1")
+PHASE1_ROOT = Path("model_kernels/stage1_v2_phase6_phase1_v2")
+EXECUTION_PROTOCOL = Path(
+    "server_training_pipeline/stage1_v2_phase6_execution_protocol_v2.json"
+)
 FACTOR_CACHE_VERSION = "stage1_v2_phase6_factor_cache_v2"
 MISSING_DOSAGE = 255
 
@@ -73,9 +76,10 @@ def bool_series(values: pd.Series) -> pd.Series:
 
 
 def git_commit(root: Path) -> str:
+    code_root = Path(os.environ.get("WHEATCONFORMER_CODE_ROOT", root)).resolve()
     process = subprocess.run(
         ["git", "rev-parse", "HEAD"],
-        cwd=root,
+        cwd=code_root,
         capture_output=True,
         text=True,
         check=False,
@@ -913,7 +917,9 @@ def add_factor_indices(
         if available.any():
             indices = frame.loc[available, column].to_numpy(dtype=np.int64)
             local_available = block.available[indices]
-            frame.loc[available, column] = np.where(local_available, indices, -1)
+            frame.loc[available, column] = np.where(local_available, indices, -1).astype(
+                np.int32
+            )
         genotype_columns.append(column)
     for block_index, block in enumerate(environment):
         column = f"environment_factor_{block_index}_index"
@@ -923,7 +929,9 @@ def add_factor_indices(
         if available.any():
             indices = frame.loc[available, column].to_numpy(dtype=np.int64)
             local_available = block.available[indices]
-            frame.loc[available, column] = np.where(local_available, indices, -1)
+            frame.loc[available, column] = np.where(local_available, indices, -1).astype(
+                np.int32
+            )
         environment_columns.append(column)
     reaction_lookup = {
         value: index for index, value in enumerate(np.asarray(reaction_environment_ids).astype(str))
@@ -936,7 +944,7 @@ def add_factor_indices(
         indices = frame.loc[available, "reaction_environment_index"].to_numpy(dtype=np.int64)
         frame.loc[available, "reaction_environment_index"] = np.where(
             reaction_available[indices], indices, -1
-        )
+        ).astype(np.int32)
     return genotype_columns, environment_columns
 
 
@@ -1130,8 +1138,12 @@ def predict(
         shuffle=False,
         seed=0,
     )
-    values = [model(inputs, training=False).numpy() for inputs, _, _ in dataset]
-    return np.concatenate(values) if values else np.empty(0, dtype=np.float32)
+    values = [model(inputs, training=False) for inputs, _, _ in dataset]
+    return (
+        tf.concat(values, axis=0).numpy()
+        if values
+        else np.empty(0, dtype=np.float32)
+    )
 
 
 def macro_nrmse(frame: pd.DataFrame, prediction: np.ndarray) -> float:
@@ -1307,6 +1319,12 @@ def train_run(
 ) -> dict[str, object]:
     root = root.resolve()
     out_dir = out_dir.resolve()
+    intra_op_threads = int(os.environ.get("STAGE1_V2_INTRA_OP_THREADS", "16"))
+    inter_op_threads = int(os.environ.get("STAGE1_V2_INTER_OP_THREADS", "2"))
+    if intra_op_threads < 1 or inter_op_threads < 1:
+        raise ValueError("TensorFlow thread counts must be positive")
+    tf.config.threading.set_intra_op_parallelism_threads(intra_op_threads)
+    tf.config.threading.set_inter_op_parallelism_threads(inter_op_threads)
     protocol = load_selection_protocol(root)
     configuration = protocol["hyperparameter_configurations"][configuration_label]
     spec = load_state_spec(root, state_id, candidate)
@@ -1348,8 +1366,6 @@ def train_run(
     random.seed(seed)
     np.random.seed(seed)
     tf.keras.utils.set_random_seed(seed)
-    tf.config.threading.set_intra_op_parallelism_threads(16)
-    tf.config.threading.set_inter_op_parallelism_threads(2)
     model = Stage1V2ReactionNorm(
         genotype=genotype,
         environment=environment,
@@ -1394,7 +1410,8 @@ def train_run(
     for epoch in range(1, epochs_max + 1):
         losses = []
         for inputs, target, weight in train_dataset:
-            losses.append(float(train_step(inputs, target, weight).numpy()))
+            losses.append(train_step(inputs, target, weight))
+        mean_training_loss = float(tf.reduce_mean(tf.stack(losses)).numpy())
         if epoch == 1 or epoch % 5 == 0:
             prediction_scaled = predict(
                 model,
@@ -1406,7 +1423,7 @@ def train_run(
             metric = macro_nrmse(validation, prediction_scaled)
             row = {
                 "epoch": epoch,
-                "train_gaussian_nll_regularized": float(np.mean(losses)),
+                "train_gaussian_nll_regularized": mean_training_loss,
                 "validation_macro_normalized_rmse": metric,
             }
             epoch_rows.append(row)
@@ -1449,7 +1466,7 @@ def train_run(
     )
     metadata = {
         "status": "PASS",
-        "protocol_version": "stage1_v2_phase6_tf_trainer_v1",
+        "protocol_version": "stage1_v2_phase6_tf_trainer_v2_cpu_parallel",
         "stage1_version": "Stage-1 v2",
         "state_id": state_id,
         "scenario": spec.scenario,
@@ -1459,12 +1476,20 @@ def train_run(
         "configuration_label": configuration_label,
         "configuration": configuration,
         "seed": seed,
+        "execution_backend": os.environ.get("STAGE1_V2_EXECUTION_BACKEND", "wsl_gpu"),
+        "intra_op_threads": intra_op_threads,
+        "inter_op_threads": inter_op_threads,
         **role_metadata,
         **summary,
         "best_validation_macro_nrmse": best_metric,
         "epochs_completed": int(epoch_rows[-1]["epoch"]),
         "selection_protocol_sha256": sha256_file(
-            root / "server_training_pipeline/stage1_v2_phase6_selection_protocol_v1.json"
+            Path(os.environ.get("WHEATCONFORMER_CODE_ROOT", root)).resolve()
+            / "server_training_pipeline/stage1_v2_phase6_selection_protocol_v1.json"
+        ),
+        "execution_protocol_sha256": sha256_file(
+            Path(os.environ.get("WHEATCONFORMER_CODE_ROOT", root)).resolve()
+            / EXECUTION_PROTOCOL
         ),
         "trainer_sha256": sha256_file(Path(__file__)),
         "code_commit": git_commit(root),

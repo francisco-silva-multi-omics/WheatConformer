@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
@@ -15,11 +16,20 @@ OUTPUT = Path("audit/v2/phase6_model_selection_handoff_v1")
 SELECTION_PROTOCOL = Path(
     "server_training_pipeline/stage1_v2_phase6_selection_protocol_v1.json"
 )
-RUNTIME_PROTOCOL = Path("server_training_pipeline/stage1_v2_training_runtime_v1.json")
+GPU_RUNTIME_PROTOCOL = Path("server_training_pipeline/stage1_v2_training_runtime_v1.json")
+CPU_RUNTIME_PROTOCOL = Path(
+    "server_training_pipeline/stage1_v2_phase6_server_cpu_runtime_v1.json"
+)
+EXECUTION_PROTOCOL = Path(
+    "server_training_pipeline/stage1_v2_phase6_execution_protocol_v2.json"
+)
 TRAINER_INTERFACE = Path("server_training_pipeline/stage1_v2_trainer_interface.py")
 TRAINER = Path("server_training_pipeline/train_stage1_v2_phase6_tf.py")
 PHASE1_ORCHESTRATOR = Path("scripts/v2/run_stage1_v2_phase6_phase1.py")
 PHASE1_LAUNCHER = Path("scripts/v2/run_stage1_v2_phase6_phase1.sh")
+PHASE1_SERVER_LAUNCHER = Path(
+    "scripts/v2/run_stage1_v2_phase6_phase1_server_cpu.sh"
+)
 
 PARENT_RELEASES = (
     (
@@ -119,6 +129,7 @@ def write_tsv(path: Path, frame: pd.DataFrame) -> None:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Freeze the aggregate Stage-1 v2 Phase-6 handoff")
     parser.add_argument("--root", type=Path, default=Path.cwd())
+    parser.add_argument("--code-root", type=Path)
     parser.add_argument("--output", type=Path, default=OUTPUT)
     parser.add_argument(
         "--replace",
@@ -130,8 +141,16 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    root = args.root.resolve()
-    output = (root / args.output).resolve() if not args.output.is_absolute() else args.output
+    data_root = args.root.resolve()
+    code_root = (
+        args.code_root
+        or Path(os.environ.get("WHEATCONFORMER_CODE_ROOT", data_root))
+    ).resolve()
+    output = (
+        (data_root / args.output).resolve()
+        if not args.output.is_absolute()
+        else args.output
+    )
     if output.exists() and any(output.iterdir()) and not args.replace:
         raise SystemExit(f"Refusing to overwrite aggregate handoff: {output}")
     output.mkdir(parents=True, exist_ok=True)
@@ -139,7 +158,7 @@ def main() -> None:
     release_rows = []
     decisions: dict[str, dict[str, Any]] = {}
     for label, relative, expected_status in PARENT_RELEASES:
-        path = root / relative
+        path = data_root / relative
         decision = json.loads(path.read_text(encoding="utf-8"))
         observed = str(decision.get("status", ""))
         release_rows.append(
@@ -156,20 +175,32 @@ def main() -> None:
         decisions[label] = decision
     release_inventory = pd.DataFrame(release_rows)
 
-    selection_path = root / SELECTION_PROTOCOL
-    runtime_path = root / RUNTIME_PROTOCOL
-    trainer_path = root / TRAINER_INTERFACE
-    implementation_paths = (root / TRAINER, root / PHASE1_ORCHESTRATOR, root / PHASE1_LAUNCHER)
+    selection_path = code_root / SELECTION_PROTOCOL
+    gpu_runtime_path = code_root / GPU_RUNTIME_PROTOCOL
+    cpu_runtime_path = code_root / CPU_RUNTIME_PROTOCOL
+    execution_protocol_path = code_root / EXECUTION_PROTOCOL
+    trainer_path = code_root / TRAINER_INTERFACE
+    implementation_relatives = (
+        TRAINER,
+        PHASE1_ORCHESTRATOR,
+        PHASE1_LAUNCHER,
+        PHASE1_SERVER_LAUNCHER,
+        CPU_RUNTIME_PROTOCOL,
+        EXECUTION_PROTOCOL,
+    )
+    implementation_paths = tuple(code_root / path for path in implementation_relatives)
     selection = json.loads(selection_path.read_text(encoding="utf-8"))
-    runtime = json.loads(runtime_path.read_text(encoding="utf-8"))
-    git_status = git(root, "status", "--short").splitlines()
+    gpu_runtime = json.loads(gpu_runtime_path.read_text(encoding="utf-8"))
+    cpu_runtime = json.loads(cpu_runtime_path.read_text(encoding="utf-8"))
+    execution_protocol = json.loads(execution_protocol_path.read_text(encoding="utf-8"))
+    git_status = git(code_root, "status", "--short").splitlines()
     allowed_unrelated = {
         "D audit/new_genotypic_matches_impact.md",
         " D audit/new_genotypic_matches_impact.md",
     }
     release_dirty = sorted(line for line in git_status if line not in allowed_unrelated)
-    commit = git(root, "rev-parse", "HEAD")
-    branch = git(root, "branch", "--show-current")
+    commit = git(code_root, "rev-parse", "HEAD")
+    branch = git(code_root, "branch", "--show-current")
 
     checks = []
 
@@ -190,10 +221,21 @@ def main() -> None:
     )
     add(
         "stage1_v2_runtime_frozen",
-        runtime.get("python") == "3.11.15"
-        and runtime.get("tensorflow") == "2.15.1"
-        and runtime.get("pandas") == "2.2.3",
-        runtime.get("runtime_version", ""),
+        gpu_runtime.get("python") == "3.11.15"
+        and gpu_runtime.get("tensorflow") == "2.15.1"
+        and gpu_runtime.get("pandas") == "2.2.3"
+        and cpu_runtime.get("python_major_minor") == "3.11"
+        and cpu_runtime.get("tensorflow") == "2.15.1"
+        and cpu_runtime.get("pandas") == "2.2.3",
+        f"gpu={gpu_runtime.get('runtime_version', '')}; "
+        f"cpu={cpu_runtime.get('runtime_version', '')}",
+    )
+    add(
+        "execution_only_amendment_frozen",
+        execution_protocol.get("scientific_selection_protocol_unchanged") is True
+        and execution_protocol.get("all_120_runs_must_be_recomputed") is True
+        and execution_protocol.get("old_run_reuse_allowed") is False,
+        execution_protocol.get("protocol_version", ""),
     )
     add(
         "exact_scenario_grid",
@@ -214,7 +256,7 @@ def main() -> None:
     add(
         "phase1_implementation_frozen",
         all(path.is_file() for path in implementation_paths),
-        ";".join(path.relative_to(root).as_posix() for path in implementation_paths),
+        ";".join(path.as_posix() for path in implementation_relatives),
     )
     add(
         "selection_metrics_frozen",
@@ -271,21 +313,25 @@ def main() -> None:
 
     handoff = {
         "status": "PASS_READY_FOR_STAGE1_V2_PHASE6_INNER_MODEL_SELECTION",
-        "release_id": "P6MSH_20260822_V1",
-        "protocol_version": "stage1_v2_phase6_aggregate_handoff_v1",
+        "release_id": "P6MSH_20260822_V2_CPU_SERVER",
+        "protocol_version": "stage1_v2_phase6_aggregate_handoff_v2_cpu_server",
         "stage1_version": "Stage-1 v2",
         "branch": branch,
         "code_commit": commit,
         "bound_release_count": len(release_inventory),
         "selection_protocol": SELECTION_PROTOCOL.as_posix(),
         "selection_protocol_sha256": sha256_file(selection_path),
-        "runtime_protocol": RUNTIME_PROTOCOL.as_posix(),
-        "runtime_protocol_sha256": sha256_file(runtime_path),
+        "gpu_runtime_protocol": GPU_RUNTIME_PROTOCOL.as_posix(),
+        "gpu_runtime_protocol_sha256": sha256_file(gpu_runtime_path),
+        "server_cpu_runtime_protocol": CPU_RUNTIME_PROTOCOL.as_posix(),
+        "server_cpu_runtime_protocol_sha256": sha256_file(cpu_runtime_path),
+        "execution_protocol": EXECUTION_PROTOCOL.as_posix(),
+        "execution_protocol_sha256": sha256_file(execution_protocol_path),
         "trainer_interface": TRAINER_INTERFACE.as_posix(),
         "trainer_interface_sha256": sha256_file(trainer_path),
         "phase1_implementation_sha256": {
-            path.relative_to(root).as_posix(): sha256_file(path)
-            for path in implementation_paths
+            relative.as_posix(): sha256_file(code_root / relative)
+            for relative in implementation_relatives
         },
         "authoritative_release_inventory_sha256": sha256_file(
             output / "authoritative_release_inventory.tsv"
@@ -321,7 +367,7 @@ def main() -> None:
     manifest = pd.DataFrame(
         [
             {
-                "path": path.relative_to(root).as_posix(),
+                "path": path.relative_to(data_root).as_posix(),
                 "bytes": path.stat().st_size,
                 "sha256": sha256_file(path),
             }

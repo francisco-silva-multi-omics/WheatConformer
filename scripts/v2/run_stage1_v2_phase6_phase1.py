@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import argparse
+import gc
 import hashlib
 import json
+import os
 import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
@@ -19,9 +22,12 @@ HANDOFF = Path("audit/v2/phase6_model_selection_handoff_v1/PHASE6_MODEL_SELECTIO
 TRAINER = Path("server_training_pipeline/train_stage1_v2_phase6_tf.py")
 ORCHESTRATOR = Path("scripts/v2/run_stage1_v2_phase6_phase1.py")
 LAUNCHER = Path("scripts/v2/run_stage1_v2_phase6_phase1.sh")
-RUNTIME = Path("server_training_pipeline/stage1_v2_training_runtime_v1.json")
-OUTPUT = Path("model_kernels/stage1_v2_phase6_phase1_v1")
-RUNS = Path("trained_models/stage1_v2_phase6_phase1_v1_runs")
+SERVER_LAUNCHER = Path("scripts/v2/run_stage1_v2_phase6_phase1_server_cpu.sh")
+GPU_RUNTIME = Path("server_training_pipeline/stage1_v2_training_runtime_v1.json")
+CPU_RUNTIME = Path("server_training_pipeline/stage1_v2_phase6_server_cpu_runtime_v1.json")
+EXECUTION_PROTOCOL = Path("server_training_pipeline/stage1_v2_phase6_execution_protocol_v2.json")
+OUTPUT = Path("model_kernels/stage1_v2_phase6_phase1_v2")
+RUNS = Path("trained_models/stage1_v2_phase6_phase1_v2_runs")
 
 
 def sha256_file(path: Path, block_size: int = 1024 * 1024) -> str:
@@ -82,40 +88,139 @@ def phase1_grid(protocol: dict[str, Any]) -> pd.DataFrame:
     return grid
 
 
-def validate_runtime(root: Path) -> dict[str, Any]:
+def resolve_code_root(data_root: Path, requested: Path | None = None) -> Path:
+    configured = requested or Path(os.environ.get("WHEATCONFORMER_CODE_ROOT", data_root))
+    code_root = configured.resolve()
+    if not (code_root / TRAINER).is_file():
+        raise FileNotFoundError(f"Stage-1 v2 code root is incomplete: {code_root}")
+    return code_root
+
+
+def recommended_cpu_parallelism(physical_cores: int) -> tuple[int, int]:
+    if physical_cores < 1:
+        raise ValueError("Physical CPU core count must be positive")
+    if physical_cores >= 8:
+        workers = min(6, max(4, physical_cores // 5))
+    else:
+        workers = max(1, physical_cores // 2)
+    threads = max(1, physical_cores // workers)
+    return workers, threads
+
+
+def _memory_gib() -> float:
+    try:
+        pages = os.sysconf("SC_PHYS_PAGES")
+        page_size = os.sysconf("SC_PAGE_SIZE")
+        return float(pages * page_size / 1024**3)
+    except (AttributeError, OSError, ValueError):
+        return float("nan")
+
+
+def _cpu_model() -> str:
+    path = Path("/proc/cpuinfo")
+    if not path.is_file():
+        return ""
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        if line.lower().startswith("model name"):
+            return line.split(":", 1)[-1].strip()
+    return ""
+
+
+def _physical_cpu_count() -> int:
+    path = Path("/proc/cpuinfo")
+    if not path.is_file():
+        return os.cpu_count() or 1
+    processors: set[tuple[str, str]] = set()
+    physical_id = "0"
+    core_id = ""
+    for line in (*path.read_text(encoding="utf-8", errors="replace").splitlines(), ""):
+        if not line.strip():
+            if core_id:
+                processors.add((physical_id, core_id))
+            physical_id = "0"
+            core_id = ""
+        elif line.lower().startswith("physical id"):
+            physical_id = line.split(":", 1)[-1].strip()
+        elif line.lower().startswith("core id"):
+            core_id = line.split(":", 1)[-1].strip()
+    return len(processors) or (os.cpu_count() or 1)
+
+
+def validate_runtime(code_root: Path, runtime_mode: str) -> dict[str, Any]:
+    import duckdb
     import tensorflow as tf
 
-    runtime = json.loads((root / RUNTIME).read_text(encoding="utf-8"))
+    runtime_path = GPU_RUNTIME if runtime_mode == "wsl_gpu" else CPU_RUNTIME
+    runtime = json.loads((code_root / runtime_path).read_text(encoding="utf-8"))
     observed = {
         "python": ".".join(map(str, sys.version_info[:3])),
         "tensorflow": tf.__version__,
         "pandas": pd.__version__,
+        "numpy": np.__version__,
+        "duckdb": duckdb.__version__,
         "gpu_count": len(tf.config.list_physical_devices("GPU")),
+        "logical_cpu_count": os.cpu_count() or 1,
+        "physical_cpu_count": _physical_cpu_count(),
+        "memory_gib": _memory_gib(),
+        "cpu_model": _cpu_model(),
+        "runtime_mode": runtime_mode,
     }
-    for key in ("python", "tensorflow", "pandas"):
-        if observed[key] != runtime[key]:
+    if runtime_mode == "wsl_gpu":
+        expected_python = runtime["python"]
+    else:
+        expected_python = str(runtime["python_major_minor"])
+        if not observed["python"].startswith(expected_python + "."):
             raise ValueError(
-                f"Certified WSL runtime mismatch for {key}: observed={observed[key]} expected={runtime[key]}"
+                f"Certified server runtime mismatch for python: observed={observed['python']} "
+                f"expected_major_minor={expected_python}"
+            )
+        expected_python = observed["python"]
+    expected = {
+        "python": expected_python,
+        "tensorflow": runtime["tensorflow"],
+        "pandas": runtime["pandas"],
+        "numpy": runtime["numpy"],
+        "duckdb": runtime["duckdb"],
+    }
+    for key in ("python", "tensorflow", "pandas", "numpy", "duckdb"):
+        if observed[key] != expected[key]:
+            raise ValueError(
+                f"Certified runtime mismatch for {key}: observed={observed[key]} expected={expected[key]}"
             )
     if runtime.get("tensorflow_gpu_required_for_training") and observed["gpu_count"] < 1:
         raise ValueError("Certified Phase-1 training requires a visible TensorFlow GPU")
+    if runtime_mode == "server_cpu":
+        required_cpu = str(runtime["cpu_model_required_substring"])
+        if required_cpu not in observed["cpu_model"]:
+            raise ValueError(
+                f"Server CPU identity mismatch: observed={observed['cpu_model']!r}; "
+                f"required_substring={required_cpu!r}"
+            )
+        if observed["memory_gib"] < float(runtime["minimum_memory_gib"]):
+            raise ValueError(
+                f"Server memory is below the frozen minimum: {observed['memory_gib']:.1f} GiB"
+            )
+        if observed["gpu_count"] != 0:
+            raise ValueError("Server CPU execution must hide all GPUs")
+    observed["runtime_protocol"] = runtime_path.as_posix()
+    observed["runtime_protocol_sha256"] = sha256_file(code_root / runtime_path)
     return observed
 
 
-def validate_handoff(root: Path) -> dict[str, Any]:
-    handoff = json.loads((root / HANDOFF).read_text(encoding="utf-8"))
+def validate_handoff(data_root: Path, code_root: Path) -> dict[str, Any]:
+    handoff = json.loads((data_root / HANDOFF).read_text(encoding="utf-8"))
     if handoff.get("status") != "PASS_READY_FOR_STAGE1_V2_PHASE6_INNER_MODEL_SELECTION":
         raise ValueError("Aggregate Phase-6 handoff is not ready")
-    if handoff.get("code_commit") != git_commit(root):
+    if handoff.get("code_commit") != git_commit(code_root):
         raise ValueError("Aggregate Phase-6 handoff is not bound to the active commit")
     if handoff.get("outer_evaluation_allowed") is not False:
         raise ValueError("Phase-1 handoff unexpectedly permits outer evaluation")
     expected = handoff.get("phase1_implementation_sha256", {})
-    for relative in (TRAINER, ORCHESTRATOR, LAUNCHER):
-        observed = sha256_file(root / relative)
+    for relative in (TRAINER, ORCHESTRATOR, LAUNCHER, SERVER_LAUNCHER, CPU_RUNTIME, EXECUTION_PROTOCOL):
+        observed = sha256_file(code_root / relative)
         if expected.get(relative.as_posix()) != observed:
             raise ValueError(f"Frozen Phase-1 implementation mismatch: {relative}")
-    protocol_path = root / "server_training_pipeline/stage1_v2_phase6_selection_protocol_v1.json"
+    protocol_path = code_root / "server_training_pipeline/stage1_v2_phase6_selection_protocol_v1.json"
     if handoff.get("selection_protocol_sha256") != sha256_file(protocol_path):
         raise ValueError("Frozen Phase-1 selection protocol checksum mismatch")
     if handoff.get("phase1_run_count") != 120:
@@ -133,7 +238,16 @@ def run_dir(root: Path, row: pd.Series) -> Path:
     )
 
 
-def metadata_matches(path: Path, row: pd.Series, *, commit: str, protocol_sha: str, trainer_sha: str) -> bool:
+def metadata_matches(
+    path: Path,
+    row: pd.Series,
+    *,
+    commit: str,
+    protocol_sha: str,
+    trainer_sha: str,
+    execution_protocol_sha: str,
+    runtime_mode: str,
+) -> bool:
     if not path.is_file():
         return False
     try:
@@ -149,21 +263,31 @@ def metadata_matches(path: Path, row: pd.Series, *, commit: str, protocol_sha: s
         and value.get("code_commit") == commit
         and value.get("selection_protocol_sha256") == protocol_sha
         and value.get("trainer_sha256") == trainer_sha
+        and value.get("execution_protocol_sha256") == execution_protocol_sha
+        and value.get("execution_backend") == runtime_mode
         and value.get("outer_test_outcomes_read") is False
         and value.get("outer_test_metrics_read") is False
         and value.get("final_holdout_outcomes_read") is False
     )
 
 
-def execute_run(root: Path, row: pd.Series) -> None:
-    destination = run_dir(root, row)
+def execute_run(
+    data_root: Path,
+    code_root: Path,
+    row: pd.Series,
+    *,
+    runtime_mode: str,
+    intra_op_threads: int,
+    inter_op_threads: int,
+) -> None:
+    destination = run_dir(data_root, row)
     destination.mkdir(parents=True, exist_ok=True)
     command = [
         sys.executable,
         "-m",
         "server_training_pipeline.train_stage1_v2_phase6_tf",
         "--root",
-        str(root),
+        str(data_root),
         "--state-id",
         str(row["state_id"]),
         "--candidate",
@@ -175,10 +299,28 @@ def execute_run(root: Path, row: pd.Series) -> None:
         "--out-dir",
         str(destination),
     ]
-    with (destination / "run.log").open("a", encoding="utf-8", buffering=1) as log:
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "WHEATCONFORMER_CODE_ROOT": str(code_root),
+            "STAGE1_V2_EXECUTION_BACKEND": runtime_mode,
+            "STAGE1_V2_INTRA_OP_THREADS": str(intra_op_threads),
+            "STAGE1_V2_INTER_OP_THREADS": str(inter_op_threads),
+            "OMP_NUM_THREADS": str(intra_op_threads),
+            "MKL_NUM_THREADS": str(intra_op_threads),
+            "OPENBLAS_NUM_THREADS": str(intra_op_threads),
+            "NUMEXPR_NUM_THREADS": str(intra_op_threads),
+            "TF_NUM_INTRAOP_THREADS": str(intra_op_threads),
+            "TF_NUM_INTEROP_THREADS": str(inter_op_threads),
+        }
+    )
+    if runtime_mode == "server_cpu":
+        environment["CUDA_VISIBLE_DEVICES"] = "-1"
+    with (destination / "run.log").open("w", encoding="utf-8", buffering=1) as log:
         process = subprocess.Popen(
             command,
-            cwd=root,
+            cwd=code_root,
+            env=environment,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
@@ -196,18 +338,46 @@ def execute_run(root: Path, row: pd.Series) -> None:
         )
 
 
+def warm_factor_caches(data_root: Path, grid: pd.DataFrame, protocol: dict[str, Any]) -> None:
+    from server_training_pipeline.train_stage1_v2_phase6_tf import build_candidate_factors
+
+    unique = grid.drop_duplicates(["state_id", "candidate", "configuration_label"])
+    print(
+        f"PREWARM phenotype-blind factor caches; requested_bindings={len(unique)}",
+        flush=True,
+    )
+    for number, (_, row) in enumerate(unique.iterrows(), start=1):
+        configuration = protocol["hyperparameter_configurations"][row["configuration_label"]]
+        factors = build_candidate_factors(
+            data_root,
+            str(row["state_id"]),
+            str(row["candidate"]),
+            configuration,
+        )
+        del factors
+        gc.collect()
+        if number == 1 or number % 10 == 0 or number == len(unique):
+            print(f"PREWARM {number}/{len(unique)}", flush=True)
+
+
 def _mean(values: Iterable[object]) -> float:
     array = pd.to_numeric(pd.Series(list(values)), errors="coerce").to_numpy(dtype=float)
     finite = array[np.isfinite(array)]
     return float(np.mean(finite)) if len(finite) else float("nan")
 
 
-def summarize(root: Path, grid: pd.DataFrame, protocol: dict[str, Any]) -> dict[str, Any]:
+def summarize(
+    data_root: Path,
+    code_root: Path,
+    grid: pd.DataFrame,
+    protocol: dict[str, Any],
+    runtime: dict[str, Any],
+) -> dict[str, Any]:
     metadata_rows = []
     trait_frames = []
     subset_frames = []
     for _, row in grid.iterrows():
-        destination = run_dir(root, row)
+        destination = run_dir(data_root, row)
         metadata = json.loads((destination / "run_metadata.json").read_text(encoding="utf-8"))
         metadata_rows.append(metadata)
         traits = pd.read_csv(destination / "validation_trait_metrics.tsv", sep="\t")
@@ -352,7 +522,7 @@ def summarize(root: Path, grid: pd.DataFrame, protocol: dict[str, Any]) -> dict[
     summary = pd.DataFrame(rows).sort_values(
         ["validation_normalized_rmse_mean", "candidate", "configuration_label"]
     )
-    output = root / OUTPUT
+    output = data_root / OUTPUT
     output.mkdir(parents=True, exist_ok=True)
     grid.to_csv(output / "phase1_run_grid.tsv", sep="\t", index=False)
     runs.to_csv(output / "phase1_runs.tsv", sep="\t", index=False)
@@ -362,7 +532,7 @@ def summarize(root: Path, grid: pd.DataFrame, protocol: dict[str, Any]) -> dict[
     summary.to_csv(output / "phase1_decision.tsv", sep="\t", index=False)
     provenance = {
         "status": "PASS",
-        "protocol_version": "stage1_v2_phase6_phase1_screen_v1",
+        "protocol_version": "stage1_v2_phase6_phase1_screen_v2_cpu_parallel",
         "selection_data": "five_nested_inner_validation_folds_only",
         "scenario": "GNEW_EOBS",
         "outer_fold": 1,
@@ -378,11 +548,14 @@ def summarize(root: Path, grid: pd.DataFrame, protocol: dict[str, Any]) -> dict[
         "outer_test_metrics_read": False,
         "final_holdout_outcomes_read": False,
         "outer_evaluation_allowed": False,
+        "execution_backend": runtime["runtime_mode"],
+        "runtime_protocol_sha256": runtime["runtime_protocol_sha256"],
+        "execution_protocol_sha256": sha256_file(code_root / EXECUTION_PROTOCOL),
         "selection_protocol_sha256": sha256_file(
-            root / "server_training_pipeline/stage1_v2_phase6_selection_protocol_v1.json"
+            code_root / "server_training_pipeline/stage1_v2_phase6_selection_protocol_v1.json"
         ),
-        "trainer_sha256": sha256_file(root / TRAINER),
-        "code_commit": git_commit(root),
+        "trainer_sha256": sha256_file(code_root / TRAINER),
+        "code_commit": git_commit(code_root),
         "created_at_utc": datetime.now(timezone.utc).isoformat(),
     }
     if provenance["matched_validation_observation_status"] != "pass":
@@ -394,27 +567,81 @@ def summarize(root: Path, grid: pd.DataFrame, protocol: dict[str, Any]) -> dict[
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run the frozen Stage-1 v2 Phase-1 inner screen")
     parser.add_argument("--root", type=Path, default=Path.cwd())
+    parser.add_argument("--code-root", type=Path)
+    parser.add_argument(
+        "--runtime-mode", choices=("wsl_gpu", "server_cpu"), default="wsl_gpu"
+    )
+    parser.add_argument("--workers", type=int)
+    parser.add_argument("--threads-per-worker", type=int)
+    parser.add_argument("--inter-op-threads", type=int)
+    parser.add_argument(
+        "--warm-factor-cache",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Build shared phenotype-blind factors before starting parallel workers",
+    )
     parser.add_argument("--resume", action=argparse.BooleanOptionalAction, default=True)
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
-    root = args.root.resolve()
-    protocol = load_selection_protocol(root)
+    data_root = args.root.resolve()
+    code_root = resolve_code_root(data_root, args.code_root)
+    os.environ["WHEATCONFORMER_CODE_ROOT"] = str(code_root)
+    if args.runtime_mode == "server_cpu":
+        os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
+    protocol = load_selection_protocol(data_root)
     grid = phase1_grid(protocol)
-    handoff = validate_handoff(root)
-    runtime = validate_runtime(root)
-    output = root / OUTPUT
+    handoff = validate_handoff(data_root, code_root)
+    runtime = validate_runtime(code_root, args.runtime_mode)
+    if args.runtime_mode == "server_cpu":
+        recommended_workers, recommended_threads = recommended_cpu_parallelism(
+            int(runtime["physical_cpu_count"])
+        )
+    else:
+        recommended_workers, recommended_threads = 1, 16
+    workers = args.workers if args.workers is not None else recommended_workers
+    threads_per_worker = (
+        args.threads_per_worker
+        if args.threads_per_worker is not None
+        else recommended_threads
+    )
+    inter_op_threads = (
+        args.inter_op_threads
+        if args.inter_op_threads is not None
+        else (1 if args.runtime_mode == "server_cpu" else 2)
+    )
+    if workers < 1 or threads_per_worker < 1 or inter_op_threads < 1:
+        raise ValueError("Worker and TensorFlow thread counts must be positive")
+    if args.runtime_mode == "wsl_gpu" and workers != 1:
+        raise ValueError("The frozen WSL GPU runtime permits exactly one training worker")
+    if (
+        args.runtime_mode == "server_cpu"
+        and workers * threads_per_worker > int(runtime["logical_cpu_count"])
+    ):
+        raise ValueError("Requested CPU workers oversubscribe the server's logical CPUs")
+    warm_factor_cache = (
+        args.warm_factor_cache if args.warm_factor_cache is not None else workers > 1
+    )
+    output = data_root / OUTPUT
     output.mkdir(parents=True, exist_ok=True)
     grid.to_csv(output / "phase1_run_grid.tsv", sep="\t", index=False)
+    execution_protocol_sha = sha256_file(code_root / EXECUTION_PROTOCOL)
     startup = {
         "status": "RUNNING",
-        "protocol_version": "stage1_v2_phase6_phase1_screen_v1",
+        "protocol_version": "stage1_v2_phase6_phase1_screen_v2_cpu_parallel",
         "run_count": len(grid),
-        "code_commit": git_commit(root),
+        "data_root": str(data_root),
+        "code_root": str(code_root),
+        "code_commit": git_commit(code_root),
         "runtime": runtime,
-        "handoff_sha256": sha256_file(root / HANDOFF),
+        "parallel_workers": workers,
+        "threads_per_worker": threads_per_worker,
+        "inter_op_threads_per_worker": inter_op_threads,
+        "factor_cache_prewarm": warm_factor_cache,
+        "execution_protocol_sha256": execution_protocol_sha,
+        "handoff_sha256": sha256_file(data_root / HANDOFF),
         "outer_test_outcomes_read": False,
         "outer_test_metrics_read": False,
         "final_holdout_outcomes_read": False,
@@ -424,21 +651,65 @@ def main() -> None:
     print(json.dumps(startup, indent=2, sort_keys=True), flush=True)
     commit = str(handoff["code_commit"])
     protocol_sha = str(handoff["selection_protocol_sha256"])
-    trainer_sha = sha256_file(root / TRAINER)
+    trainer_sha = sha256_file(code_root / TRAINER)
+    pending: list[tuple[int, pd.Series]] = []
     for number, (_, row) in enumerate(grid.iterrows(), start=1):
-        metadata_path = run_dir(root, row) / "run_metadata.json"
+        metadata_path = run_dir(data_root, row) / "run_metadata.json"
         if args.resume and metadata_matches(
             metadata_path,
             row,
             commit=commit,
             protocol_sha=protocol_sha,
             trainer_sha=trainer_sha,
+            execution_protocol_sha=execution_protocol_sha,
+            runtime_mode=args.runtime_mode,
         ):
             print(f"[{number}/{len(grid)}] SKIP certified {row['state_id']} {row['candidate']} {row['configuration_label']}", flush=True)
             continue
-        print(f"[{number}/{len(grid)}] TRAIN {row['state_id']} {row['candidate']} {row['configuration_label']}", flush=True)
-        execute_run(root, row)
-    provenance = summarize(root, grid, protocol)
+        pending.append((number, row.copy()))
+    if warm_factor_cache and pending:
+        warm_factor_caches(data_root, grid, protocol)
+    if pending:
+        print(
+            f"EXECUTE pending={len(pending)} workers={workers} "
+            f"threads_per_worker={threads_per_worker}",
+            flush=True,
+        )
+        executor = ThreadPoolExecutor(max_workers=workers, thread_name_prefix="phase1")
+        futures = {}
+        try:
+            for number, row in pending:
+                print(
+                    f"[{number}/{len(grid)}] QUEUE {row['state_id']} "
+                    f"{row['candidate']} {row['configuration_label']}",
+                    flush=True,
+                )
+                future = executor.submit(
+                    execute_run,
+                    data_root,
+                    code_root,
+                    row,
+                    runtime_mode=args.runtime_mode,
+                    intra_op_threads=threads_per_worker,
+                    inter_op_threads=inter_op_threads,
+                )
+                futures[future] = (number, row)
+            for future in as_completed(futures):
+                number, row = futures[future]
+                future.result()
+                print(
+                    f"[{number}/{len(grid)}] DONE {row['state_id']} "
+                    f"{row['candidate']} {row['configuration_label']}",
+                    flush=True,
+                )
+        except BaseException:
+            for future in futures:
+                future.cancel()
+            executor.shutdown(wait=True, cancel_futures=True)
+            raise
+        else:
+            executor.shutdown(wait=True)
+    provenance = summarize(data_root, code_root, grid, protocol, runtime)
     write_json(output / "phase1_status.json", {**provenance, "status": "COMPLETE"})
     print(json.dumps(provenance, indent=2, sort_keys=True), flush=True)
 

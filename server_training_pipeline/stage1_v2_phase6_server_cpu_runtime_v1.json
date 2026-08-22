@@ -1,0 +1,19 @@
+{
+  "runtime_version": "stage1_v2_training_server_cpu_v1",
+  "platform": "Linux server CPU",
+  "python_major_minor": "3.11",
+  "tensorflow": "2.15.1",
+  "pandas": "2.2.3",
+  "numpy": "1.26.4",
+  "duckdb": "1.5.5",
+  "cpu_model_required_substring": "Intel(R) Xeon(R) CPU E5-2630 v4",
+  "minimum_memory_gib": 450,
+  "interpreter": "/home/practicasciad/tools/tf_wheat_cpu/bin/python",
+  "tensorflow_gpu_required_for_training": false,
+  "cuda_visible_devices": "-1",
+  "parallel_worker_policy": "bounded_independent_runs",
+  "default_parallel_workers_for_20_physical_cores": 4,
+  "default_threads_per_worker_for_20_physical_cores": 5,
+  "outer_test_outcomes_allowed": false,
+  "final_holdout_outcomes_allowed": false
+}

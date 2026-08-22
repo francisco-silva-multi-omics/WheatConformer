@@ -27,6 +27,9 @@ def test_aggregate_handoff_freezer_binds_every_authoritative_release() -> None:
         "train_stage1_v2_phase6_tf.py",
         "run_stage1_v2_phase6_phase1.py",
         "run_stage1_v2_phase6_phase1.sh",
+        "run_stage1_v2_phase6_phase1_server_cpu.sh",
+        "stage1_v2_phase6_server_cpu_runtime_v1.json",
+        "stage1_v2_phase6_execution_protocol_v2.json",
     ):
         assert implementation in source
 
@@ -44,6 +47,11 @@ def test_aggregate_handoff_release_passes_when_present() -> None:
     assert decision["projection_inactive_environment_count"] == 814
     assert decision["outer_evaluation_allowed"] is False
     assert decision["phase1_run_count"] == 120
-    assert len(decision["phase1_implementation_sha256"]) == 3
+    if decision.get("protocol_version") == "stage1_v2_phase6_aggregate_handoff_v2_cpu_server":
+        assert len(decision["phase1_implementation_sha256"]) == 6
+        assert decision["execution_protocol_sha256"]
+        assert decision["server_cpu_runtime_protocol_sha256"]
+    else:
+        assert len(decision["phase1_implementation_sha256"]) == 3
     assert validation["status"].eq("PASS").all()
     assert inventory["status"].eq("PASS").all()

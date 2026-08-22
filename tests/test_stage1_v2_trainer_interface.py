@@ -73,3 +73,31 @@ def test_training_runtime_is_the_certified_wsl_environment() -> None:
     assert runtime["tensorflow"] == "2.15.1"
     assert runtime["pandas"] == "2.2.3"
     assert runtime["windows_audit_venv_is_training_runtime"] is False
+
+
+def test_server_cpu_runtime_is_frozen_without_gpu_requirement() -> None:
+    runtime = json.loads(
+        (
+            ROOT
+            / "server_training_pipeline/stage1_v2_phase6_server_cpu_runtime_v1.json"
+        ).read_text()
+    )
+    assert runtime["python_major_minor"] == "3.11"
+    assert runtime["tensorflow"] == "2.15.1"
+    assert runtime["pandas"] == "2.2.3"
+    assert runtime["tensorflow_gpu_required_for_training"] is False
+    assert runtime["default_parallel_workers_for_20_physical_cores"] == 4
+
+
+def test_execution_amendment_recomputes_every_run_without_scientific_change() -> None:
+    protocol = json.loads(
+        (
+            ROOT
+            / "server_training_pipeline/stage1_v2_phase6_execution_protocol_v2.json"
+        ).read_text()
+    )
+    assert protocol["scientific_selection_protocol_unchanged"] is True
+    assert protocol["all_120_runs_must_be_recomputed"] is True
+    assert protocol["old_run_reuse_allowed"] is False
+    assert protocol["prior_partial_inner_metrics_used_for_execution_change"] is False
+    assert protocol["outer_test_outcomes_read"] is False
