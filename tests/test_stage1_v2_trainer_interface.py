@@ -24,6 +24,10 @@ def test_phase6_selection_protocol_freezes_metrics_guards_and_subsets() -> None:
     assert "RECOVERED_IDENTITY_OR_COMPONENT" in subsets
     assert "PROJECTION_CORE_INACTIVE_814_ENVIRONMENTS" in subsets
     assert protocol["addition_of_unregistered_candidates_after_metric_access_allowed"] is False
+    schedule = protocol["screen_schedule"]
+    assert schedule["phase_1_scenario"] == "GNEW_EOBS"
+    assert schedule["phase_1_outer_fold"] == 1
+    assert schedule["phase_1_inner_folds"] == [1, 2, 3, 4, 5]
 
 
 def test_v2_interface_preflights_one_inner_projection_state_without_outcomes() -> None:

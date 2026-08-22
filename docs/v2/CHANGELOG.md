@@ -576,3 +576,9 @@ sealed, and deferred panels remain inactive without a new authorized protocol.
   WSL Python 3.11 / TensorFlow 2.15.1 / pandas 2.2.3 runtime.
 - No model was trained and no inner-validation metric, outer-test outcome or
   final-holdout outcome was read.
+- Added the executable Stage-1 v2 TensorFlow trainer and resumable Phase-1
+  orchestrator. The frozen screen is exactly 120 runs on `GNEW_EOBS` outer 1,
+  inner 1-5, with matched fold seeds and automatic inner-only reporting.
+- Preserved historical environment components as 30 separately gated effects
+  on the preflighted state, including 24 crop-stage blocks and TGW-only
+  eligibility; no combined opaque historical kernel is introduced.

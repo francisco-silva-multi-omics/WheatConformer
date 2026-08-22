@@ -731,3 +731,11 @@ Status: `PASS_READY_FOR_STAGE1_V2_PHASE6_INNER_MODEL_SELECTION`.
 
 The next permitted action is the preregistered five-inner-fold phase-1 screen.
 Outer evaluation is not yet authorized.
+
+The executable Phase-1 implementation is now defined as a resumable 120-run
+grid: eight preregistered candidates by three frozen capacity configurations
+over `GNEW_EOBS` outer fold 1 and inner folds 1-5. The trainer consumes the
+Stage-1 v2 weighted population, sparse split-local K_A, optional Seeds/CIMMYT
+or H_SEEDS factors, and either separately gated historical environment
+components or E_PROJECTION_CORE_V1. It writes inner-validation metrics only;
+outer-test outcomes, outer metrics and the final holdout remain inaccessible.

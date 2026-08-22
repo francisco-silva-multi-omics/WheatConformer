@@ -500,8 +500,12 @@ exact 153-feature schema, rank-64 training projection and all 814 inactive
 environment masks.
 
 Selection uses matched seeds, observations and component masks. Phase-1 is
-limited to the registered candidates and bounded configurations on five inner
-folds; only advancing architectures may enter all-125-state confirmation.
+limited to the registered candidates and bounded configurations on
+`GNEW_EOBS` outer fold 1, inner folds 1-5; the resulting grid contains exactly
+120 runs and uses one matched seed per fold. Historical identity, exact
+location, management, stress, weather, 24 stage blocks and TGW must remain
+separately gated main effects; the 96 stage features also define the reaction
+slopes. Only advancing architectures may enter all-125-state confirmation.
 Outer evaluation remains prohibited until the inner decision and one historical
 plus one projection-compatible specification are frozen. The final holdout
 remains sealed.

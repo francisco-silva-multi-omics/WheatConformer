@@ -23,6 +23,12 @@ def test_aggregate_handoff_freezer_binds_every_authoritative_release() -> None:
     ]
     for label in required:
         assert label in source
+    for implementation in (
+        "train_stage1_v2_phase6_tf.py",
+        "run_stage1_v2_phase6_phase1.py",
+        "run_stage1_v2_phase6_phase1.sh",
+    ):
+        assert implementation in source
 
 
 def test_aggregate_handoff_release_passes_when_present() -> None:
@@ -37,5 +43,7 @@ def test_aggregate_handoff_release_passes_when_present() -> None:
     assert decision["inner_state_count"] == 125
     assert decision["projection_inactive_environment_count"] == 814
     assert decision["outer_evaluation_allowed"] is False
+    assert decision["phase1_run_count"] == 120
+    assert len(decision["phase1_implementation_sha256"]) == 3
     assert validation["status"].eq("PASS").all()
     assert inventory["status"].eq("PASS").all()

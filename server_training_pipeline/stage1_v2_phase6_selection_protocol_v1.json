@@ -137,6 +137,9 @@
     }
   },
   "screen_schedule": {
+    "phase_1_scenario": "GNEW_EOBS",
+    "phase_1_outer_fold": 1,
+    "phase_1_inner_folds": [1, 2, 3, 4, 5],
     "phase_1": "outer_fold_1_five_inner_folds_all_individual_candidates_matched_seeds",
     "confirmation": "all_125_inner_states_phase_1_architecture_winners_only",
     "phase_2_combination": "all_125_inner_states_only_if_both_marker_components_individually_advance"

@@ -17,6 +17,9 @@ SELECTION_PROTOCOL = Path(
 )
 RUNTIME_PROTOCOL = Path("server_training_pipeline/stage1_v2_training_runtime_v1.json")
 TRAINER_INTERFACE = Path("server_training_pipeline/stage1_v2_trainer_interface.py")
+TRAINER = Path("server_training_pipeline/train_stage1_v2_phase6_tf.py")
+PHASE1_ORCHESTRATOR = Path("scripts/v2/run_stage1_v2_phase6_phase1.py")
+PHASE1_LAUNCHER = Path("scripts/v2/run_stage1_v2_phase6_phase1.sh")
 
 PARENT_RELEASES = (
     (
@@ -156,6 +159,7 @@ def main() -> None:
     selection_path = root / SELECTION_PROTOCOL
     runtime_path = root / RUNTIME_PROTOCOL
     trainer_path = root / TRAINER_INTERFACE
+    implementation_paths = (root / TRAINER, root / PHASE1_ORCHESTRATOR, root / PHASE1_LAUNCHER)
     selection = json.loads(selection_path.read_text(encoding="utf-8"))
     runtime = json.loads(runtime_path.read_text(encoding="utf-8"))
     git_status = git(root, "status", "--short").splitlines()
@@ -196,6 +200,21 @@ def main() -> None:
         selection.get("scenario_order")
         == ["GNEW_EOBS", "GOBS_ENEW", "GNEW_ENEW", "TEMPORAL_YEAR", "COUNTRY_HOLDOUT"],
         ",".join(selection.get("scenario_order", [])),
+    )
+    schedule = selection.get("screen_schedule", {})
+    add(
+        "phase1_grid_frozen",
+        schedule.get("phase_1_scenario") == "GNEW_EOBS"
+        and schedule.get("phase_1_outer_fold") == 1
+        and schedule.get("phase_1_inner_folds") == [1, 2, 3, 4, 5]
+        and len(selection.get("candidate_stages", {}).get("phase_1_individual", [])) == 8
+        and len(selection.get("hyperparameter_configurations", {})) == 3,
+        "scenario=GNEW_EOBS; outer=1; inner=1..5; candidates=8; configurations=3",
+    )
+    add(
+        "phase1_implementation_frozen",
+        all(path.is_file() for path in implementation_paths),
+        ";".join(path.relative_to(root).as_posix() for path in implementation_paths),
     )
     add(
         "selection_metrics_frozen",
@@ -264,6 +283,10 @@ def main() -> None:
         "runtime_protocol_sha256": sha256_file(runtime_path),
         "trainer_interface": TRAINER_INTERFACE.as_posix(),
         "trainer_interface_sha256": sha256_file(trainer_path),
+        "phase1_implementation_sha256": {
+            path.relative_to(root).as_posix(): sha256_file(path)
+            for path in implementation_paths
+        },
         "authoritative_release_inventory_sha256": sha256_file(
             output / "authoritative_release_inventory.tsv"
         ),
@@ -281,6 +304,10 @@ def main() -> None:
         "outer_test_metrics_read": False,
         "final_holdout_outcomes_read": False,
         "model_training_performed": False,
+        "phase1_scenario": "GNEW_EOBS",
+        "phase1_outer_fold": 1,
+        "phase1_inner_folds": [1, 2, 3, 4, 5],
+        "phase1_run_count": 120,
         "outer_evaluation_allowed": False,
         "next_action": "run_preregistered_phase1_inner_screen_only",
         "created_at_utc": datetime.now(timezone.utc).isoformat(),
