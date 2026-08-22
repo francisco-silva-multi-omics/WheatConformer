@@ -21,6 +21,29 @@ Override only for a resource benchmark using `STAGE1_V2_CPU_WORKERS` and
 
 ## Update and launch
 
+The Stage-1 v2 data artifacts are audit outputs and are not stored in Git. Create the
+checksummed Phase-1 transfer bundle on the workstation before the first server launch:
+
+```powershell
+$ROOT = "E:\ensayos_genotipoXambiente"
+$PY = "$ROOT\.audit-venv\Scripts\python.exe"
+
+& $PY -m scripts.v2.package_stage1_v2_phase6_phase1_server_data `
+  --root $ROOT `
+  --code-root $ROOT `
+  --archive "audit/v2/stage1_v2_phase6_phase1_server_data_bundle_v1/stage1_v2_phase6_phase1_server_data.tar.gz"
+```
+
+Transfer that archive to the server and extract it into the data root. The archive
+contains about 2.4 GB before compression and excludes future covariate matrices.
+
+```bash
+DATA=/DATA2/estancias/tesis_javier/model_DATA/genotipoXambiente
+tar -xzf "$DATA/stage1_v2_phase6_phase1_server_data.tar.gz" -C "$DATA"
+```
+
+Then update the code and launch:
+
 ```bash
 CODE=/home/practicasciad/tools/WheatConformer
 DATA=/DATA2/estancias/tesis_javier/model_DATA/genotipoXambiente

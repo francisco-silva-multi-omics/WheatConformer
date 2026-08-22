@@ -23,6 +23,7 @@ TRAINER = Path("server_training_pipeline/train_stage1_v2_phase6_tf.py")
 ORCHESTRATOR = Path("scripts/v2/run_stage1_v2_phase6_phase1.py")
 LAUNCHER = Path("scripts/v2/run_stage1_v2_phase6_phase1.sh")
 SERVER_LAUNCHER = Path("scripts/v2/run_stage1_v2_phase6_phase1_server_cpu.sh")
+DATA_PACKAGER = Path("scripts/v2/package_stage1_v2_phase6_phase1_server_data.py")
 GPU_RUNTIME = Path("server_training_pipeline/stage1_v2_training_runtime_v1.json")
 CPU_RUNTIME = Path("server_training_pipeline/stage1_v2_phase6_server_cpu_runtime_v1.json")
 EXECUTION_PROTOCOL = Path("server_training_pipeline/stage1_v2_phase6_execution_protocol_v2.json")
@@ -216,7 +217,15 @@ def validate_handoff(data_root: Path, code_root: Path) -> dict[str, Any]:
     if handoff.get("outer_evaluation_allowed") is not False:
         raise ValueError("Phase-1 handoff unexpectedly permits outer evaluation")
     expected = handoff.get("phase1_implementation_sha256", {})
-    for relative in (TRAINER, ORCHESTRATOR, LAUNCHER, SERVER_LAUNCHER, CPU_RUNTIME, EXECUTION_PROTOCOL):
+    for relative in (
+        TRAINER,
+        ORCHESTRATOR,
+        LAUNCHER,
+        SERVER_LAUNCHER,
+        DATA_PACKAGER,
+        CPU_RUNTIME,
+        EXECUTION_PROTOCOL,
+    ):
         observed = sha256_file(code_root / relative)
         if expected.get(relative.as_posix()) != observed:
             raise ValueError(f"Frozen Phase-1 implementation mismatch: {relative}")

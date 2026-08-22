@@ -30,6 +30,9 @@ PHASE1_LAUNCHER = Path("scripts/v2/run_stage1_v2_phase6_phase1.sh")
 PHASE1_SERVER_LAUNCHER = Path(
     "scripts/v2/run_stage1_v2_phase6_phase1_server_cpu.sh"
 )
+PHASE1_DATA_PACKAGER = Path(
+    "scripts/v2/package_stage1_v2_phase6_phase1_server_data.py"
+)
 
 PARENT_RELEASES = (
     (
@@ -185,6 +188,7 @@ def main() -> None:
         PHASE1_ORCHESTRATOR,
         PHASE1_LAUNCHER,
         PHASE1_SERVER_LAUNCHER,
+        PHASE1_DATA_PACKAGER,
         CPU_RUNTIME_PROTOCOL,
         EXECUTION_PROTOCOL,
     )

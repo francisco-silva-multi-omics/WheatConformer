@@ -23,6 +23,9 @@ fi
 
 mkdir -p "$DATA/logs" "$DATA/audit/v2/stage1_v2_phase6_server_cpu_execution_v1"
 PID_FILE="$DATA/audit/v2/stage1_v2_phase6_server_cpu_execution_v1/phase1.pid"
+BUNDLE_DIR="$DATA/audit/v2/stage1_v2_phase6_phase1_server_data_bundle_v1"
+BUNDLE_DECISION="$BUNDLE_DIR/PHASE1_SERVER_DATA_BUNDLE_DECISION.json"
+BUNDLE_MANIFEST="$BUNDLE_DIR/phase1_server_data_payload_manifest.tsv"
 if [[ -s "$PID_FILE" ]]; then
   OLD_PID="$(tr -dc '0-9' < "$PID_FILE")"
   if [[ -n "$OLD_PID" ]] && kill -0 "$OLD_PID" 2>/dev/null; then
@@ -36,6 +39,27 @@ export WHEATCONFORMER_CODE_ROOT="$CODE"
 export PYTHONPATH="$CODE${PYTHONPATH:+:$PYTHONPATH}"
 export CUDA_VISIBLE_DEVICES=-1
 export TF_CPP_MIN_LOG_LEVEL="${TF_CPP_MIN_LOG_LEVEL:-2}"
+
+if [[ ! -f "$BUNDLE_DECISION" || ! -f "$BUNDLE_MANIFEST" ]]; then
+  echo "Missing certified Stage-1 v2 Phase-1 server data bundle under: $BUNDLE_DIR" >&2
+  echo "Create and transfer the bundle from the Stage-1 v2 workstation before launching." >&2
+  exit 1
+fi
+"$PYTHON" - "$BUNDLE_DECISION" "$(git -C "$CODE" rev-parse HEAD)" <<'PY'
+import json
+import sys
+
+decision = json.load(open(sys.argv[1], encoding="utf-8"))
+if decision.get("status") != "PASS_PHASE1_SERVER_DATA_BUNDLE_READY":
+    raise SystemExit("Phase-1 server data bundle decision is not PASS")
+if decision.get("code_commit") != sys.argv[2]:
+    raise SystemExit("Phase-1 server data bundle is bound to a different code commit")
+PY
+echo "VERIFY checksummed Stage-1 v2 Phase-1 server data payload"
+"$PYTHON" -m scripts.v2.package_stage1_v2_phase6_phase1_server_data \
+  --root "$DATA" \
+  --code-root "$CODE" \
+  --verify-manifest "$BUNDLE_MANIFEST"
 
 echo "FREEZE aggregate Stage-1 v2 Phase-6 handoff against the active server commit"
 "$PYTHON" -m scripts.v2.freeze_phase6_model_selection_handoff \

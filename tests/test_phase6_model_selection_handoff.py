@@ -28,6 +28,7 @@ def test_aggregate_handoff_freezer_binds_every_authoritative_release() -> None:
         "run_stage1_v2_phase6_phase1.py",
         "run_stage1_v2_phase6_phase1.sh",
         "run_stage1_v2_phase6_phase1_server_cpu.sh",
+        "package_stage1_v2_phase6_phase1_server_data.py",
         "stage1_v2_phase6_server_cpu_runtime_v1.json",
         "stage1_v2_phase6_execution_protocol_v2.json",
     ):
@@ -48,7 +49,14 @@ def test_aggregate_handoff_release_passes_when_present() -> None:
     assert decision["outer_evaluation_allowed"] is False
     assert decision["phase1_run_count"] == 120
     if decision.get("protocol_version") == "stage1_v2_phase6_aggregate_handoff_v2_cpu_server":
-        assert len(decision["phase1_implementation_sha256"]) == 6
+        implementations = decision["phase1_implementation_sha256"]
+        expected = (
+            7
+            if "scripts/v2/package_stage1_v2_phase6_phase1_server_data.py"
+            in implementations
+            else 6
+        )
+        assert len(implementations) == expected
         assert decision["execution_protocol_sha256"]
         assert decision["server_cpu_runtime_protocol_sha256"]
     else:
