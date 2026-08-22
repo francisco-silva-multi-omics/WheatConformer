@@ -159,7 +159,10 @@ def main() -> None:
     selection = json.loads(selection_path.read_text(encoding="utf-8"))
     runtime = json.loads(runtime_path.read_text(encoding="utf-8"))
     git_status = git(root, "status", "--short").splitlines()
-    allowed_unrelated = {" D audit/new_genotypic_matches_impact.md"}
+    allowed_unrelated = {
+        "D audit/new_genotypic_matches_impact.md",
+        " D audit/new_genotypic_matches_impact.md",
+    }
     release_dirty = sorted(line for line in git_status if line not in allowed_unrelated)
     commit = git(root, "rev-parse", "HEAD")
     branch = git(root, "branch", "--show-current")

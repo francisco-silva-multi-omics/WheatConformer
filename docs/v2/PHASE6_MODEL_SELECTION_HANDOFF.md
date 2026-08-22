@@ -45,3 +45,8 @@ The final holdout remains sealed.
 Training and the complete release test suite use the frozen WSL2 Debian runtime:
 Python 3.11.15, TensorFlow 2.15.1 and pandas 2.2.3. The Windows `.audit-venv`
 remains an audit runtime and is not the certified training environment.
+
+The complete repository suite passed 782 tests in that WSL runtime. The
+aggregate handoff is frozen at
+`audit/v2/phase6_model_selection_handoff_v1/` with status
+`PASS_READY_FOR_STAGE1_V2_PHASE6_INNER_MODEL_SELECTION`.

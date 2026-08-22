@@ -704,8 +704,7 @@ a clean task and new fail-if-exists release with a content-aware denylist.
 
 ## Stage-1 v2 Phase-6 preselection gate - 2026-08-22
 
-Status: implementation and phenotype-blind component preflight complete;
-aggregate handoff awaits the clean code commit hash.
+Status: `PASS_READY_FOR_STAGE1_V2_PHASE6_INNER_MODEL_SELECTION`.
 
 - The authoritative parity registry contains 150 states: 125 inner and 25
   outer states across `GNEW_EOBS`, `GOBS_ENEW`, `GNEW_ENEW`, `TEMPORAL_YEAR`
@@ -723,9 +722,12 @@ aggregate handoff awaits the clean code commit hash.
   phenotype or protected outcome values.
 - K_z remains deferred before metrics under the regulatory-eligibility v2
   decision. It cannot be added adaptively during this Phase-6 release.
+- The v2 code, protocols and tests are committed on
+  `audit/forensic-kernel-fixes`. The complete certified WSL runtime suite passed
+  782 tests; the aggregate handoff binds the exact release commit and ten
+  authoritative parent decisions.
 - No model training, inner metric selection, outer outcome access or final
   holdout access has occurred in this preselection gate.
 
-The next permitted action after the aggregate handoff passes is the
-preregistered five-inner-fold phase-1 screen. Outer evaluation is not yet
-authorized.
+The next permitted action is the preregistered five-inner-fold phase-1 screen.
+Outer evaluation is not yet authorized.
