@@ -27,8 +27,35 @@ DATA_PACKAGER = Path("scripts/v2/package_stage1_v2_phase6_phase1_server_data.py"
 GPU_RUNTIME = Path("server_training_pipeline/stage1_v2_training_runtime_v1.json")
 CPU_RUNTIME = Path("server_training_pipeline/stage1_v2_phase6_server_cpu_runtime_v1.json")
 EXECUTION_PROTOCOL = Path("server_training_pipeline/stage1_v2_phase6_execution_protocol_v2.json")
-OUTPUT = Path("model_kernels/stage1_v2_phase6_phase1_v2")
-RUNS = Path("trained_models/stage1_v2_phase6_phase1_v2_runs")
+GUARD_REPLAY = os.environ.get("STAGE1_V2_PHASE1_GUARD_REPLAY", "0").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "y",
+}
+GUARD_REPLAY_LOCK = Path(
+    "audit/v2/stage1_v2_phase6_phase1_guard_replay_v1/"
+    "PHASE1_GUARD_REPLAY_LOCK.json"
+)
+PARENT_OUTPUT = Path("model_kernels/stage1_v2_phase6_phase1_v2")
+PARENT_RUNS = Path("trained_models/stage1_v2_phase6_phase1_v2_runs")
+OUTPUT = (
+    Path("model_kernels/stage1_v2_phase6_phase1_guard_replay_v1")
+    if GUARD_REPLAY
+    else PARENT_OUTPUT
+)
+RUNS = (
+    Path("trained_models/stage1_v2_phase6_phase1_guard_replay_v1_runs")
+    if GUARD_REPLAY
+    else PARENT_RUNS
+)
+FULL_VALIDATION_METRICS = (
+    "validation_macro_normalized_rmse",
+    "validation_macro_pearson",
+    "validation_macro_calibration_error",
+    "within_environment_centered_spearman",
+    "within_environment_pairwise_accuracy",
+)
 
 
 def sha256_file(path: Path, block_size: int = 1024 * 1024) -> str:
@@ -209,6 +236,30 @@ def validate_runtime(code_root: Path, runtime_mode: str) -> dict[str, Any]:
 
 
 def validate_handoff(data_root: Path, code_root: Path) -> dict[str, Any]:
+    if GUARD_REPLAY:
+        lock_path = data_root / GUARD_REPLAY_LOCK
+        lock = json.loads(lock_path.read_text(encoding="utf-8"))
+        if lock.get("status") != "PASS_READY_FOR_PHASE1_MATCHED_GUARD_REPLAY":
+            raise ValueError("Phase-1 guard replay lock is not ready")
+        if lock.get("code_commit") != git_commit(code_root):
+            raise ValueError("Phase-1 guard replay lock is bound to another commit")
+        if lock.get("outer_test_outcomes_read") is not False:
+            raise ValueError("Guard replay lock unexpectedly read outer outcomes")
+        if lock.get("outer_test_metrics_read") is not False:
+            raise ValueError("Guard replay lock unexpectedly read outer metrics")
+        if lock.get("final_holdout_outcomes_read") is not False:
+            raise ValueError("Guard replay lock unexpectedly read final holdout outcomes")
+        for relative, expected_sha in lock["implementation_sha256"].items():
+            path = code_root / relative
+            if not path.is_file() or sha256_file(path) != expected_sha:
+                raise ValueError(f"Frozen guard replay implementation mismatch: {relative}")
+        protocol_path = (
+            code_root
+            / "server_training_pipeline/stage1_v2_phase6_selection_protocol_v1.json"
+        )
+        if lock.get("selection_protocol_sha256") != sha256_file(protocol_path):
+            raise ValueError("Guard replay selection protocol checksum mismatch")
+        return lock
     handoff = json.loads((data_root / HANDOFF).read_text(encoding="utf-8"))
     if handoff.get("status") != "PASS_READY_FOR_STAGE1_V2_PHASE6_INNER_MODEL_SELECTION":
         raise ValueError("Aggregate Phase-6 handoff is not ready")
@@ -247,6 +298,41 @@ def run_dir(root: Path, row: pd.Series) -> Path:
     )
 
 
+def parent_run_dir(root: Path, row: pd.Series) -> Path:
+    return (
+        root
+        / PARENT_RUNS
+        / str(row["state_id"])
+        / str(row["candidate"])
+        / str(row["configuration_label"])
+    )
+
+
+def validate_guard_replay_run(root: Path, row: pd.Series) -> None:
+    current_path = run_dir(root, row) / "run_metadata.json"
+    parent_path = parent_run_dir(root, row) / "run_metadata.json"
+    current = json.loads(current_path.read_text(encoding="utf-8"))
+    parent = json.loads(parent_path.read_text(encoding="utf-8"))
+    deltas = []
+    for metric in FULL_VALIDATION_METRICS:
+        observed = float(current[metric])
+        expected = float(parent[metric])
+        if np.isnan(observed) and np.isnan(expected):
+            delta = 0.0
+        elif not np.isfinite(observed) or not np.isfinite(expected):
+            delta = float("inf")
+        else:
+            delta = abs(observed - expected)
+        deltas.append(delta)
+    maximum_delta = max(deltas)
+    if maximum_delta > 1e-5:
+        raise ValueError(
+            "Guard replay changed frozen full-validation metrics for "
+            f"{row['state_id']} {row['candidate']} {row['configuration_label']}: "
+            f"maximum_absolute_delta={maximum_delta:.9g}"
+        )
+
+
 def metadata_matches(
     path: Path,
     row: pd.Series,
@@ -263,7 +349,7 @@ def metadata_matches(
         value = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return False
-    return (
+    matches = (
         value.get("status") == "PASS"
         and value.get("state_id") == row["state_id"]
         and value.get("candidate") == row["candidate"]
@@ -278,6 +364,15 @@ def metadata_matches(
         and value.get("outer_test_metrics_read") is False
         and value.get("final_holdout_outcomes_read") is False
     )
+    if GUARD_REPLAY:
+        matches = (
+            matches
+            and value.get("protocol_version")
+            == "stage1_v2_phase6_phase1_guard_replay_v1"
+            and value.get("guard_mask_observation_signatures_written") is True
+            and (path.parent / "validation_guard_metrics.tsv").is_file()
+        )
+    return matches
 
 
 def execute_run(
@@ -345,6 +440,8 @@ def execute_run(
             f"Phase-1 run failed with exit code {return_code}: "
             f"{row['state_id']} {row['candidate']} {row['configuration_label']}"
         )
+    if GUARD_REPLAY:
+        validate_guard_replay_run(data_root, row)
 
 
 def warm_factor_caches(data_root: Path, grid: pd.DataFrame, protocol: dict[str, Any]) -> None:
@@ -375,6 +472,54 @@ def _mean(values: Iterable[object]) -> float:
     return float(np.mean(finite)) if len(finite) else float("nan")
 
 
+def pair_guard_metrics(guard_metrics: pd.DataFrame, baseline: str) -> pd.DataFrame:
+    candidate_guards = guard_metrics.loc[
+        guard_metrics["candidate"].eq(guard_metrics["mask_candidate"])
+    ].copy()
+    reference_guards = guard_metrics.loc[
+        guard_metrics["candidate"].eq(baseline),
+        [
+            "state_id",
+            "configuration_label",
+            "mask_candidate",
+            "subset",
+            "rows",
+            "observation_id_signature",
+            "normalized_rmse_macro",
+            "pearson_macro",
+        ],
+    ]
+    paired = candidate_guards.merge(
+        reference_guards,
+        on=["state_id", "configuration_label", "mask_candidate", "subset"],
+        suffixes=("", "_reference"),
+        validate="one_to_one",
+    )
+    row_match = paired["rows"].eq(paired["rows_reference"])
+    signature_match = paired["observation_id_signature"].eq(
+        paired["observation_id_signature_reference"]
+    )
+    if not bool((row_match & signature_match).all()):
+        failed = paired.loc[
+            ~(row_match & signature_match),
+            [
+                "state_id",
+                "candidate",
+                "configuration_label",
+                "subset",
+                "rows",
+                "rows_reference",
+                "observation_id_signature",
+                "observation_id_signature_reference",
+            ],
+        ]
+        raise ValueError(
+            "Candidate/reference guard masks are not exactly paired:\n"
+            + failed.head(20).to_string(index=False)
+        )
+    return paired
+
+
 def summarize(
     data_root: Path,
     code_root: Path,
@@ -385,6 +530,7 @@ def summarize(
     metadata_rows = []
     trait_frames = []
     subset_frames = []
+    guard_frames = []
     for _, row in grid.iterrows():
         destination = run_dir(data_root, row)
         metadata = json.loads((destination / "run_metadata.json").read_text(encoding="utf-8"))
@@ -399,17 +545,80 @@ def summarize(
         subsets["candidate"] = row["candidate"]
         subsets["configuration_label"] = row["configuration_label"]
         subset_frames.append(subsets)
+        if GUARD_REPLAY:
+            guards = pd.read_csv(destination / "validation_guard_metrics.tsv", sep="\t")
+            guards["state_id"] = row["state_id"]
+            guards["candidate"] = row["candidate"]
+            guards["configuration_label"] = row["configuration_label"]
+            guard_frames.append(guards)
     runs = pd.DataFrame(metadata_rows)
     traits = pd.concat(trait_frames, ignore_index=True)
     subsets = pd.concat(subset_frames, ignore_index=True)
+    guard_metrics = (
+        pd.concat(guard_frames, ignore_index=True) if guard_frames else pd.DataFrame()
+    )
+    replay_runs = runs.copy()
+    replay_traits = traits.copy()
+    if GUARD_REPLAY:
+        parent_metadata_rows = []
+        parent_trait_frames = []
+        for _, row in grid.iterrows():
+            destination = parent_run_dir(data_root, row)
+            parent_metadata_rows.append(
+                json.loads((destination / "run_metadata.json").read_text(encoding="utf-8"))
+            )
+            parent_traits = pd.read_csv(
+                destination / "validation_trait_metrics.tsv", sep="\t"
+            )
+            parent_traits["state_id"] = row["state_id"]
+            parent_traits["candidate"] = row["candidate"]
+            parent_traits["configuration_label"] = row["configuration_label"]
+            parent_trait_frames.append(parent_traits)
+        runs = pd.DataFrame(parent_metadata_rows)
+        traits = pd.concat(parent_trait_frames, ignore_index=True)
     baseline = "ka_identity_location_baseline"
-    metrics = [
-        "validation_macro_normalized_rmse",
-        "validation_macro_pearson",
-        "validation_macro_calibration_error",
-        "within_environment_centered_spearman",
-        "within_environment_pairwise_accuracy",
-    ]
+    metrics = list(FULL_VALIDATION_METRICS)
+    replay_audit = pd.DataFrame()
+    if GUARD_REPLAY:
+        replay_rows = []
+        for _, row in grid.iterrows():
+            parent = runs.loc[
+                runs["state_id"].eq(row["state_id"])
+                & runs["candidate"].eq(row["candidate"])
+                & runs["configuration_label"].eq(row["configuration_label"])
+            ].iloc[0]
+            current = replay_runs.loc[
+                replay_runs["state_id"].eq(row["state_id"])
+                & replay_runs["candidate"].eq(row["candidate"])
+                & replay_runs["configuration_label"].eq(row["configuration_label"])
+            ].iloc[0]
+            for metric in metrics:
+                observed = float(current[metric])
+                expected = float(parent[metric])
+                if np.isnan(observed) and np.isnan(expected):
+                    absolute_delta = 0.0
+                elif not np.isfinite(observed) or not np.isfinite(expected):
+                    absolute_delta = float("inf")
+                else:
+                    absolute_delta = abs(observed - expected)
+                replay_rows.append(
+                    {
+                        "state_id": row["state_id"],
+                        "candidate": row["candidate"],
+                        "configuration_label": row["configuration_label"],
+                        "metric": metric,
+                        "parent_value": expected,
+                        "replay_value": observed,
+                        "absolute_delta": absolute_delta,
+                    }
+                )
+        replay_audit = pd.DataFrame(replay_rows)
+        maximum_delta = float(replay_audit["absolute_delta"].max())
+        if maximum_delta > 1e-5:
+            raise ValueError(
+                "Guard replay changed frozen full-validation metrics: "
+                f"maximum_absolute_delta={maximum_delta:.9g}"
+            )
     paired = runs.merge(
         runs.loc[runs["candidate"].eq(baseline), ["state_id", "configuration_label", *metrics]],
         on=["state_id", "configuration_label"],
@@ -452,15 +661,18 @@ def summarize(
         trait_paired["normalized_rmse_reference"] - trait_paired["normalized_rmse"]
     ) / trait_paired["normalized_rmse_reference"]
 
-    subset_reference = subsets.loc[subsets["candidate"].eq(baseline), [
-        "state_id", "configuration_label", "subset", "normalized_rmse_macro"
-    ]]
-    subset_paired = subsets.merge(
-        subset_reference,
-        on=["state_id", "configuration_label", "subset"],
-        suffixes=("", "_reference"),
-        validate="many_to_one",
-    )
+    if GUARD_REPLAY:
+        subset_paired = pair_guard_metrics(guard_metrics, baseline)
+    else:
+        subset_reference = subsets.loc[subsets["candidate"].eq(baseline), [
+            "state_id", "configuration_label", "subset", "normalized_rmse_macro"
+        ]]
+        subset_paired = subsets.merge(
+            subset_reference,
+            on=["state_id", "configuration_label", "subset"],
+            suffixes=("", "_reference"),
+            validate="many_to_one",
+        )
     subset_paired["relative_nrmse_gain"] = (
         subset_paired["normalized_rmse_macro_reference"]
         - subset_paired["normalized_rmse_macro"]
@@ -468,6 +680,14 @@ def summarize(
 
     selection = protocol["selection_metrics"]
     guards = protocol["guards"]
+    information_subsets = {
+        "PEDIGREE_ONLY",
+        "MARKER_SUPPORTED",
+        "PEDIGREE_AND_MARKER",
+        "NEITHER_PRODUCTION_PEDIGREE_NOR_DENSE_MARKERS",
+        "RECOVERED_IDENTITY_OR_COMPONENT",
+    }
+    projection_inactive_subset = "PROJECTION_CORE_INACTIVE_814_ENVIRONMENTS"
     rows = []
     for (candidate, configuration), group in paired.groupby(
         ["candidate", "configuration_label"], sort=False
@@ -482,6 +702,12 @@ def summarize(
             & subset_paired["configuration_label"].eq(configuration)
             & subset_paired["rows"].ge(int(guards["minimum_rows_for_guard"]))
         ]
+        local_information_subsets = local_subsets.loc[
+            local_subsets["subset"].isin(information_subsets)
+        ]
+        local_projection_inactive = local_subsets.loc[
+            local_subsets["subset"].eq(projection_inactive_subset)
+        ]
         nrmse_gain = _mean(group["relative_nrmse_gain"])
         win_rate = _mean(group["nrmse_win"])
         pearson_gain = _mean(group["pearson_gain"])
@@ -493,8 +719,18 @@ def summarize(
             if not local_traits.empty else float("nan")
         )
         subset_min = (
-            float(local_subsets.groupby("subset")["relative_nrmse_gain"].mean().min())
-            if not local_subsets.empty else float("nan")
+            float(
+                local_information_subsets.groupby("subset")["relative_nrmse_gain"]
+                .mean()
+                .min()
+            )
+            if not local_information_subsets.empty
+            else float("nan")
+        )
+        projection_inactive_gain = (
+            _mean(local_projection_inactive["relative_nrmse_gain"])
+            if not local_projection_inactive.empty
+            else float("nan")
         )
         is_reference = candidate == baseline
         accepted = is_reference or (
@@ -506,6 +742,15 @@ def summarize(
             and pairwise_gain >= -float(guards["within_environment_pairwise_accuracy_maximum_drop"])
             and primary_min >= -float(guards["primary_trait_maximum_relative_nrmse_loss"])
             and (np.isnan(subset_min) or subset_min >= -float(guards["information_class_maximum_relative_nrmse_loss"]))
+            and (
+                np.isnan(projection_inactive_gain)
+                or projection_inactive_gain
+                >= -float(
+                    guards[
+                        "projection_inactive_environment_maximum_relative_nrmse_loss"
+                    ]
+                )
+            )
         )
         rows.append(
             {
@@ -522,6 +767,7 @@ def summarize(
                 "pairwise_accuracy_gain_mean": pairwise_gain,
                 "primary_trait_relative_nrmse_gain_min": primary_min,
                 "information_subset_relative_nrmse_gain_min": subset_min,
+                "projection_inactive_relative_nrmse_gain_mean": projection_inactive_gain,
                 "accepted": bool(accepted),
                 "decision": "reference" if is_reference else (
                     "advance_to_confirmation" if accepted else "do_not_advance"
@@ -538,10 +784,30 @@ def summarize(
     paired.to_csv(output / "phase1_paired_metrics.tsv", sep="\t", index=False)
     traits.to_csv(output / "phase1_trait_metrics.tsv", sep="\t", index=False)
     subsets.to_csv(output / "phase1_subset_metrics.tsv", sep="\t", index=False)
+    if GUARD_REPLAY:
+        replay_runs.to_csv(
+            output / "phase1_replay_runs.tsv", sep="\t", index=False
+        )
+        replay_traits.to_csv(
+            output / "phase1_replay_trait_metrics.tsv", sep="\t", index=False
+        )
+        guard_metrics.to_csv(
+            output / "phase1_guard_metrics.tsv", sep="\t", index=False
+        )
+        subset_paired.to_csv(
+            output / "phase1_paired_guard_metrics.tsv", sep="\t", index=False
+        )
+        replay_audit.to_csv(
+            output / "phase1_parent_metric_replay_audit.tsv", sep="\t", index=False
+        )
     summary.to_csv(output / "phase1_decision.tsv", sep="\t", index=False)
     provenance = {
         "status": "PASS",
-        "protocol_version": "stage1_v2_phase6_phase1_screen_v2_cpu_parallel",
+        "protocol_version": (
+            "stage1_v2_phase6_phase1_matched_guard_replay_v1"
+            if GUARD_REPLAY
+            else "stage1_v2_phase6_phase1_screen_v2_cpu_parallel"
+        ),
         "selection_data": "five_nested_inner_validation_folds_only",
         "scenario": "GNEW_EOBS",
         "outer_fold": 1,
@@ -553,6 +819,33 @@ def summarize(
         "matched_validation_observation_status": (
             "pass" if runs.groupby("state_id")["validation_observation_signature"].nunique().eq(1).all() else "fail"
         ),
+        "matched_component_mask_status": (
+            "pass"
+            if GUARD_REPLAY
+            and subset_paired["rows"].eq(subset_paired["rows_reference"]).all()
+            and subset_paired["observation_id_signature"].eq(
+                subset_paired["observation_id_signature_reference"]
+            ).all()
+            else ("not_replayed" if not GUARD_REPLAY else "fail")
+        ),
+        "parent_full_metric_replay_status": (
+            "pass"
+            if GUARD_REPLAY and replay_audit["absolute_delta"].max() <= 1e-5
+            else ("not_replayed" if not GUARD_REPLAY else "fail")
+        ),
+        "parent_full_metric_maximum_absolute_delta": (
+            float(replay_audit["absolute_delta"].max())
+            if GUARD_REPLAY
+            else None
+        ),
+        "global_and_trait_selection_metrics_source": (
+            "immutable_parent_phase1" if GUARD_REPLAY else "current_runs"
+        ),
+        "component_guard_metrics_source": (
+            "matched_guard_replay" if GUARD_REPLAY else "architecture_local_unpaired"
+        ),
+        "h_seeds_direct_marker_support_included": bool(GUARD_REPLAY),
+        "projection_core_mask_candidate_independent": bool(GUARD_REPLAY),
         "outer_test_outcomes_read": False,
         "outer_test_metrics_read": False,
         "final_holdout_outcomes_read": False,
@@ -569,6 +862,8 @@ def summarize(
     }
     if provenance["matched_validation_observation_status"] != "pass":
         raise ValueError("Candidates did not use identical validation observations")
+    if GUARD_REPLAY and provenance["matched_component_mask_status"] != "pass":
+        raise ValueError("Candidates did not use exactly matched component masks")
     write_json(output / "phase1_provenance.json", provenance)
     return provenance
 
@@ -639,7 +934,11 @@ def main() -> None:
     execution_protocol_sha = sha256_file(code_root / EXECUTION_PROTOCOL)
     startup = {
         "status": "RUNNING",
-        "protocol_version": "stage1_v2_phase6_phase1_screen_v2_cpu_parallel",
+        "protocol_version": (
+            "stage1_v2_phase6_phase1_matched_guard_replay_v1"
+            if GUARD_REPLAY
+            else "stage1_v2_phase6_phase1_screen_v2_cpu_parallel"
+        ),
         "run_count": len(grid),
         "data_root": str(data_root),
         "code_root": str(code_root),
@@ -650,7 +949,9 @@ def main() -> None:
         "inter_op_threads_per_worker": inter_op_threads,
         "factor_cache_prewarm": warm_factor_cache,
         "execution_protocol_sha256": execution_protocol_sha,
-        "handoff_sha256": sha256_file(data_root / HANDOFF),
+        "handoff_sha256": sha256_file(
+            data_root / (GUARD_REPLAY_LOCK if GUARD_REPLAY else HANDOFF)
+        ),
         "outer_test_outcomes_read": False,
         "outer_test_metrics_read": False,
         "final_holdout_outcomes_read": False,

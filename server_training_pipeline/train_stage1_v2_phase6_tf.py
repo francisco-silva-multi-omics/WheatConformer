@@ -44,6 +44,8 @@ EXECUTION_PROTOCOL = Path(
 )
 FACTOR_CACHE_VERSION = "stage1_v2_phase6_factor_cache_v2"
 MISSING_DOSAGE = 255
+GUARD_REPLAY_ENV = "STAGE1_V2_PHASE1_GUARD_REPLAY"
+GUARD_REPLAY_PROTOCOL = "stage1_v2_phase6_phase1_guard_replay_v1"
 
 
 def sha256_file(path: Path, block_size: int = 1024 * 1024) -> str:
@@ -73,6 +75,15 @@ def bool_series(values: pd.Series) -> pd.Series:
     return values.astype("string").fillna("").str.strip().str.lower().isin(
         {"1", "true", "yes", "y", "pass"}
     )
+
+
+def guard_replay_enabled() -> bool:
+    return os.environ.get(GUARD_REPLAY_ENV, "0").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "y",
+    }
 
 
 def git_commit(root: Path) -> str:
@@ -900,6 +911,81 @@ def build_candidate_factors(
     return tuple(genotype), tuple(environment), reaction_design, reaction_available, environment_ids
 
 
+def _candidate_marker_gids(
+    root: Path,
+    state_id: str,
+    candidate: str,
+    protocol: dict[str, object],
+) -> set[str]:
+    candidate_protocol = protocol["candidates"][candidate]
+    components = set(candidate_protocol["genotype_components"])
+    marker_gids: set[str] = set()
+    if components.intersection({"K_G_SEEDS_DARTSEQ_V2", "H_SEEDS"}):
+        seeds_spec = load_state_spec(
+            root, state_id, "ka_seeds_historical_environment"
+        ).marker_factors[0]
+        seeds_axis = pd.read_csv(root / seeds_spec.entity_axis_path, sep="\t", dtype=str)
+        marker_gids.update(seeds_axis["canonical_gid"].astype(str))
+    if "K_G_CIMMYT_PRE_QC" in components:
+        cimmyt_spec = load_state_spec(
+            root, state_id, "ka_cimmyt_preqc_historical_environment"
+        ).marker_factors[0]
+        cimmyt_axis = pd.read_csv(root / cimmyt_spec.entity_axis_path, sep="\t", dtype=str)
+        marker_gids.update(cimmyt_axis["canonical_gid"].astype(str))
+    return marker_gids
+
+
+def _projection_active_environments(root: Path, state_id: str) -> set[str]:
+    spec = load_state_spec(root, state_id, "ka_projection_core").projection_environment
+    if spec is None:
+        raise ValueError("Projection environment specification is absent")
+    axis = pd.read_csv(root / spec.entity_axis_path, sep="\t", dtype=str)
+    active = bool_series(axis["component_active"])
+    return set(axis.loc[active, "environment_id"].astype(str))
+
+
+def reporting_subset_masks(
+    frame: pd.DataFrame,
+    *,
+    marker_gids: set[str],
+    projection_active_environments: set[str],
+) -> dict[str, pd.Series]:
+    marker_supported = frame["canonical_gid"].astype(str).isin(marker_gids)
+    pedigree_supported = bool_series(frame["pedigree_available"])
+    projection_active = frame["environment_id"].astype(str).isin(
+        projection_active_environments
+    )
+    return {
+        "PEDIGREE_ONLY": pedigree_supported & ~marker_supported,
+        "MARKER_SUPPORTED": marker_supported,
+        "PEDIGREE_AND_MARKER": pedigree_supported & marker_supported,
+        "NEITHER_PRODUCTION_PEDIGREE_NOR_DENSE_MARKERS": (
+            ~pedigree_supported & ~marker_supported
+        ),
+        "RECOVERED_IDENTITY_OR_COMPONENT": marker_supported,
+        "PROJECTION_CORE_ACTIVE": projection_active,
+        "PROJECTION_CORE_INACTIVE_814_ENVIRONMENTS": ~projection_active,
+    }
+
+
+def build_reporting_masks(
+    root: Path,
+    state_id: str,
+    frame: pd.DataFrame,
+    protocol: dict[str, object],
+) -> dict[str, dict[str, pd.Series]]:
+    projection_active = _projection_active_environments(root, state_id)
+    candidates = protocol["candidate_stages"]["phase_1_individual"]
+    return {
+        candidate: reporting_subset_masks(
+            frame,
+            marker_gids=_candidate_marker_gids(root, state_id, candidate, protocol),
+            projection_active_environments=projection_active,
+        )
+        for candidate in candidates
+    }
+
+
 def add_factor_indices(
     frame: pd.DataFrame,
     genotype: Sequence[FactorBlock],
@@ -1195,11 +1281,67 @@ def prepare_targets(
     return frame, pd.DataFrame(rows)
 
 
+def validation_reporting_metrics(
+    local: pd.DataFrame,
+    scaling: pd.DataFrame,
+    reporting_masks: dict[str, dict[str, pd.Series]],
+) -> pd.DataFrame:
+    scale_lookup = scaling.set_index("trait_name_canonical")
+    rows: list[dict[str, object]] = []
+    for mask_candidate, subset_masks in reporting_masks.items():
+        for subset, mask in subset_masks.items():
+            local_mask = pd.Series(mask, index=local.index).fillna(False).astype(bool)
+            group = local.loc[local_mask]
+            if group.empty:
+                rows.append(
+                    {
+                        "mask_candidate": mask_candidate,
+                        "subset": subset,
+                        "rows": 0,
+                        "unique_genotypes": 0,
+                        "unique_environments": 0,
+                        "trait_count": 0,
+                        "observation_id_signature": identifier_signature([]),
+                        "normalized_rmse_macro": np.nan,
+                        "pearson_macro": np.nan,
+                    }
+                )
+                continue
+            errors = []
+            correlations = []
+            for trait, trait_group in group.groupby("trait", sort=True):
+                y = trait_group["adjusted_value"].to_numpy(dtype=float)
+                p = trait_group["prediction"].to_numpy(dtype=float)
+                sd = float(scale_lookup.loc[trait, "training_weighted_sd"])
+                errors.append(float(np.sqrt(np.mean(np.square(p - y))) / sd))
+                if len(trait_group) >= 2 and np.std(y) > 0 and np.std(p) > 0:
+                    correlations.append(float(np.corrcoef(y, p)[0, 1]))
+            identifiers = sorted(group["phase4_adjusted_row_id"].astype(str))
+            rows.append(
+                {
+                    "mask_candidate": mask_candidate,
+                    "subset": subset,
+                    "rows": len(group),
+                    "unique_genotypes": int(group["canonical_gid"].nunique()),
+                    "unique_environments": int(group["environment_id"].nunique()),
+                    "trait_count": int(group["trait"].nunique()),
+                    "observation_id_signature": identifier_signature(identifiers),
+                    "normalized_rmse_macro": float(np.mean(errors)),
+                    "pearson_macro": (
+                        float(np.mean(correlations)) if correlations else np.nan
+                    ),
+                }
+            )
+    return pd.DataFrame(rows)
+
+
 def validation_metrics(
     frame: pd.DataFrame,
     prediction_scaled: np.ndarray,
     scaling: pd.DataFrame,
-) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, float]]:
+    reporting_masks: dict[str, dict[str, pd.Series]],
+    candidate: str,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, dict[str, float]]:
     local = frame.reset_index(drop=True).copy()
     scale_lookup = scaling.set_index("trait_name_canonical")
     local["prediction_scaled"] = prediction_scaled
@@ -1227,41 +1369,10 @@ def validation_metrics(
             }
         )
     trait_metrics = pd.DataFrame(trait_rows)
-    subset_rows = []
-    subset_masks = {
-        "PEDIGREE_ONLY": local["genotype_information_class"].eq("PEDIGREE_ONLY"),
-        "MARKER_SUPPORTED": local["candidate_marker_supported"],
-        "PEDIGREE_AND_MARKER": local["pedigree_available"].fillna(False)
-        & local["candidate_marker_supported"],
-        "NEITHER_PRODUCTION_PEDIGREE_NOR_DENSE_MARKERS": ~local[
-            "pedigree_available"
-        ].fillna(False)
-        & ~local["candidate_marker_supported"],
-        "RECOVERED_IDENTITY_OR_COMPONENT": local["recovered_component_supported"],
-        "PROJECTION_CORE_ACTIVE": local["projection_core_active"],
-        "PROJECTION_CORE_INACTIVE_814_ENVIRONMENTS": ~local["projection_core_active"],
-    }
-    for subset, mask in subset_masks.items():
-        group = local.loc[mask]
-        if group.empty:
-            continue
-        errors = []
-        correlations = []
-        for trait, trait_group in group.groupby("trait"):
-            y = trait_group["adjusted_value"].to_numpy(dtype=float)
-            p = trait_group["prediction"].to_numpy(dtype=float)
-            sd = float(scale_lookup.loc[trait, "training_weighted_sd"])
-            errors.append(float(np.sqrt(np.mean(np.square(p - y))) / sd))
-            if len(trait_group) >= 2 and np.std(y) > 0 and np.std(p) > 0:
-                correlations.append(float(np.corrcoef(y, p)[0, 1]))
-        subset_rows.append(
-            {
-                "subset": subset,
-                "rows": len(group),
-                "normalized_rmse_macro": float(np.mean(errors)),
-                "pearson_macro": float(np.mean(correlations)) if correlations else np.nan,
-            }
-        )
+    reporting_metrics = validation_reporting_metrics(local, scaling, reporting_masks)
+    subset_metrics = reporting_metrics.loc[
+        reporting_metrics["mask_candidate"].eq(candidate)
+    ].drop(columns="mask_candidate")
     centered_y = local["adjusted_value"] - local.groupby(["trait", "environment_id"])[
         "adjusted_value"
     ].transform("mean")
@@ -1305,7 +1416,7 @@ def validation_metrics(
         "within_environment_pairwise_accuracy": correct / pairs if pairs else np.nan,
         "within_environment_pair_count": pairs,
     }
-    return trait_metrics, pd.DataFrame(subset_rows), summary
+    return trait_metrics, subset_metrics, reporting_metrics, summary
 
 
 def train_run(
@@ -1343,26 +1454,20 @@ def train_run(
         reaction_ids,
         reaction_available,
     )
-    marker_columns = [
-        column
-        for column, block in zip(genotype_columns, genotype)
-        if block.name not in {"K_A", "H_SEEDS", "H_SEEDS_MASKED_TO_K_A"}
+    full_reporting_masks = build_reporting_masks(root, state_id, frame, protocol)
+    current_masks = full_reporting_masks[candidate]
+    frame["candidate_marker_supported"] = current_masks["MARKER_SUPPORTED"]
+    frame["recovered_component_supported"] = current_masks[
+        "RECOVERED_IDENTITY_OR_COMPONENT"
     ]
-    frame["candidate_marker_supported"] = (
-        frame[marker_columns].ge(0).any(axis=1) if marker_columns else False
-    )
-    frame["recovered_component_supported"] = frame["candidate_marker_supported"]
-    projection_lookup = {
-        value: bool(available)
-        for value, available in zip(reaction_ids, reaction_available)
-    }
-    frame["projection_core_active"] = (
-        frame["environment_id"].astype(str).map(projection_lookup).fillna(False)
-    )
+    frame["projection_core_active"] = current_masks["PROJECTION_CORE_ACTIVE"]
     training = frame.loc[frame["selection_role"].eq("TRAINING")].reset_index(drop=True)
     validation = frame.loc[
         frame["selection_role"].eq("INNER_VALIDATION")
     ].reset_index(drop=True)
+    validation_reporting_masks = build_reporting_masks(
+        root, state_id, validation, protocol
+    )
     random.seed(seed)
     np.random.seed(seed)
     tf.keras.utils.set_random_seed(seed)
@@ -1442,14 +1547,21 @@ def train_run(
     prediction_scaled = predict(
         model, validation, genotype_columns, environment_columns, batch_size
     )
-    trait_metrics, subset_metrics, summary = validation_metrics(
-        validation, prediction_scaled, scaling
+    trait_metrics, subset_metrics, reporting_metrics, summary = validation_metrics(
+        validation,
+        prediction_scaled,
+        scaling,
+        validation_reporting_masks,
+        candidate,
     )
     out_dir.mkdir(parents=True, exist_ok=True)
     scaling.to_csv(out_dir / "trait_scaling.tsv", sep="\t", index=False)
     pd.DataFrame(epoch_rows).to_csv(out_dir / "epoch_history.tsv", sep="\t", index=False)
     trait_metrics.to_csv(out_dir / "validation_trait_metrics.tsv", sep="\t", index=False)
     subset_metrics.to_csv(out_dir / "validation_subset_metrics.tsv", sep="\t", index=False)
+    reporting_metrics.to_csv(
+        out_dir / "validation_guard_metrics.tsv", sep="\t", index=False
+    )
     factor_rows = [
         {
             "component": block.name,
@@ -1466,7 +1578,11 @@ def train_run(
     )
     metadata = {
         "status": "PASS",
-        "protocol_version": "stage1_v2_phase6_tf_trainer_v2_cpu_parallel",
+        "protocol_version": (
+            GUARD_REPLAY_PROTOCOL
+            if guard_replay_enabled()
+            else "stage1_v2_phase6_tf_trainer_v3_matched_guard_masks"
+        ),
         "stage1_version": "Stage-1 v2",
         "state_id": state_id,
         "scenario": spec.scenario,
@@ -1496,6 +1612,10 @@ def train_run(
         "validation_observation_signature": identifier_signature(
             validation["phase4_adjusted_row_id"].tolist()
         ),
+        "guard_mask_candidate_count": int(reporting_metrics["mask_candidate"].nunique()),
+        "guard_mask_observation_signatures_written": True,
+        "h_seeds_direct_marker_support_included": True,
+        "projection_core_mask_candidate_independent": True,
         "phenotype_values_read": True,
         "inner_validation_metrics_read": True,
         "outer_test_outcomes_read": False,

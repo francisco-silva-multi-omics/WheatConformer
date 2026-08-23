@@ -16,7 +16,9 @@ from server_training_pipeline.train_stage1_v2_phase6_tf import (
     FactorBlock,
     Stage1V2ReactionNorm,
     centered_marker_random_features,
+    reporting_subset_masks,
     state_role_masks,
+    validation_reporting_metrics,
 )
 
 
@@ -166,3 +168,58 @@ def test_stage1_v2_model_forward_and_gradient_are_finite() -> None:
         np.isfinite(tf.convert_to_tensor(gradient).numpy()).all()
         for gradient in gradients
     )
+
+
+def test_guard_masks_use_direct_marker_support_and_candidate_independent_projection() -> None:
+    frame = pd.DataFrame(
+        {
+            "canonical_gid": ["g1", "g2", "g3", "g4"],
+            "environment_id": ["active", "inactive", "active", "inactive"],
+            "pedigree_available": [True, True, False, False],
+        }
+    )
+    masks = reporting_subset_masks(
+        frame,
+        marker_gids={"g2", "g3"},
+        projection_active_environments={"active"},
+    )
+    assert masks["PEDIGREE_ONLY"].tolist() == [True, False, False, False]
+    assert masks["MARKER_SUPPORTED"].tolist() == [False, True, True, False]
+    assert masks["PEDIGREE_AND_MARKER"].tolist() == [False, True, False, False]
+    assert masks["NEITHER_PRODUCTION_PEDIGREE_NOR_DENSE_MARKERS"].tolist() == [
+        False,
+        False,
+        False,
+        True,
+    ]
+    assert masks["PROJECTION_CORE_ACTIVE"].tolist() == [True, False, True, False]
+
+
+def test_guard_metrics_write_exact_observation_signatures() -> None:
+    frame = pd.DataFrame(
+        {
+            "phase4_adjusted_row_id": ["row-b", "row-a"],
+            "canonical_gid": ["g1", "g2"],
+            "environment_id": ["e1", "e1"],
+            "trait": ["T1", "T1"],
+            "adjusted_value": [1.0, 2.0],
+            "prediction": [1.1, 1.9],
+        }
+    )
+    scaling = pd.DataFrame(
+        {"trait_name_canonical": ["T1"], "training_weighted_sd": [2.0]}
+    )
+    masks = {
+        "candidate": {
+            "MARKER_SUPPORTED": pd.Series([True, True]),
+            "PEDIGREE_ONLY": pd.Series([False, False]),
+        }
+    }
+    metrics = validation_reporting_metrics(frame, scaling, masks)
+    assert len(metrics) == 2
+    marker = metrics.loc[metrics["subset"].eq("MARKER_SUPPORTED")].iloc[0]
+    assert marker["rows"] == 2
+    import hashlib
+
+    expected = hashlib.sha256(b"row-a\nrow-b\n").hexdigest()
+    assert marker["observation_id_signature"] == expected
