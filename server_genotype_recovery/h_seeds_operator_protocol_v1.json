@@ -1,0 +1,22 @@
+{
+  "protocol_version": "stage1_v2_h_seeds_operator_v1",
+  "stage1_version": "Stage-1 v2",
+  "selection_data": "identifiers_pedigree_and_training_local_marker_calls_only",
+  "phenotype_values_read": false,
+  "inner_validation_metrics_read": false,
+  "outer_test_outcomes_read": false,
+  "outer_test_metrics_read": false,
+  "final_holdout_outcomes_read": false,
+  "genomic_panel": "seeds_of_discovery_dartseq",
+  "genomic_blend_weight": 0.95,
+  "pedigree_blend_weight": 0.05,
+  "minimum_training_overlap": 20,
+  "diagnostic_sample_size": 96,
+  "marker_block_size": 1024,
+  "genomic_alignment": "positive_scalar_matching_training_overlap_mean_diagonal",
+  "operator_formula": "H^-1=A^-1+S'(G_blend^-1-A22^-1)S",
+  "dense_full_H_materialized": false,
+  "state_count_required": 150,
+  "inactive_behavior": "retain_K_A_backbone_and_explicitly_mask_only_the_Seeds_precision_correction_never_zero_similarity",
+  "addition_after_inner_metric_access_allowed": false
+}

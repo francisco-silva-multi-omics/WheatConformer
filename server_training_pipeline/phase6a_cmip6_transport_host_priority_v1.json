@@ -1,0 +1,49 @@
+{
+  "protocol_version": "phase6a_cmip6_transport_host_priority_v1",
+  "selection_data": "transport_availability_and_bounded_byte_range_benchmark_only",
+  "scientific_asset_identity_changed": false,
+  "exact_file_size_and_checksum_required": true,
+  "asset_concurrency": 1,
+  "asset_schedule_policy": "complete_assets_ordered_by_slowest_required_file_best_exact_replica",
+  "host_priority": [
+    "g-52ba3.fd635.8443.data.globus.org",
+    "esgf-node.ornl.gov",
+    "esgf-data03.diasjp.net",
+    "esgf-data02.diasjp.net",
+    "esgf-data04.diasjp.net"
+  ],
+  "scheme_priority": [
+    "https",
+    "http"
+  ],
+  "benchmark": {
+    "timestamp_local": "2026-08-18T21:28:00-07:00",
+    "source_file": "rsds_day_MIROC6_ssp126_r2i1p1f1_gn_20150101-20241231.nc",
+    "range_bytes": 8388608,
+    "results": [
+      {
+        "host": "g-52ba3.fd635.8443.data.globus.org",
+        "status": "HTTP_206",
+        "mib_per_second": 5.157
+      },
+      {
+        "host": "esgf-node.ornl.gov",
+        "status": "HTTP_206",
+        "mib_per_second": 0.451
+      },
+      {
+        "host": "esgf-data02.diasjp.net",
+        "status": "CONNECT_TIMEOUT",
+        "mib_per_second": 0.0
+      }
+    ]
+  },
+  "phenotype_values_read": false,
+  "inner_validation_metrics_read": false,
+  "outer_test_outcomes_read": false,
+  "outer_test_metrics_read": false,
+  "final_holdout_outcomes_read": false,
+  "climate_values_decoded_for_priority": false,
+  "future_covariate_matrices_generated": 0,
+  "future_predictions_generated": 0
+}

@@ -1,0 +1,36 @@
+{
+  "protocol_version": "phase6a_cds_bias_reference_v1",
+  "status": "FROZEN_BEFORE_REFERENCE_FETCH",
+  "selection_data": "certified_stage1_v2_site_identifiers_only",
+  "dataset": "reanalysis-era5-land-timeseries",
+  "reference_start": "1981-01-01",
+  "reference_end": "2010-12-31",
+  "site_count": 907,
+  "request_concurrency": 1,
+  "retry_max": 5,
+  "retry_sleep_max_seconds": 60,
+  "request_timeout_seconds": 3600,
+  "variables": [
+    "2m_dewpoint_temperature",
+    "2m_temperature",
+    "surface_pressure",
+    "total_precipitation",
+    "surface_solar_radiation_downwards",
+    "10m_u_component_of_wind",
+    "10m_v_component_of_wind"
+  ],
+  "data_format": "csv",
+  "parent_artifacts": {
+    "audit/v2/phase6a_environment_source_contract_v10/soilgrids_request_inventory.tsv": "a5691554f81eef5bd91e05a5ded2f0faf0a97453a17ad337ff1803d98bdd2f5d",
+    "audit/v2/phase6a_environment_source_contract_v10/environment_source_contract.json": "4d5e5648da228c92c9eaacb63903214d400057f8599c56452b9054041ed7b565",
+    "server_training_pipeline/phase6a_projection_core_raw_archive_protocol_v1.json": "b189e9ae5c616c9a4ef50d39be095b3f7f3d5429c6eec7734525e84101edf76b"
+  },
+  "archive_policy": "one_serial_full_reference_request_per_certified_site_with_content_addressed_raw_payload_and_receipt",
+  "phenotype_values_read": false,
+  "inner_validation_metrics_read": false,
+  "outer_test_outcomes_read": false,
+  "outer_test_metrics_read": false,
+  "final_holdout_outcomes_read": false,
+  "future_covariate_matrices_generated": false,
+  "future_predictions_generated": false
+}

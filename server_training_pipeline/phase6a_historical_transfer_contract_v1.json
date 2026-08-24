@@ -1,0 +1,22 @@
+{
+  "protocol_version": "phase6a_historical_transfer_v1",
+  "status": "FROZEN_BEFORE_BIAS_ADJUSTED_CMIP6_BACKCAST_VALUES",
+  "selection_data": "historical_ERA5_and_historical_CMIP6_projection_core_features_only",
+  "comparison_basis": "distributional_transfer_not_day_or_year_synchronized_weather_correlation",
+  "required_source_count": 13,
+  "minimum_common_environment_fraction": 0.9,
+  "minimum_climate_eligible_fraction": 0.9,
+  "maximum_median_absolute_robust_location_shift": 1.0,
+  "maximum_95th_percentile_absolute_robust_location_shift": 4.0,
+  "maximum_median_absolute_missing_fraction_increase": 0.02,
+  "schema_policy": "exact_projection_core_feature_name_and_dtype_parity_after_removing_source_identity_columns",
+  "synchronized_correlation_required": false,
+  "reason_synchronized_correlation_not_required": "free_running_GCM_internal_weather_is_not_phase_aligned_with_observed_ERA5_calendar_years",
+  "future_SSP_values_read": false,
+  "phenotype_values_read": false,
+  "outer_test_outcomes_read": false,
+  "outer_test_metrics_read": false,
+  "final_holdout_outcomes_read": false,
+  "future_covariate_matrices_generated": false,
+  "future_predictions_generated": false
+}

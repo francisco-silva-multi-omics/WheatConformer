@@ -1,0 +1,57 @@
+{
+  "protocol_version": "phase6a_split_bound_historical_projection_inputs_v1",
+  "component": "K_E_PROJECTION_CORE_V1",
+  "selection_data": "stage1_v2_environment_identifiers_and_certified_historical_climate_only",
+  "expected_state_count": 150,
+  "expected_environment_count": 11161,
+  "expected_feature_count": 153,
+  "feature_schema_policy": "exact_order_from_certified_historical_robust_feature_reference",
+  "preprocessing": {
+    "fit_population": "training_environments_with_projection_core_climate_eligible_true",
+    "imputation": "per_feature_training_median",
+    "centering": "per_feature_training_mean_after_imputation",
+    "scaling": "per_feature_training_population_standard_deviation_after_imputation",
+    "minimum_training_nonmissing_fraction": 0.05,
+    "minimum_training_nonmissing_count": 10,
+    "constant_tolerance": 1e-12,
+    "held_out_clipping": false
+  },
+  "kernel": {
+    "definition": "Z_retained Z_retained_transpose divided by retained_feature_count and training_mean_diagonal",
+    "training_mean_diagonal": 1.0,
+    "inactive_environment_factor": "all_zero",
+    "inactive_environment_reason": "historical_source_absent_or_projection_core_climate_ineligible"
+  },
+  "factorization": {
+    "method": "training_only_numpy_svd_of_exact_feature_factor",
+    "maximum_rank": 64,
+    "sign_canonicalization": "largest_absolute_loading_positive",
+    "held_out_projection": "frozen_training_right_singular_vectors"
+  },
+  "missing_input_masks": {
+    "granularity": "environment_by_feature",
+    "encoding": "numpy_packbits_little_endian",
+    "source_absent_policy": "all_153_features_missing",
+    "schema_binding": "feature_schema.tsv"
+  },
+  "required_outputs_per_state": [
+    "environment_entities.tsv",
+    "feature_parameters.tsv",
+    "standardized_features_float32.npy",
+    "feature_missing_mask_packbits.npy",
+    "kernel_projection_float32.npy",
+    "kernel_factor_float32.npy",
+    "training_singular_values_float64.npy",
+    "state_metadata.json"
+  ],
+  "prohibited_inputs": [
+    "phenotype_values",
+    "inner_validation_metrics",
+    "outer_test_outcomes",
+    "outer_test_metrics",
+    "final_holdout_outcomes",
+    "future_SSP_values"
+  ],
+  "future_covariate_matrices_are_training_inputs": false,
+  "future_predictions_allowed": false
+}

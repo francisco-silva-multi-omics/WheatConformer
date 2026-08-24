@@ -1,0 +1,31 @@
+{
+  "protocol_version": "regulatory_eligibility_stage1_v2_v1",
+  "stage1_authority": "P5SBK_20260808_V1_274E41DF",
+  "panel_and_scenario_authority": "P5PESP_20260809_V2_274E41DF",
+  "cimmyt_unimputed_authority": "P5CUG_20260809_V4_274E41DF",
+  "selection_data": "identifiers_genotype_qc_marker_metadata_and_training_ids_only",
+  "phenotype_values_read": false,
+  "inner_validation_metrics_read": false,
+  "outer_test_outcomes_read": false,
+  "final_holdout_outcomes_read": false,
+  "minimum_direct_training_gids_for_structural_support": 20,
+  "direct_observed_ready_requires": [
+    "accepted_same_dataset_identity",
+    "observed_variant_calls",
+    "reference_assembly_coordinates_and_alleles",
+    "certified_reference_or_graph_projection",
+    "regulatory_window_overlap",
+    "certified_direct_embedding"
+  ],
+  "terminal_classes": [
+    "direct_observed_ready",
+    "direct_sparse_candidate",
+    "pedigree_imputable",
+    "candidate_unresolved",
+    "ineligible"
+  ],
+  "missing_kz_policy": "explicit_mask_and_fallback_to_K_A_or_non_genomic_baseline",
+  "zero_embedding_for_missing_forbidden": true,
+  "pedigree_imputation_policy": "future_training_only_confidence_gated_not_equivalent_to_observed_sequence",
+  "phase6_rule": "K_z_may_enter_preregistration_only_if_this_release_certifies_nonzero_direct_observed_ready_GIDs_and_split_support"
+}

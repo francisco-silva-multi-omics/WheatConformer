@@ -1,0 +1,47 @@
+{
+  "protocol_version": "phase6a_applicability_domain_v1",
+  "status": "FROZEN_BEFORE_FUTURE_COVARIATE_GENERATION",
+  "fit_data": "historical_projection_core_features_only",
+  "fit_scope": "separate_frozen_training_environment_partition_and_feature_block",
+  "feature_blocks": [
+    "geography",
+    "development",
+    "heat",
+    "water",
+    "radiation",
+    "management",
+    "confidence"
+  ],
+  "diagnostics": {
+    "univariate_range_exceedance": "fraction_of_features_outside_historical_training_min_max",
+    "robust_standardized_distance": "RMS_of_abs((x-training_median)/(1.4826*MAD_with_IQR_fallback))",
+    "multivariate_distance": "training_only_PCA_95pct_variance_cap32_then_shrinkage_Mahalanobis_and_leverage",
+    "daily_extreme_fraction": "fraction_of_input_days_outside_site_or_regional_historical_0.1_to_99.9_percentiles",
+    "missing_input_confidence": "required_input_and_mask_pattern_relative_to_historical_training",
+    "GCM_agreement": "member_resolved_between_source_median_IQR_range_and_sign_agreement"
+  },
+  "classification": {
+    "SUPPORTED": "no_required_input_missing;_range_exceedance<=0.05;_robust_RMS<=4;_multivariate_distance<=training_99th_percentile",
+    "EXTRAPOLATIVE": "no_required_input_missing;_range_exceedance<=0.20;_robust_RMS<=8;_multivariate_distance<=1.5_times_training_99.9th_percentile",
+    "UNSUPPORTED": "required_input_missing_or_any_extrapolative_limit_exceeded"
+  },
+  "overall_rule": "worst_required_feature_block_class",
+  "clipping_allowed_before_OOD_classification": false,
+  "future_outputs_must_retain": [
+    "source_id",
+    "member_id",
+    "SSP",
+    "location_id",
+    "period",
+    "feature_block",
+    "support_class",
+    "all_diagnostic_values",
+    "missing_and_confidence_class"
+  ],
+  "phenotype_values_read": false,
+  "outer_test_outcomes_read": false,
+  "outer_test_metrics_read": false,
+  "final_holdout_outcomes_read": false,
+  "future_covariates_evaluated": false,
+  "future_predictions_generated": false
+}
