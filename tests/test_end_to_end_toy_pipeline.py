@@ -14,7 +14,7 @@ from build_environment_component_kernels import (
     standardized_kernel,
     trait_group_columns,
 )
-from build_requested_outputs import compute_hmp_qc
+from build_baseline import compute_hmp_qc
 from scripts.build_validation_ablation_report import combine_reports
 
 
