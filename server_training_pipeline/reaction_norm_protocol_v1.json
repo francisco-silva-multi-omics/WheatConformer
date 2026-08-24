@@ -1,0 +1,102 @@
+{
+  "protocol_version": "multitrait_reaction_norm_v1",
+  "status": "frozen_before_inner_validation",
+  "selection_data": "inner_validation_only",
+  "phenotype_values_read": false,
+  "outer_test_metrics_read": false,
+  "final_holdout_outcomes_read": false,
+  "scenario": "unseen_genotypes",
+  "traits": [
+    "DAYS_TO_HEADING",
+    "DAYS_TO_MATURITY",
+    "PLANT_HEIGHT",
+    "GRAIN_YIELD",
+    "1000_GRAIN_WEIGHT",
+    "ABOVE_GROUND_BIOMASS",
+    "TEST_WEIGHT"
+  ],
+  "required_kernels": [
+    "K_A_CANONICAL_V3",
+    "K_E_GEO",
+    "K_E_WEATHER",
+    "K_E_STRESS",
+    "K_E_MGMT",
+    "K_E_TGW_V2"
+  ],
+  "genotype_kernel": "K_A_CANONICAL_V3",
+  "generic_environment_kernels": [
+    "K_E_GEO",
+    "K_E_WEATHER",
+    "K_E_STRESS",
+    "K_E_MGMT"
+  ],
+  "trait_specific_environment_kernels": ["K_E_TGW_V2"],
+  "trait_specific_environment_eligibility": {
+    "K_E_TGW_V2": ["1000_GRAIN_WEIGHT"]
+  },
+  "forbidden_kernel_prefixes": ["K_G_", "K_H_"],
+  "forbidden_kernels": [
+    "K_A",
+    "K_E_GENERIC",
+    "K_E_CLIMATOLOGY",
+    "K_E_DTH_V2",
+    "K_E_DTM_V2",
+    "K_E_GY_V2",
+    "K_E_PH_V2"
+  ],
+  "candidates": [
+    {
+      "name": "reaction_norm_identity_covariance",
+      "trait_covariance_shrinkage": 1.0,
+      "reaction_rank": 32,
+      "ridge_penalty": 0.0001
+    },
+    {
+      "name": "reaction_norm_correlated_traits",
+      "trait_covariance_shrinkage": 0.25,
+      "reaction_rank": 32,
+      "ridge_penalty": 0.0001
+    }
+  ],
+  "training": {
+    "max_rank_genotype": 128,
+    "max_rank_environment": 64,
+    "epochs": 200,
+    "batch_size": 8192,
+    "learning_rate": 0.001,
+    "patience": 25,
+    "intra_op_threads": 16,
+    "inter_op_threads": 2,
+    "trait_covariance_minimum_pairs": 20,
+    "residual_scale_floor": 0.05,
+    "factorization_mode": "train_nystrom",
+    "kernel_centering": true,
+    "stage1_policy": "leakage_safe_by_scenario",
+    "fold_local_weights": true,
+    "weight_power": 0.0,
+    "weight_variance_floor_quantile": 0.01,
+    "weight_missing_variance_quantile": 0.75,
+    "weight_clip_quantile": 0.99,
+    "minimum_effective_sample_fraction": 1.0,
+    "maximum_top_1pct_share": 0.02,
+    "minimum_train_rows_per_trait": 100,
+    "minimum_evaluation_rows_per_trait": 20
+  },
+  "selection": {
+    "metric": "validation_macro_normalized_rmse",
+    "tiebreaker": "validation_macro_pearson",
+    "minimum_relative_nrmse_gain_vs_nonlinear_reference": 0.01,
+    "minimum_fold_win_rate": 0.6666666666666666,
+    "maximum_mean_pearson_drop": 0.005,
+    "maximum_mean_calibration_error_increase": 0.0
+  },
+  "model_contract": {
+    "trait_covariance_fit_partition": "inner_training_only",
+    "trait_scaling_fit_partition": "inner_training_only",
+    "weight_transform_fit_partition": "inner_training_only",
+    "reaction_features": "deterministic_random_maclaurin_product_kernel",
+    "trait_likelihood": "trait_specific_gaussian",
+    "platform_marker_kernels_included": false,
+    "outer_test_available_during_selection": false
+  }
+}

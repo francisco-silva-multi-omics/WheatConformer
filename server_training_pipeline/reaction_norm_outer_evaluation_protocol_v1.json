@@ -1,0 +1,88 @@
+{
+  "protocol_version": "multitrait_reaction_norm_outer_v1",
+  "status": "blocked_pending_environment_architecture_selection",
+  "blocked_on": "2026-07-23",
+  "blocked_reason": "E_REACTION_NORM_V1 must be compared with the current corrected generic environment representation using all 15 inner-validation folds before outer evaluation.",
+  "frozen_on": "2026-07-23",
+  "selection_data": "completed_inner_validation_only",
+  "inner_validation_phenotype_values_read": true,
+  "outer_test_metrics_read_at_freeze": false,
+  "final_holdout_outcomes_read": false,
+  "inner_reaction_protocol_version": "multitrait_reaction_norm_v1",
+  "inner_reaction_protocol_sha256": "90080ab003a0f21dfe4c8bee780ae0f12f72da49a13236543e506b0905f38bfd",
+  "evaluation_protocol_version": "multitrait_quantitative_final_v5",
+  "evaluation_protocol_sha256": "56c9f22860862937d5317edff5c1b5553f7b1fb6068b3fac622857c75ffe4ebf",
+  "selection_scenario": "unseen_genotypes",
+  "selected_candidate": "reaction_norm_identity_covariance",
+  "selected_model_label": "multitrait_reaction_norm_identity_covariance_frozen",
+  "selected_configuration": {
+    "max_rank_genotype": 128,
+    "max_rank_environment": 64,
+    "reaction_rank": 32,
+    "trait_covariance_shrinkage": 1.0,
+    "trait_covariance_minimum_pairs": 20,
+    "ridge_penalty": 0.0001,
+    "residual_scale_floor": 0.05,
+    "epochs": 200,
+    "batch_size": 8192,
+    "learning_rate": 0.001,
+    "patience": 25,
+    "intra_op_threads": 16,
+    "inter_op_threads": 2
+  },
+  "required_kernels": [
+    "K_A_CANONICAL_V3",
+    "K_E_GEO",
+    "K_E_WEATHER",
+    "K_E_STRESS",
+    "K_E_MGMT",
+    "K_E_TGW_V2"
+  ],
+  "traits": [
+    "DAYS_TO_HEADING",
+    "DAYS_TO_MATURITY",
+    "PLANT_HEIGHT",
+    "GRAIN_YIELD",
+    "1000_GRAIN_WEIGHT",
+    "ABOVE_GROUND_BIOMASS",
+    "TEST_WEIGHT"
+  ],
+  "trait_reporting_policy": {
+    "ABOVE_GROUND_BIOMASS": "exploratory_not_improved_in_inner_validation",
+    "default": "primary_quantitative_result"
+  },
+  "scenarios": {
+    "unseen_environments": 5,
+    "unseen_genotypes": 5,
+    "unseen_genotypes_and_environments": 5,
+    "temporal_holdout": 3,
+    "country_holdout": 5
+  },
+  "scenario_seed_offsets": {
+    "unseen_environments": 0,
+    "unseen_genotypes": 10000,
+    "unseen_genotypes_and_environments": 20000,
+    "temporal_holdout": 30000,
+    "country_holdout": 40000
+  },
+  "outer_member_policy": {
+    "member_count": 3,
+    "base_seed": 71001,
+    "member_seed_stride": 10,
+    "outer_fold_seed_stride": 100,
+    "training_partition": "inner_training",
+    "early_stopping_partition": "inner_validation",
+    "outer_test_combination": "arithmetic_mean_over_structurally_eligible_members",
+    "support_policy_sha256": "991d313f25692d5a07af652c979287de48f837956091f87ee1904758ff6f9c62"
+  },
+  "model_contract": {
+    "no_further_hyperparameter_selection": true,
+    "no_trait_removal_after_inner_validation": true,
+    "outer_test_used_for_training_or_early_stopping": false,
+    "outer_test_used_only_for_locked_reporting": true,
+    "preprocessing_fit_partition": "inner_training_only",
+    "factorization_mode": "train_nystrom",
+    "kernel_centering": true,
+    "final_holdout_available": false
+  }
+}

@@ -330,6 +330,15 @@ def main() -> None:
     )
     parser.add_argument("--diagonal-epsilon", type=float, default=1e-8)
     parser.add_argument("--allow-missing-experts", action="store_true")
+    parser.add_argument(
+        "--only-kernel",
+        action="append",
+        default=[],
+        help=(
+            "Prepare only the named kernel; repeat for an exact subset. "
+            "The default remains the complete registry."
+        ),
+    )
     args = parser.parse_args()
 
     root = args.root.resolve()
@@ -561,6 +570,21 @@ def main() -> None:
         raise SystemExit(
             f"Required trait-environment manifest is absent: {trait_environment_manifest}"
         )
+
+    if args.only_kernel:
+        requested_kernels = {str(value).strip() for value in args.only_kernel}
+        available_kernels = {str(candidate["kernel"]) for candidate in candidates}
+        unknown_kernels = sorted(requested_kernels - available_kernels)
+        if unknown_kernels:
+            raise SystemExit(
+                "Requested registry kernels are unavailable: "
+                f"{unknown_kernels}"
+            )
+        candidates = [
+            candidate
+            for candidate in candidates
+            if str(candidate["kernel"]) in requested_kernels
+        ]
 
     missing = []
     registry_rows = []

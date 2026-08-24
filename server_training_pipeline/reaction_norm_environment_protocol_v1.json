@@ -1,0 +1,115 @@
+{
+  "protocol_version": "reaction_norm_environment_v1",
+  "status": "frozen_before_inner_validation",
+  "frozen_on": "2026-07-23",
+  "selection_data": "inner_validation_only",
+  "phenotype_values_read": false,
+  "outer_test_metrics_read": false,
+  "final_holdout_outcomes_read": false,
+  "selected_reaction_candidate": "reaction_norm_identity_covariance",
+  "required_common_kernels": [
+    "K_A_CANONICAL_V3",
+    "K_E_GEO",
+    "K_E_WEATHER",
+    "K_E_STRESS",
+    "K_E_MGMT",
+    "K_E_TGW_V2"
+  ],
+  "candidates": [
+    {
+      "name": "current_corrected_generic_environment",
+      "reaction_feature_mode": "kernel_product",
+      "required_kernels": [
+        "K_A_CANONICAL_V3",
+        "K_E_GEO",
+        "K_E_WEATHER",
+        "K_E_STRESS",
+        "K_E_MGMT",
+        "K_E_TGW_V2"
+      ],
+      "kernel_interaction_allowlist": [
+        "K_E_GEO",
+        "K_E_WEATHER",
+        "K_E_STRESS",
+        "K_E_MGMT",
+        "K_E_TGW_V2"
+      ],
+      "environment_design_required": false
+    },
+    {
+      "name": "explicit_E_REACTION_NORM_V1",
+      "reaction_feature_mode": "explicit_environment_axes",
+      "required_kernels": [
+        "K_A_CANONICAL_V3",
+        "K_E_GEO",
+        "K_E_WEATHER",
+        "K_E_STRESS",
+        "K_E_MGMT",
+        "K_E_TGW_V2",
+        "K_E_REACTION_NORM_V1"
+      ],
+      "kernel_interaction_allowlist": [
+        "K_E_TGW_V2"
+      ],
+      "environment_design_required": true
+    }
+  ],
+  "feature_contract": {
+    "environment_matrix": "E_REACTION_NORM_V1.parquet",
+    "environment_order": "E_REACTION_NORM_V1_order.tsv",
+    "feature_manifest": "E_REACTION_NORM_V1_feature_manifest.tsv",
+    "scaling": "E_REACTION_NORM_V1_scaling.tsv",
+    "kernel": "K_E_REACTION_NORM_V1.npy",
+    "kernel_order": "K_E_REACTION_NORM_V1_order.tsv",
+    "certification": "E_REACTION_NORM_V1_certification.json",
+    "scaling_fit_partition": "outer_training_environments_only",
+    "climatology_donor_partition": "outer_training_environments_only",
+    "weather_windows": "fixed_sowing_relative_only",
+    "actual_target_phenology_dates_allowed": false,
+    "kernel_formula": "E_E_transpose_divided_by_feature_count_then_training_mean_diagonal_normalized"
+  },
+  "trait_axis_policy": {
+    "DAYS_TO_HEADING": "fixed_sowing_to_120_days_plus_generic_axes",
+    "DAYS_TO_MATURITY": "fixed_sowing_to_180_days_plus_generic_axes",
+    "PLANT_HEIGHT": "vegetative_0_to_120_days_plus_generic_axes",
+    "GRAIN_YIELD": "fixed_sowing_to_180_days_plus_generic_axes",
+    "1000_GRAIN_WEIGHT": "grain_filling_60_to_180_days_plus_K_E_TGW_V2",
+    "ABOVE_GROUND_BIOMASS": "vegetative_0_to_120_days_plus_generic_axes",
+    "TEST_WEIGHT": "late_90_to_180_days_plus_generic_axes_with_stronger_regularization"
+  },
+  "trait_slope_penalty_multiplier": {
+    "DAYS_TO_HEADING": 1.0,
+    "DAYS_TO_MATURITY": 1.0,
+    "PLANT_HEIGHT": 1.0,
+    "GRAIN_YIELD": 1.0,
+    "1000_GRAIN_WEIGHT": 1.0,
+    "ABOVE_GROUND_BIOMASS": 1.5,
+    "TEST_WEIGHT": 4.0
+  },
+  "selection": {
+    "metric": "validation_macro_normalized_rmse",
+    "tiebreaker": "validation_macro_pearson",
+    "minimum_relative_nrmse_gain": 0.01,
+    "minimum_fold_win_rate": 0.6666666666666666,
+    "maximum_mean_pearson_drop": 0.005,
+    "maximum_mean_calibration_error_increase": 0.0,
+    "maximum_primary_trait_relative_nrmse_deterioration": 0.02,
+    "maximum_primary_trait_pearson_drop": 0.02,
+    "exploratory_traits": ["ABOVE_GROUND_BIOMASS"],
+    "require_all_15_inner_folds": true
+  },
+  "model_contract": {
+    "generic_environment_main_effects_remain_separate": true,
+    "K_E_TGW_V2_retained": true,
+    "diagnostic_trait_kernels_not_activated": [
+      "K_E_DTH_V2",
+      "K_E_DTM_V2",
+      "K_E_GY_V2",
+      "K_E_PH_V2"
+    ],
+    "environment_preprocessing_fit_partition": "outer_training_only",
+    "inner_validation_used_for_architecture_selection": true,
+    "outer_test_available_during_selection": false,
+    "future_regulatory_interaction": "K_z_x_E_REACTION_NORM_V1"
+  }
+}
