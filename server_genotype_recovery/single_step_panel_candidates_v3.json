@@ -1,0 +1,87 @@
+{
+  "protocol_version": "single_step_panel_candidates_v3",
+  "selection_data": "certified_kernel_registry_and_frozen_fold_support_only",
+  "candidates": [
+    {
+      "source": "SEEDS_DARTSEQ_DATAVERSE_RECOVERY",
+      "panel": "SEEDS_DARTSEQ_IDENTITY_V4",
+      "prefix": "K_H_SEEDS_IDENTITY_V4",
+      "kernel_path": "genotype_panels/recovered/seeds_dartseq_identity_v4_miss40_scoped/K_G_SEEDS_DARTSEQ_IDENTITY_V4_MISS40_SCOPED_LINEAR.npy",
+      "order_path": "genotype_panels/recovered/seeds_dartseq_identity_v4_miss40_scoped/K_G_SEEDS_DARTSEQ_IDENTITY_V4_MISS40_SCOPED_sample_order.tsv",
+      "output_dir": "genotype_panels/single_step_v3/seeds_identity_v4",
+      "relationship_method": "VanRaden_from_accepted_identity_QC_dosage",
+      "requested_scope": "global_inner_screen",
+      "minimum_overlap": 100
+    },
+    {
+      "source": "80K_HEXAPLOID",
+      "panel": "80K_HEXAPLOID",
+      "prefix": "K_H_80K_HEXAPLOID",
+      "kernel_path": "genotype_panels/recovered/80k_hexaploid/K_G_80K_HEXAPLOID_LINEAR.npy",
+      "order_path": "genotype_panels/recovered/80k_hexaploid/K_G_80K_HEXAPLOID_sample_order.tsv",
+      "output_dir": "genotype_panels/single_step_v3/80k_hexaploid",
+      "relationship_method": "VanRaden_from_80K_QC_dosage",
+      "requested_scope": "global_inner_screen",
+      "minimum_overlap": 100
+    },
+    {
+      "source": "HAPLOTYPE",
+      "panel": "HAPLOTYPE",
+      "prefix": "K_H_HAPLOTYPE",
+      "kernel_path": "genotype_panels/recovered/haplotype_blocks/K_G_HAPLOTYPE.npy",
+      "order_path": "genotype_panels/recovered/haplotype_blocks/K_G_HAPLOTYPE_sample_order.tsv",
+      "output_dir": "genotype_panels/single_step_v3/haplotype",
+      "relationship_method": "centered_categorical_haplotype_relationship",
+      "requested_scope": "global_inner_screen",
+      "minimum_overlap": 100
+    },
+    {
+      "source": "IWYP35K",
+      "panel": "IWYP35K",
+      "prefix": "K_H_IWYP35K",
+      "kernel_path": "genotype_panels/recovered/iwyp35k/K_G_IWYP35K_LINEAR.npy",
+      "order_path": "genotype_panels/recovered/iwyp35k/K_G_IWYP35K_sample_order.tsv",
+      "output_dir": "genotype_panels/single_step_v3/iwyp35k",
+      "relationship_method": "VanRaden_from_IWYP35K_QC_dosage",
+      "requested_scope": "global_inner_screen",
+      "minimum_overlap": 20
+    },
+    {
+      "source": "CERTIFIED_GBS_SAWYT",
+      "panel": "GBS_SAWYT",
+      "prefix": "K_H_GBS_SAWYT",
+      "kernel_path": "genotype_panels/gbs_sawyt/K_GBS_SAWYT.QCfiltered.npy",
+      "order_path": "genotype_panels/gbs_sawyt/gbs_sawyt_K_sample_order.QCfiltered.tsv",
+      "output_dir": "genotype_panels/single_step_v3/gbs_sawyt",
+      "relationship_method": "VanRaden_from_GBS_SAWYT_QC_dosage",
+      "requested_scope": "global_inner_screen",
+      "minimum_overlap": 20
+    },
+    {
+      "source": "CERTIFIED_HMP",
+      "panel": "HMP",
+      "prefix": "K_H_HMP_DIAGNOSTIC",
+      "kernel_path": "genotype_panels/hmp/K_HMP.QCfiltered.meanDiag1.npy",
+      "order_path": "genotype_panels/hmp/hmp_K_sample_order.QCfiltered.tsv",
+      "output_dir": "genotype_panels/single_step_v3/hmp_diagnostic",
+      "relationship_method": "VanRaden_from_HMP_QC_markers_mean_diagonal_scaled",
+      "requested_scope": "diagnostic_support_gated",
+      "minimum_overlap": 100
+    },
+    {
+      "source": "DARTAG",
+      "panel": "DARTAG",
+      "prefix": "K_H_DARTAG",
+      "kernel_path": "genotype_panels/recovered/dartag/K_G_DARTAG_LINEAR.npy",
+      "order_path": "genotype_panels/recovered/dartag/K_G_DARTAG_sample_order.tsv",
+      "output_dir": "genotype_panels/single_step_v3/dartag",
+      "relationship_method": "VanRaden_from_DArTAG_QC_dosage",
+      "requested_scope": "blocked_unidentifiable_folds",
+      "minimum_overlap": 100
+    }
+  ],
+  "platform_kernels_combined": false,
+  "phenotype_values_read": false,
+  "outer_test_metrics_read": false,
+  "final_holdout_outcomes_read": false
+}

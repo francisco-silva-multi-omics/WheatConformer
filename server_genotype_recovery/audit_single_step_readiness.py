@@ -138,6 +138,178 @@ def curated_parent_tokens(path: Path | None) -> set[str]:
     return set(frame.loc[valid, token_col].map(clean))
 
 
+def stable_parent_registry(
+    path: Path | None,
+) -> tuple[pd.DataFrame, set[str]]:
+    if path is None or not path.is_file() or path.stat().st_size == 0:
+        return pd.DataFrame(), set()
+    frame = read_table(path)
+    stable_col = detect_column(frame, ["stable_parent_id", "canonical_parent_id"])
+    eligible_col = detect_column(
+        frame, ["construction_eligible", "relationship_safe", "accepted", "reviewed"]
+    )
+    parent1_col = detect_column(frame, ["parent1", "female_parent", "mother", "dam"])
+    parent2_col = detect_column(frame, ["parent2", "male_parent", "father", "sire"])
+    if stable_col is None or eligible_col is None:
+        raise ValueError(f"Stable parent registry has an invalid schema: {path}")
+    output = pd.DataFrame(
+        {
+            "stable_parent_id": frame[stable_col].map(clean),
+            "construction_eligible": frame[eligible_col].map(bool_value),
+            "parent1": frame[parent1_col].map(clean) if parent1_col else "",
+            "parent2": frame[parent2_col].map(clean) if parent2_col else "",
+        }
+    )
+    output = output[output["stable_parent_id"].ne("")]
+    duplicated = output[output["stable_parent_id"].duplicated(keep=False)]
+    if not duplicated.empty:
+        raise ValueError("Stable parent registry contains duplicate stable IDs")
+    accepted = set(
+        output.loc[output["construction_eligible"], "stable_parent_id"]
+    )
+    return output.reset_index(drop=True), accepted
+
+
+def validate_stable_parent_registry(
+    pedigree: pd.DataFrame,
+    registry: pd.DataFrame,
+    accepted_ids: set[str],
+    *,
+    canonical_gid_pattern: re.Pattern[str],
+) -> tuple[pd.DataFrame, dict[str, object]]:
+    pedigree_nodes = set(pedigree["sample_id"])
+    pedigree_nodes.update(value for value in pedigree["parent1"] if value)
+    pedigree_nodes.update(value for value in pedigree["parent2"] if value)
+    local_stable_ids = {
+        node for node in pedigree_nodes if not canonical_gid_pattern.fullmatch(node)
+    }
+    missing = sorted(local_stable_ids - accepted_ids)
+    pedigree_lookup = pedigree.set_index("sample_id")
+    mismatches: list[dict[str, object]] = []
+    if not registry.empty:
+        for row in registry.itertuples(index=False):
+            stable_id = clean(row.stable_parent_id)
+            if stable_id not in local_stable_ids or stable_id not in pedigree_lookup.index:
+                continue
+            observed = pedigree_lookup.loc[stable_id]
+            if isinstance(observed, pd.DataFrame):
+                continue
+            expected_pair = (clean(row.parent1), clean(row.parent2))
+            observed_pair = (clean(observed["parent1"]), clean(observed["parent2"]))
+            if expected_pair != observed_pair:
+                mismatches.append(
+                    {
+                        "stable_parent_id": stable_id,
+                        "registry_parent1": expected_pair[0],
+                        "registry_parent2": expected_pair[1],
+                        "pedigree_parent1": observed_pair[0],
+                        "pedigree_parent2": observed_pair[1],
+                        "status": "registry_pedigree_definition_mismatch",
+                    }
+                )
+    mismatch_frame = pd.DataFrame(
+        mismatches,
+        columns=[
+            "stable_parent_id",
+            "registry_parent1",
+            "registry_parent2",
+            "pedigree_parent1",
+            "pedigree_parent2",
+            "status",
+        ],
+    )
+    return mismatch_frame, {
+        "local_stable_pedigree_node_count": len(local_stable_ids),
+        "stable_parent_registry_accepted_ids": len(accepted_ids),
+        "local_stable_nodes_missing_registry": len(missing),
+        "stable_registry_pedigree_definition_mismatches": len(mismatch_frame),
+        "missing_stable_registry_ids": pd.DataFrame(
+            {"stable_parent_id": missing, "status": "missing_or_ineligible_registry_id"}
+        ),
+    }
+
+
+def validate_lineage_resolution(
+    path: Path | None,
+    pedigree: pd.DataFrame,
+    source_children: set[str],
+    source_conflicts: pd.DataFrame,
+) -> tuple[pd.DataFrame, dict[str, object]]:
+    conflict_ids = set(source_conflicts.get("sample_id", pd.Series(dtype=str)).map(clean))
+    if path is None or not path.is_file() or path.stat().st_size == 0:
+        return pd.DataFrame(), {
+            "lineage_resolution_present": False,
+            "lineage_resolution_rows": 0,
+            "source_children_missing_lineage_resolution": 0,
+            "source_conflict_children_resolved": 0,
+            "source_conflict_children_unresolved": len(conflict_ids),
+            "lineage_resolution_parent_mismatches": 0,
+        }
+    frame = read_table(path)
+    id_col = detect_column(frame, ["sample_id", "genotype_id"])
+    eligible_col = detect_column(frame, ["construction_eligible", "relationship_safe"])
+    p1_col = detect_column(frame, ["selected_parent1", "parent1"])
+    p2_col = detect_column(frame, ["selected_parent2", "parent2"])
+    status_col = detect_column(frame, ["resolution_status", "status"])
+    if id_col is None or eligible_col is None or p1_col is None or p2_col is None:
+        raise ValueError(f"Lineage resolution ledger has an invalid schema: {path}")
+    work = pd.DataFrame(
+        {
+            "sample_id": frame[id_col].map(clean),
+            "construction_eligible": frame[eligible_col].map(bool_value),
+            "selected_parent1": frame[p1_col].map(clean),
+            "selected_parent2": frame[p2_col].map(clean),
+            "resolution_status": frame[status_col].map(clean) if status_col else "",
+        }
+    )
+    work = work[work["sample_id"].ne("")]
+    if work["sample_id"].duplicated().any():
+        raise ValueError("Lineage resolution ledger contains duplicate sample IDs")
+    lookup = work.set_index("sample_id")
+    pedigree_lookup = pedigree.set_index("sample_id")
+    mismatches: list[dict[str, object]] = []
+    for sample_id in sorted(source_children & set(lookup.index) & set(pedigree_lookup.index)):
+        resolution = lookup.loc[sample_id]
+        observed = pedigree_lookup.loc[sample_id]
+        expected_pair = (
+            clean(resolution["selected_parent1"]),
+            clean(resolution["selected_parent2"]),
+        )
+        observed_pair = (clean(observed["parent1"]), clean(observed["parent2"]))
+        if expected_pair != observed_pair:
+            mismatches.append(
+                {
+                    "sample_id": sample_id,
+                    "resolution_parent1": expected_pair[0],
+                    "resolution_parent2": expected_pair[1],
+                    "pedigree_parent1": observed_pair[0],
+                    "pedigree_parent2": observed_pair[1],
+                    "status": "lineage_resolution_parent_mismatch",
+                }
+            )
+    eligible_ids = set(work.loc[work["construction_eligible"], "sample_id"])
+    resolved_conflicts = conflict_ids & eligible_ids
+    mismatch_frame = pd.DataFrame(
+        mismatches,
+        columns=[
+            "sample_id",
+            "resolution_parent1",
+            "resolution_parent2",
+            "pedigree_parent1",
+            "pedigree_parent2",
+            "status",
+        ],
+    )
+    return mismatch_frame, {
+        "lineage_resolution_present": True,
+        "lineage_resolution_rows": len(work),
+        "source_children_missing_lineage_resolution": len(source_children - set(work["sample_id"])),
+        "source_conflict_children_resolved": len(resolved_conflicts),
+        "source_conflict_children_unresolved": len(conflict_ids - resolved_conflicts),
+        "lineage_resolution_parent_mismatches": len(mismatch_frame),
+    }
+
+
 def pedigree_structure(
     pedigree: pd.DataFrame,
     *,
@@ -500,8 +672,16 @@ def readiness_decision(
     warnings: list[str] = []
     if not source_metrics["source_manifest_present"]:
         blocking.append("source_pedigree_manifest_absent")
-    if source_metrics["source_children_with_multiple_lineages"]:
+    unresolved_lineages = source_metrics.get(
+        "source_conflict_children_unresolved",
+        source_metrics["source_children_with_multiple_lineages"],
+    )
+    if unresolved_lineages:
         blocking.append("source_children_have_multiple_lineages")
+    if source_metrics.get("source_children_missing_lineage_resolution", 0):
+        blocking.append("source_children_missing_lineage_resolution")
+    if source_metrics.get("lineage_resolution_parent_mismatches", 0):
+        blocking.append("lineage_resolution_does_not_match_pedigree")
     if source_metrics.get("pedigree_children_missing_from_source_manifest", 0):
         blocking.append("pedigree_children_missing_from_source_manifest")
     for metric, reason in [
@@ -517,6 +697,14 @@ def readiness_decision(
         ),
         ("self_parent_rows", "self_parent_relationships_present"),
         ("cycle_node_count", "pedigree_cycles_present"),
+        (
+            "local_stable_nodes_missing_registry",
+            "stable_parent_nodes_are_missing_from_registry",
+        ),
+        (
+            "stable_registry_pedigree_definition_mismatches",
+            "stable_parent_registry_does_not_match_pedigree",
+        ),
     ]:
         if structure.get(metric, 0):
             blocking.append(reason)
@@ -542,6 +730,8 @@ def readiness_decision(
             blocking.append(reason)
     if structure["pedigree_depth_max"] <= 1:
         warnings.append("pedigree_depth_is_shallow")
+    if source_metrics.get("source_conflict_children_resolved", 0):
+        warnings.append("source_lineage_conflicts_resolved_by_recorded_policy")
     if structure.get("duplicate_parent_rows", 0):
         warnings.append("duplicate_parent_rows_require_explicit_selfing_review")
     if source_metrics.get("source_children_absent_from_pedigree", 0):
@@ -576,6 +766,8 @@ def main() -> None:
         default=Path("metadata_outputs/all_trials_genotype_manifest_resolved.tsv"),
     )
     parser.add_argument("--curated-parent-registry", type=Path)
+    parser.add_argument("--stable-parent-registry", type=Path)
+    parser.add_argument("--lineage-resolution", type=Path)
     parser.add_argument(
         "--k-a", type=Path, default=Path("genotype_panels/pedigree/K_A.npy")
     )
@@ -630,6 +822,12 @@ def main() -> None:
     curated_path = (
         resolve(root, args.curated_parent_registry) if args.curated_parent_registry else None
     )
+    stable_registry_path = (
+        resolve(root, args.stable_parent_registry) if args.stable_parent_registry else None
+    )
+    lineage_resolution_path = (
+        resolve(root, args.lineage_resolution) if args.lineage_resolution else None
+    )
     out_dir = resolve(root, args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     required = [
@@ -652,6 +850,7 @@ def main() -> None:
         paths["pedigree_source_manifest"]
     )
     curated = curated_parent_tokens(curated_path)
+    stable_registry, accepted_stable_ids = stable_parent_registry(stable_registry_path)
     issues, parent_issues, components, structure = pedigree_structure(
         pedigree,
         child_pattern=re.compile(args.child_id_regex),
@@ -659,8 +858,25 @@ def main() -> None:
         curated_tokens=curated,
     )
     cycle_nodes = structure.pop("cycle_nodes")
+    stable_registry_mismatches, stable_metrics = validate_stable_parent_registry(
+        pedigree,
+        stable_registry,
+        accepted_stable_ids,
+        canonical_gid_pattern=re.compile(r"^GID[0-9]+$"),
+    )
+    missing_stable_registry_ids = stable_metrics.pop("missing_stable_registry_ids")
+    structure.update(stable_metrics)
+    lineage_mismatches, lineage_metrics = validate_lineage_resolution(
+        lineage_resolution_path,
+        pedigree,
+        source_children,
+        source_conflicts,
+    )
+    source_metrics.update(lineage_metrics)
     pedigree_children = set(pedigree["sample_id"])
-    missing_source_children = sorted(pedigree_children - source_children)
+    missing_source_children = sorted(
+        pedigree_children - source_children - accepted_stable_ids
+    )
     source_only_children = sorted(source_children - pedigree_children)
     source_metrics["pedigree_children_missing_from_source_manifest"] = len(
         missing_source_children
@@ -759,6 +975,15 @@ def main() -> None:
     )
     components.to_csv(out_dir / "pedigree_components.tsv", sep="\t", index=False)
     cycle_nodes.to_csv(out_dir / "pedigree_cycle_nodes.tsv", sep="\t", index=False)
+    stable_registry_mismatches.to_csv(
+        out_dir / "stable_parent_registry_mismatches.tsv", sep="\t", index=False
+    )
+    missing_stable_registry_ids.to_csv(
+        out_dir / "stable_parent_registry_missing_ids.tsv", sep="\t", index=False
+    )
+    lineage_mismatches.to_csv(
+        out_dir / "lineage_resolution_parent_mismatches.tsv", sep="\t", index=False
+    )
     ka_order_mismatches.to_csv(
         out_dir / "K_A_pedigree_order_mismatches.tsv", sep="\t", index=False
     )
@@ -786,6 +1011,16 @@ def main() -> None:
             if curated_path is not None and curated_path.is_file()
             else None
         ),
+        "stable_parent_registry": (
+            {"path": str(stable_registry_path), "sha256": sha256_file(stable_registry_path)}
+            if stable_registry_path is not None and stable_registry_path.is_file()
+            else None
+        ),
+        "lineage_resolution": (
+            {"path": str(lineage_resolution_path), "sha256": sha256_file(lineage_resolution_path)}
+            if lineage_resolution_path is not None and lineage_resolution_path.is_file()
+            else None
+        ),
         "pedigree_summary": structure,
         "source_summary": source_metrics,
         "K_A_integrity": ka_qc,
@@ -795,7 +1030,9 @@ def main() -> None:
             "mathematical_kernel_validity_implies_curated_pedigree": False,
             "cross_string_parent_token_implies_canonical_parent_identity": False,
             "curated_alias_without_canonical_K_A_rebuild_is_sufficient": False,
-            "single_step_H_requires_reviewed_stable_parent_ids": True,
+            "single_step_H_requires_certified_stable_parent_ids": True,
+            "stable_local_parent_id_implies_verified_global_germplasm_identity": False,
+            "recorded_conservative_founder_resolution_is_relationship_safe": True,
             "no_existing_kernel_was_modified": True,
         },
     }

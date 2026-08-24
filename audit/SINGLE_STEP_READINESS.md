@@ -9,6 +9,124 @@ The default source-lineage manifest is
 `metadata_outputs/all_trials_genotype_manifest_resolved.tsv`; set
 `PEDIGREE_SOURCE_MANIFEST` only when auditing a versioned replacement.
 
+## Canonical pedigree correction
+
+The legacy trial-derived `K_A` split pedigree text at the first convenient
+delimiter. That is not valid for compound Purdy/CIMMYT notation such as
+`A/B//C/3/D`, where `//` and `/3/` encode cross order. Before auditing or
+constructing single-step `H`, build the isolated canonical pedigree:
+
+```bash
+set +u
+
+CODE="$HOME/tools/WheatConformer"
+DATA="/DATA2/estancias/tesis_javier/model_DATA/genotipoXambiente"
+PYTHON="$HOME/tools/tf_wheat_cpu/bin/python"
+
+cd "$DATA"
+env \
+  PYTHON="$PYTHON" \
+  WHEATCONFORMER_CODE_ROOT="$CODE" \
+  CANONICAL_PEDIGREE_ALLOW_CONSERVATIVE_FOUNDER_FALLBACK=1 \
+  bash "$CODE/scripts/build_canonical_pedigree_v2.sh" "$DATA"
+```
+
+This produces, without modifying the legacy pedigree:
+
+- `canonical_parent_registry.tsv`;
+- `child_lineage_resolution.tsv`;
+- `selfing_review.tsv`;
+- `canonical_pedigree_parent_table.tsv`;
+- `K_A_CANONICAL_V2.npy` and certified order files;
+- a manual decision template for conflicts and selfing records.
+
+Stable `PEDF_*` nodes identify exact named founder expressions and `PEDX_*`
+nodes identify deterministic cross subtrees. They are local lineage identities,
+not claims of verified global germplasm GIDs. Competing child lineages and
+unreviewed selfing relationships are converted to recorded founders when the
+conservative fallback is explicitly enabled. No phenotype observation is
+removed. A reviewed manual decision file can later replace those fallbacks in a
+new version.
+
+The parser follows the cross-order and backcross-dose semantics of the
+Purdy/CIMMYT notation. It never treats every slash as an interchangeable text
+separator.
+
+## Certified recovered-edge overlay
+
+After `recovered_identity_verification_v2` passes, build a separate canonical
+v3 pedigree. V3 reconstructs the same canonical source pedigree and then
+overlays only rows from the hashed `accepted_new_pedigree_edges.tsv` bundle:
+
+```bash
+set +u
+
+CODE="$HOME/tools/WheatConformer"
+DATA="/DATA2/estancias/tesis_javier/model_DATA/genotipoXambiente"
+PYTHON="$HOME/tools/tf_wheat_cpu/bin/python"
+
+cd "$DATA"
+env \
+  PYTHON="$PYTHON" \
+  WHEATCONFORMER_CODE_ROOT="$CODE" \
+  CANONICAL_PEDIGREE_ALLOW_CONSERVATIVE_FOUNDER_FALLBACK=1 \
+  bash "$CODE/scripts/build_canonical_pedigree_v3.sh" "$DATA"
+```
+
+This writes `genotype_panels/pedigree_canonical_v3` and
+`K_A_CANONICAL_V3`. It does not modify v2. The builder verifies the complete
+recovered-identity SHA256 manifest, materializes only the stable-parent
+registry closure needed by accepted edges, refuses to overwrite a different
+nonempty v2 parent, and reruns the pedigree cycle and relationship checks.
+`recovered_edge_overlay.tsv` distinguishes newly applied edges from edges
+already represented by the canonical Purdy reconstruction.
+
+Build the independent panel-specific single-step candidates only after v3
+passes:
+
+```bash
+nohup env \
+  PYTHON="$PYTHON" \
+  WHEATCONFORMER_CODE_ROOT="$CODE" \
+  bash "$CODE/scripts/build_single_step_h_candidates_v3.sh" "$DATA" \
+  > "$DATA/logs/build_single_step_h_candidates_v3.nohup.log" 2>&1 &
+```
+
+The candidate registry keeps 80K, GBS, haplotype, IWYP35K and accepted-identity
+Seeds relationships separate. HMP is constructed for diagnostics but excluded
+from the global screen because its frozen country-holdout support reaches one
+training GID. DArTAG is not constructed because some frozen folds have zero
+training support. No platform dosage matrices are merged.
+
+Run the global inner-only comparison after candidate construction:
+
+```bash
+nohup env \
+  PYTHON="$PYTHON" \
+  WHEATCONFORMER_CODE_ROOT="$CODE" \
+  bash "$CODE/scripts/run_single_step_h_inner_screen_v3.sh" "$DATA" all \
+  > "$DATA/logs/single_step_h_inner_screen_v3.nohup.log" 2>&1 &
+```
+
+Selection still requires at least 1% relative normalized-RMSE gain, wins in at
+least two-thirds of matched inner folds, no mean Pearson drop beyond 0.005, and
+no deterioration in pedigree-only coverage or calibration. Outer-test and
+final-holdout outcomes remain unavailable during this screen.
+
+The screen manifest explicitly registers `K_A_CANONICAL_V3`. The pedigree
+reference includes that disabled kernel and excludes legacy `K_A`; every
+single-step arm excludes both pedigree kernels and includes exactly one `H`.
+After updating screen-generation code, refresh only the manifests without
+rebuilding the certified relationship matrices:
+
+```bash
+PYTHON="$PYTHON" WHEATCONFORMER_CODE_ROOT="$CODE" \
+  bash "$CODE/scripts/refresh_single_step_h_screen_v3.sh" "$DATA"
+```
+
+Repaired runs use `single_step_H_inner_screen_v3_canonical` directories so
+results from a stale legacy-`K_A` smoke test cannot enter their summary.
+
 ## Server run
 
 ```bash
@@ -26,6 +144,13 @@ env \
   PYTHON="$PYTHON" \
   WHEATCONFORMER_CODE_ROOT="$CODE" \
   SINGLE_STEP_READINESS_OUT_DIR="model_kernels/single_step_readiness_v2" \
+  SINGLE_STEP_PEDIGREE_PARENT_TABLE="genotype_panels/pedigree_canonical_v2/canonical_pedigree_parent_table.tsv" \
+  SINGLE_STEP_K_A="genotype_panels/pedigree_canonical_v2/K_A_CANONICAL_V2.npy" \
+  SINGLE_STEP_K_A_ORDER="genotype_panels/pedigree_canonical_v2/K_A_CANONICAL_V2_sample_order.tsv" \
+  SINGLE_STEP_CHILD_ID_REGEX='^(GID[0-9]+|PED[FX]_[A-F0-9]{16})$' \
+  SINGLE_STEP_PARENT_ID_REGEX='^(GID[0-9]+|PED[FX]_[A-F0-9]{16})$' \
+  STABLE_PARENT_REGISTRY="genotype_panels/pedigree_canonical_v2/canonical_parent_registry.tsv" \
+  PEDIGREE_LINEAGE_RESOLUTION="genotype_panels/pedigree_canonical_v2/child_lineage_resolution.tsv" \
   bash "$CODE/scripts/run_single_step_readiness_audit.sh" "$DATA" \
   > logs/single_step_readiness_v2.log 2>&1
 ```
@@ -51,9 +176,11 @@ trial-derived pedigree if conflicting cross histories or noncanonical parent
 tokens remain.
 
 Supplying a curated alias registry classifies reviewed aliases but does not make
-the existing `K_A` canonical. The parent table must be rewritten with reviewed
-stable parent GIDs and `K_A` rebuilt in a new versioned directory before the
-single-step gate can pass.
+the existing `K_A` canonical. The parent table must be rewritten with certified
+stable parent IDs and `K_A` rebuilt in a new versioned directory before the
+single-step gate can pass. The readiness audit also verifies that every local
+stable node exists in the registry and that its parent definition matches the
+rebuilt table.
 
 Do not resolve conflicting lineages by retaining the first row. Review them and
 record the selected parent identities and provenance explicitly.
@@ -62,8 +189,8 @@ record the selected parent identities and provenance explicitly.
 
 Single-step `H` remains prohibited until all blocking reasons are cleared:
 
-- source children have one reviewed lineage;
-- children and parents use stable canonical IDs;
+- source children have one selected lineage or a recorded conservative-founder resolution;
+- children and parents use certified stable IDs;
 - no self-parent or cyclic relationships exist;
 - repeated parent IDs are explicitly reviewed as legitimate selfing records;
 - the pedigree-node universe exactly matches the `K_A` order;

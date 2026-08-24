@@ -481,6 +481,66 @@ panel universe. The wrapper validates the rebuilt regulatory artifact and
 writes `audit/regulatory_eligibility_reconciled.sha256` before reporting
 success.
 
+After reconciliation, materialize only accepted Seeds DArTseq identities in a
+new, disabled candidate artifact:
+
+```bash
+PYTHON="$HOME/tools/tf_wheat_cpu/bin/python" \
+WHEATCONFORMER_CODE_ROOT="$HOME/tools/WheatConformer" \
+nohup bash "$HOME/tools/WheatConformer/scripts/build_seeds_identity_recovered_kernel.sh" \
+  /DATA2/estancias/tesis_javier/model_DATA/genotipoXambiente \
+  > /DATA2/estancias/tesis_javier/model_DATA/genotipoXambiente/logs/seeds_identity_v2.nohup.log \
+  2>&1 &
+```
+
+The builder consumes only accepted mappings from the reconciled artifact. It
+verifies the raw matrix hash while streaming selected columns, rechecks the
+accepted replicate-pair evidence, materializes concordant technical replicates
+as consensus calls, and sets observed disagreements to missing. Normal sample
+and marker QC is then applied, so an accepted identity may still be excluded
+from the candidate kernel for poor genotype quality.
+
+The candidate is written under
+`genotype_panels/recovered/seeds_dartseq_identity_v2`; the current Seeds kernel
+is never overwritten. The build fails if it loses a current certified Seeds
+GID or if shared off-diagonal relationships correlate less than `0.90` with
+the current kernel. The registry fragment remains disabled by default and must
+not be selected from outer-test results. Inspect the identity recovery summary,
+baseline-kernel comparison, kernel certification and artifact checksum before
+adding the fragment to a development-only inner-validation screen.
+
+Before registry screening, summarize the accepted identities lost to genotype
+QC without rescanning the marker matrix:
+
+```bash
+PYTHON="$HOME/tools/tf_wheat_cpu/bin/python" \
+WHEATCONFORMER_CODE_ROOT="$HOME/tools/WheatConformer" \
+bash "$HOME/tools/WheatConformer/scripts/audit_seeds_identity_recovered_qc.sh" \
+  /DATA2/estancias/tesis_javier/model_DATA/genotipoXambiente
+```
+
+This reads only the saved identity and genotype-QC tables. It reports failure
+causes, coverage cohorts and missingness-threshold sensitivity without reading
+phenotypes, outer-test metrics or final-holdout outcomes. The sensitivity table
+is diagnostic and does not by itself authorize relaxing genotype QC.
+
+When a revised threshold has been justified from genotype QC alone, build it
+under a new candidate name so the 20% reference remains immutable. For example:
+
+```bash
+SEEDS_IDENTITY_SAMPLE_MISSING_MAX=0.40 \
+SEEDS_IDENTITY_KERNEL_OUT=genotype_panels/recovered/seeds_dartseq_identity_v3_miss40 \
+SEEDS_IDENTITY_KERNEL_PREFIX=K_G_SEEDS_DARTSEQ_IDENTITY_V3_MISS40 \
+PYTHON="$HOME/tools/tf_wheat_cpu/bin/python" \
+WHEATCONFORMER_CODE_ROOT="$HOME/tools/WheatConformer" \
+bash "$HOME/tools/WheatConformer/scripts/build_seeds_identity_recovered_kernel.sh" \
+  /DATA2/estancias/tesis_javier/model_DATA/genotipoXambiente
+```
+
+The threshold, output directory and prefix are recorded independently. A
+relaxed candidate still requires baseline-concordance, kernel certification,
+fold-support and inner-validation checks before use.
+
 If unique selection-history evidence does not connect to marker calls, audit it
 as pedigree enrichment rather than discarding it:
 
@@ -499,6 +559,41 @@ identifiers from the model ledger. Every recovered alias and relationship is
 review-only: the audit never modifies K_A, never treats complex slash notation
 as a resolved two-parent cross, and requires canonical parent curation plus the
 existing conflict/cycle gate before an isolated replacement K_A can be built.
+
+The isolated replacement is built with:
+
+```bash
+PYTHON="$HOME/tools/tf_wheat_cpu/bin/python" \
+WHEATCONFORMER_CODE_ROOT="$HOME/tools/WheatConformer" \
+CANONICAL_PEDIGREE_ALLOW_CONSERVATIVE_FOUNDER_FALLBACK=1 \
+bash "$HOME/tools/WheatConformer/scripts/build_canonical_pedigree_v2.sh" \
+  /DATA2/estancias/tesis_javier/model_DATA/genotipoXambiente
+```
+
+`build_canonical_pedigree` reconstructs numbered, three-way, double and
+backcross order instead of splitting compound pedigree text at the first slash.
+It assigns deterministic `PEDF_*` IDs to exact local founder designations and
+`PEDX_*` IDs to derived cross nodes, records their definitions in a registry,
+and writes child-lineage and selfing review ledgers. Those local IDs do not
+assert global GID identity. With the conservative fallback enabled, competing
+lineages and unreviewed selfing relationships become explicit founders rather
+than silently selected edges; no phenotype row is removed. The legacy `K_A`
+is preserved.
+
+Once the phenotype-blind recovered-identity v2 bundle has passed and been
+reviewed, use `scripts/build_canonical_pedigree_v3.sh` instead of modifying the
+v2 artifacts. The v3 builder verifies the recovered bundle hashes, overlays
+only accepted direct-parent edges into empty canonical parent roles, imports
+their required stable-parent registry closure, rejects conflicting overwrites
+and cycles, and writes `K_A_CANONICAL_V3` under
+`genotype_panels/pedigree_canonical_v3`.
+
+`scripts/build_single_step_h_candidates_v3.sh` then constructs independent H
+candidates for globally supported marker sources. The associated registry
+keeps platforms separate, places HMP in a support-gated diagnostic manifest,
+and blocks DArTAG while any frozen training fold has zero panel support.
+`scripts/run_single_step_h_inner_screen_v3.sh` performs the matched inner-only
+comparison; it does not inspect outer-test or final-holdout outcomes.
 
 Selection histories are decomposed into a BCID and developmental-stage tokens.
 The BCID, GID, cross and named parents are germplasm queries, but only the GID

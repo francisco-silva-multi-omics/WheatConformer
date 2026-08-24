@@ -1,0 +1,70 @@
+{
+  "protocol_version": "recovered_identity_verification_v2",
+  "selection_data": "identifiers_metadata_pedigree_and_marker_calls_only",
+  "identity_evidence_hierarchy": [
+    "direct_canonical_gid_to_unique_marker_sample",
+    "unique_selection_history_to_unique_external_identity_to_unique_marker_sample",
+    "concordant_same_platform_technical_replicates",
+    "metadata_only_or_family_level_evidence_not_assignable"
+  ],
+  "crop_scope_required": "WHEAT_CONFIRMED",
+  "marker_call_normalization": "panel_specific_diploid_dosage_0_1_2_with_noncalls_missing",
+  "minimum_shared_nonmissing_marker_calls": 1000,
+  "technical_replicate_concordance_threshold": 0.995,
+  "same_platform_or_harmonized_markers_required": true,
+  "minimum_training_gids_per_fold": 5,
+  "minimum_gids_for_H_source": 20,
+  "pedigree_conflict_policy": {
+    "preserve_parent_order": true,
+    "selection_history_generations_are_parents": false,
+    "reject_existing_complete_parent_pair_contradictions": true,
+    "accept_one_authoritative_exact_structured_record": true,
+    "accept_independent_record_corroboration": true,
+    "unresolved_plain_text_family_tokens_are_parents": false
+  },
+  "accepted_marker_classes": [
+    "accepted_direct_gid_to_marker_sample",
+    "accepted_unique_two_hop_identity",
+    "accepted_concordant_technical_replicates"
+  ],
+  "rejected_or_unresolved_marker_classes": [
+    "metadata_match_without_marker_sample",
+    "family_only_not_assignable",
+    "ambiguous_multiple_external_ids",
+    "ambiguous_multiple_marker_samples",
+    "conflicting_marker_calls",
+    "conflicting_identity_metadata",
+    "non_wheat_excluded",
+    "insufficient_marker_overlap",
+    "unresolved"
+  ],
+  "accepted_pedigree_classes": [
+    "already_present",
+    "accepted_new_edge_exact_unique",
+    "accepted_new_edge_corroborated"
+  ],
+  "rejected_or_unresolved_pedigree_classes": [
+    "unresolved_parent_identity",
+    "deeper_ancestor_not_direct_parent",
+    "conflicts_existing_complete_parent_pair",
+    "conflicting_external_records",
+    "ambiguous_cross_parse",
+    "insufficient_provenance"
+  ],
+  "expected_evidence_counts": {
+    "resolver_gids": 12711,
+    "moderate_marker_candidate_gids": 1785,
+    "two_hop_marker_bridge_rows": 5820,
+    "direct_gid_exact_query_ids": 49,
+    "candidate_direct_parent_links": 1190,
+    "pedigree_edges_blocked_by_conflict": 253,
+    "pedigree_edges_already_present": 937
+  },
+  "prohibited_inputs": [
+    "phenotype_values",
+    "validation_metrics",
+    "outer_test_metrics",
+    "final_holdout_outcomes",
+    "model_performance"
+  ]
+}
