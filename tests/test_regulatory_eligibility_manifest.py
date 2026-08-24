@@ -1,0 +1,459 @@
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+
+from server_genotype_recovery.build_regulatory_eligibility_manifest import (
+    apply_marker_identity_overlay,
+    build_gid_manifest,
+    build_panel_evidence,
+    load_marker_identity_overlay,
+    marker_evidence,
+    projection_work_queue,
+    regulatory_retention_policy,
+    sha256_file,
+    summary_tables,
+)
+from server_genotype_recovery.validate_regulatory_eligibility_manifest import (
+    evidence_file_identity,
+    validate_artifacts,
+)
+
+
+def write_tsv(frame: pd.DataFrame, path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    frame.to_csv(path, sep="\t", index=False)
+
+
+def test_regulatory_manifest_separates_direct_and_imputed_evidence(tmp_path: Path) -> None:
+    hmp_dir = tmp_path / "genotype_panels/hmp"
+    recovered_dir = tmp_path / "genotype_panels/recovered/test"
+    write_tsv(pd.DataFrame({"sample_id": ["GID1"]}), hmp_dir / "hmp_order.tsv")
+    write_tsv(pd.DataFrame({"sample_id": ["GID2"]}), recovered_dir / "K_G_TEST_sample_order.tsv")
+    write_tsv(
+        pd.DataFrame({"marker_id": ["M2_A/G"]}),
+        recovered_dir / "K_G_TEST_retained_marker_order.tsv.gz",
+    )
+    np.save(recovered_dir / "K_G_TEST_QC_dosage.npy", np.asarray([[1.0]]))
+    pd.DataFrame({"sample_id": ["GID1"], "M1_A/G": [1.0]}).to_parquet(
+        hmp_dir / "hmp_sample_by_marker.QCfiltered.parquet", index=False
+    )
+    coordinate = tmp_path / "coordinates.tsv"
+    write_tsv(
+        pd.DataFrame(
+            {
+                "marker_id": ["M1_A/G", "M2_A/G"],
+                "chromosome": ["1A", "2B"],
+                "position": [100, 200],
+                "alleles": ["A/G", "A/G"],
+            }
+        ),
+        coordinate,
+    )
+    coordinate_ids, allele_ids, _ = marker_evidence([coordinate])
+    candidates = pd.DataFrame(
+        [
+            {
+                "kernel": "K_G_HMP_LINEAR",
+                "biological_role": "HMP",
+                "order_path": hmp_dir / "hmp_order.tsv",
+                "source_id_col": "sample_id",
+                "candidate_group": "existing_HMP",
+            },
+            {
+                "kernel": "K_G_TEST_LINEAR",
+                "biological_role": "test",
+                "order_path": recovered_dir / "K_G_TEST_sample_order.tsv",
+                "source_id_col": "sample_id",
+                "candidate_group": "K_G_TEST",
+            },
+        ]
+    )
+    write_tsv(
+        pd.DataFrame(
+            {
+                "marker_id": ["M1_A/G"],
+                "chromosome": ["1A"],
+                "position": [100],
+                "alleles": ["A/G"],
+            }
+        ),
+        hmp_dir / "hmp_marker_metadata.tsv",
+    )
+    write_tsv(
+        pd.DataFrame({"marker_id": ["M1_A/G"], "keep_marker": [True]}),
+        hmp_dir / "qc_hmp_marker_stats.tsv",
+    )
+    evidence, samples = build_panel_evidence(
+        root=tmp_path,
+        candidates=candidates,
+        qc_status={"K_G_HMP_LINEAR": "PASS", "K_G_TEST_LINEAR": "PASS"},
+        coordinate_ids=coordinate_ids,
+        allele_ids=allele_ids,
+        graph_marker_ids={"M1_A/G", "M2_A/G"},
+        minimum_graph_projection_fraction=0.9,
+    )
+    catalog = pd.DataFrame(
+        {
+            "canonical_gid": ["GID1", "GID2", "GID3", "GID4"],
+            "canonical_observation_rows": [10, 20, 30, 40],
+        }
+    )
+    manifest = build_gid_manifest(
+        catalog=catalog,
+        pedigree_ids={"GID1", "GID2", "GID3"},
+        panel_evidence=evidence,
+        panel_samples=samples,
+        graph_path_ids={"GID1"},
+        embeddings={},
+    ).set_index("canonical_gid")
+    assert manifest.loc["GID1", "regulatory_embedding_eligibility"] == (
+        "eligible_direct_sequence_window_construction"
+    )
+    assert manifest.loc["GID1", "future_embedding_provenance_class"] == (
+        "observed_marker_supported_sequence"
+    )
+    assert not manifest.loc["GID1", "observed_sequence_equivalent"]
+    assert manifest.loc["GID1", "observed_sequence_equivalence_reason"] == (
+        "sequence_windows_and_embeddings_not_yet_certified"
+    )
+    assert manifest.loc["GID2", "regulatory_embedding_eligibility"] == (
+        "eligible_direct_sequence_window_construction"
+    )
+    assert manifest.loc["GID3", "regulatory_embedding_eligibility"] == (
+        "pedigree_imputation_candidate"
+    )
+    assert manifest.loc["GID3", "confidence_gate_status"] == "required_not_evaluated"
+    assert not manifest.loc["GID3", "observed_sequence_equivalent"]
+    assert manifest.loc["GID4", "regulatory_embedding_eligibility"] == "unavailable"
+
+
+def test_marker_identity_overlay_keeps_candidates_out_of_kernels(tmp_path: Path) -> None:
+    overlay_path = tmp_path / "regulatory_eligibility_overlay.tsv"
+    write_tsv(
+        pd.DataFrame(
+            [
+                {
+                    "canonical_gid": "GID1",
+                    "marker_identity_adjudication_status": (
+                        "accepted_identity_marker_qc_pending"
+                    ),
+                    "marker_identity_classes": "accepted_unique_identity",
+                    "candidate_marker_panels": "SEEDS",
+                    "accepted_marker_panels": "SEEDS",
+                    "newly_accepted_marker_panels": "SEEDS",
+                    "candidate_unresolved": False,
+                    "identity_accepted": True,
+                    "accepted_for_new_kernel_input": True,
+                    "eligible_for_K_G": False,
+                    "eligible_for_K_z": False,
+                    "eligible_for_genotype_specific_sequence": False,
+                    "next_required_action": (
+                        "build_and_certify_panel_specific_genotype_artifact"
+                    ),
+                },
+                {
+                    "canonical_gid": "GID2",
+                    "marker_identity_adjudication_status": "candidate_unresolved",
+                    "marker_identity_classes": "requires_metadata_review",
+                    "candidate_marker_panels": "SEEDS",
+                    "accepted_marker_panels": "",
+                    "newly_accepted_marker_panels": "",
+                    "candidate_unresolved": True,
+                    "identity_accepted": False,
+                    "accepted_for_new_kernel_input": False,
+                    "eligible_for_K_G": False,
+                    "eligible_for_K_z": False,
+                    "eligible_for_genotype_specific_sequence": False,
+                    "next_required_action": "resolve_identity_or_marker_sample_conflict",
+                },
+            ]
+        ),
+        overlay_path,
+    )
+    overlay = load_marker_identity_overlay(overlay_path)
+    manifest = pd.DataFrame(
+        {
+            "canonical_gid": ["GID1", "GID2", "GID3"],
+            "regulatory_embedding_eligibility": [
+                "pedigree_imputation_candidate",
+                "pedigree_imputation_candidate",
+                "unavailable",
+            ],
+        }
+    )
+    updated = apply_marker_identity_overlay(manifest, overlay).set_index("canonical_gid")
+    assert bool(updated.loc["GID1", "accepted_for_new_kernel_input"])
+    assert not bool(updated.loc["GID1", "candidate_eligible_for_K_G"])
+    assert bool(updated.loc["GID2", "candidate_unresolved"])
+    assert updated.loc["GID3", "marker_identity_adjudication_status"] == "no_candidate"
+
+
+def test_marker_identity_overlay_rejects_premature_kernel_eligibility(
+    tmp_path: Path,
+) -> None:
+    overlay_path = tmp_path / "invalid_overlay.tsv"
+    write_tsv(
+        pd.DataFrame(
+            [
+                {
+                    "canonical_gid": "GID1",
+                    "marker_identity_adjudication_status": (
+                        "accepted_identity_marker_qc_pending"
+                    ),
+                    "marker_identity_classes": "accepted_unique_identity",
+                    "candidate_marker_panels": "SEEDS",
+                    "accepted_marker_panels": "SEEDS",
+                    "newly_accepted_marker_panels": "SEEDS",
+                    "candidate_unresolved": False,
+                    "identity_accepted": True,
+                    "accepted_for_new_kernel_input": True,
+                    "eligible_for_K_G": True,
+                    "eligible_for_K_z": False,
+                    "eligible_for_genotype_specific_sequence": False,
+                    "next_required_action": "invalid",
+                }
+            ]
+        ),
+        overlay_path,
+    )
+    with np.testing.assert_raises(ValueError):
+        load_marker_identity_overlay(overlay_path)
+
+
+def test_graph_readiness_requires_alleles_and_coordinates(tmp_path: Path) -> None:
+    panel_dir = tmp_path / "genotype_panels/recovered/test"
+    write_tsv(
+        pd.DataFrame({"sample_id": ["GID1"]}),
+        panel_dir / "K_G_TEST_sample_order.tsv",
+    )
+    write_tsv(
+        pd.DataFrame({"marker_id": ["MISSING_EVIDENCE"]}),
+        panel_dir / "K_G_TEST_retained_marker_order.tsv.gz",
+    )
+    np.save(panel_dir / "K_G_TEST_QC_dosage.npy", np.asarray([[1.0]]))
+    candidates = pd.DataFrame(
+        [
+            {
+                "kernel": "K_G_TEST_LINEAR",
+                "biological_role": "test",
+                "order_path": panel_dir / "K_G_TEST_sample_order.tsv",
+                "source_id_col": "sample_id",
+                "candidate_group": "K_G_TEST",
+            }
+        ]
+    )
+    evidence, _ = build_panel_evidence(
+        root=tmp_path,
+        candidates=candidates,
+        qc_status={"K_G_TEST_LINEAR": "PASS"},
+        coordinate_ids=set(),
+        allele_ids=set(),
+        graph_marker_ids={"MISSING_EVIDENCE"},
+        minimum_graph_projection_fraction=0.9,
+    )
+    row = evidence.iloc[0]
+    assert row["graph_projected_marker_count"] == 1
+    assert row["graph_projected_projectable_marker_count"] == 0
+    assert row["graph_projection_fraction"] == 0.0
+    assert not row["graph_projection_ready"]
+
+
+def test_regulatory_policy_rejects_quantitative_panel_discard(tmp_path: Path) -> None:
+    policy_path = tmp_path / "policy.tsv"
+    write_tsv(
+        pd.DataFrame(
+            {
+                "policy": [
+                    "quantitative_screen_scope",
+                    "retain_certified_panels_for_regulatory_projection",
+                    "direct_regulatory_embedding_status",
+                    "pedigree_propagated_embedding_status",
+                    "pedigree_propagation_requires_confidence_gate",
+                    "pedigree_propagation_equivalent_to_observed_sequence",
+                ],
+                "value": [
+                    "standalone_K_G_baseline_inclusion_only",
+                    True,
+                    "observed_marker_supported_sequence",
+                    "imputed_pedigree",
+                    True,
+                    False,
+                ],
+            }
+        ),
+        policy_path,
+    )
+    values = regulatory_retention_policy(policy_path)
+    assert values["retain_certified_panels_for_regulatory_projection"] == "True"
+    policy = pd.read_csv(policy_path, sep="\t")
+    policy.loc[
+        policy["policy"].eq("retain_certified_panels_for_regulatory_projection"),
+        "value",
+    ] = False
+    write_tsv(policy, policy_path)
+    try:
+        regulatory_retention_policy(policy_path)
+    except ValueError as exc:
+        assert "contract failed" in str(exc)
+    else:
+        raise AssertionError("A panel-discarding policy must be rejected")
+
+
+def test_regulatory_artifact_freeze_recomputes_entire_contract(tmp_path: Path) -> None:
+    code_root = Path(__file__).resolve().parents[1]
+    out_dir = tmp_path / "model_kernels/regulatory_eligibility_v1"
+    hmp_dir = tmp_path / "genotype_panels/hmp"
+    out_dir.mkdir(parents=True)
+    write_tsv(pd.DataFrame({"sample_id": ["GID1"]}), hmp_dir / "hmp_order.tsv")
+    write_tsv(
+        pd.DataFrame(
+            {
+                "marker_id": ["M1_A/G"],
+                "chromosome": ["1A"],
+                "position": [100],
+                "alleles": ["A/G"],
+            }
+        ),
+        hmp_dir / "hmp_marker_metadata.tsv",
+    )
+    write_tsv(
+        pd.DataFrame({"marker_id": ["M1_A/G"], "keep_marker": [True]}),
+        hmp_dir / "qc_hmp_marker_stats.tsv",
+    )
+    pd.DataFrame({"sample_id": ["GID1"], "M1_A/G": [1.0]}).to_parquet(
+        hmp_dir / "hmp_sample_by_marker.QCfiltered.parquet", index=False
+    )
+    candidates = pd.DataFrame(
+        [
+            {
+                "kernel": "K_G_HMP_LINEAR",
+                "biological_role": "HMP",
+                "order_path": hmp_dir / "hmp_order.tsv",
+                "source_id_col": "sample_id",
+                "candidate_group": "existing_HMP",
+            }
+        ]
+    )
+    coordinate_ids, allele_ids, _ = marker_evidence([hmp_dir / "hmp_marker_metadata.tsv"])
+    panel_evidence, samples = build_panel_evidence(
+        root=tmp_path,
+        candidates=candidates,
+        qc_status={"K_G_HMP_LINEAR": "PASS"},
+        coordinate_ids=coordinate_ids,
+        allele_ids=allele_ids,
+        graph_marker_ids=set(),
+        minimum_graph_projection_fraction=0.9,
+    )
+    catalog_path = tmp_path / "audit/genotypic_recovery/canonical_genotype_catalog.csv"
+    catalog_path.parent.mkdir(parents=True)
+    catalog = pd.DataFrame(
+        {
+            "canonical_gid": ["GID1", "GID2"],
+            "canonical_observation_rows": [10, 20],
+        }
+    )
+    catalog.to_csv(catalog_path, index=False)
+    pedigree_path = tmp_path / "genotype_panels/pedigree/K_A_sample_order.tsv"
+    write_tsv(pd.DataFrame({"sample_id": ["GID1", "GID2"]}), pedigree_path)
+    recovered_path = tmp_path / "genotype_panels/recovered/manifest.tsv"
+    kernel_qc_path = tmp_path / "model_kernels/genomic_candidate_screen_v1/qc.tsv"
+    policy_path = tmp_path / "model_kernels/genomic_candidate_screen_v1/policy.tsv"
+    write_tsv(pd.DataFrame({"placeholder": [1]}), recovered_path)
+    write_tsv(pd.DataFrame({"placeholder": [1]}), kernel_qc_path)
+    write_tsv(pd.DataFrame({"placeholder": [1]}), policy_path)
+    manifest = build_gid_manifest(
+        catalog=catalog,
+        pedigree_ids={"GID1", "GID2"},
+        panel_evidence=panel_evidence,
+        panel_samples=samples,
+        graph_path_ids=set(),
+        embeddings={},
+    )
+    status_summary, panel_summary = summary_tables(manifest)
+    manifest.to_csv(
+        out_dir / "regulatory_genotype_eligibility_manifest.tsv.gz",
+        sep="\t",
+        index=False,
+        compression="gzip",
+    )
+    panel_evidence.to_csv(out_dir / "regulatory_panel_evidence.tsv", sep="\t", index=False)
+    status_summary.to_csv(
+        out_dir / "regulatory_eligibility_status_summary.tsv", sep="\t", index=False
+    )
+    panel_summary.to_csv(
+        out_dir / "regulatory_eligibility_panel_summary.tsv", sep="\t", index=False
+    )
+    projection_work_queue(panel_evidence).to_csv(
+        out_dir / "regulatory_projection_work_queue.tsv", sep="\t", index=False
+    )
+    missing_projection = tmp_path / "pangenome_resources/graph/marker_to_graph_interval.tsv"
+    missing_paths = tmp_path / "pangenome_resources/graph/genotype_path_dictionary.tsv"
+    builder_path = code_root / "server_genotype_recovery/build_regulatory_eligibility_manifest.py"
+    provenance = {
+        "status": "PASS",
+        "phenotype_values_read": False,
+        "outer_test_metrics_read": False,
+        "final_holdout_outcomes_read": False,
+        "canonical_catalog": str(catalog_path),
+        "canonical_catalog_sha256": sha256_file(catalog_path),
+        "recovered_manifest": str(recovered_path),
+        "recovered_manifest_sha256": sha256_file(recovered_path),
+        "kernel_qc": str(kernel_qc_path),
+        "kernel_qc_sha256": sha256_file(kernel_qc_path),
+        "regulatory_retention_policy": str(policy_path),
+        "regulatory_retention_policy_sha256": sha256_file(policy_path),
+        "pedigree_order": str(pedigree_path),
+        "pedigree_order_present": True,
+        "pedigree_order_sha256": sha256_file(pedigree_path),
+        "marker_projection": str(missing_projection),
+        "marker_projection_present": False,
+        "marker_projection_sha256": "",
+        "path_dictionary": str(missing_paths),
+        "path_dictionary_present": False,
+        "path_dictionary_sha256": "",
+        "coordinate_sources": [],
+        "builder_sha256": sha256_file(builder_path),
+    }
+    (out_dir / "regulatory_eligibility_provenance.json").write_text(
+        json.dumps(provenance), encoding="utf-8"
+    )
+    checks, certification = validate_artifacts(tmp_path, out_dir, code_root)
+    assert certification["status"] == "PASS", checks[checks["status"].eq("FAIL")].to_dict(
+        "records"
+    )
+    assert checks["status"].eq("PASS").all()
+    catalog.loc[0, "canonical_observation_rows"] = 11
+    catalog.to_csv(catalog_path, index=False)
+    checks, certification = validate_artifacts(tmp_path, out_dir, code_root)
+    assert certification["status"] == "FAIL"
+    failed = set(checks.loc[checks["status"].eq("FAIL"), "check"])
+    assert {"input_identity_canonical_catalog", "canonical_observation_row_conservation"}.issubset(
+        failed
+    )
+
+
+def test_projection_queue_sorts_serialized_counts_numerically() -> None:
+    evidence = pd.DataFrame(
+        {
+            "panel_id": ["SMALL", "LARGE", "MEDIUM"],
+            "certified_gid_count": ["91", "4664", "1344"],
+            "next_required_action": ["a", "b", "c"],
+        }
+    )
+    queue = projection_work_queue(evidence)
+    assert queue["panel_id"].tolist() == ["LARGE", "MEDIUM", "SMALL"]
+    assert queue["priority"].tolist() == [1, 2, 3]
+
+
+def test_absent_optional_matrix_accepts_nan_hash(tmp_path: Path) -> None:
+    matched, detail = evidence_file_identity(
+        tmp_path / "expected_but_not_materialized.npy",
+        float("nan"),
+        required=False,
+    )
+    assert matched
+    assert detail == "optional_input_absent"

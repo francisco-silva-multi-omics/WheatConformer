@@ -180,3 +180,335 @@ matched training configurations. Quantitative rejection never changes the
 independent regulatory-panel retention policy.
 
 The RBF kernel is generated for ablation but is not enabled automatically.
+
+## Regulatory Eligibility
+
+After freezing the quantitative `K_G` decision, build the independent
+regulatory-eligibility ledger:
+
+```bash
+PYTHON="$HOME/tools/tf_wheat_cpu/bin/python" \
+WHEATCONFORMER_CODE_ROOT="$HOME/tools/WheatConformer" \
+bash scripts/build_regulatory_eligibility_manifest.sh \
+  /DATA2/estancias/tesis_javier/model_DATA/genotipoXambiente
+```
+
+The builder unions certified HMP, GBS and recovered-panel sample orders with
+canonical trial GIDs and pedigree GIDs. It separately audits retained marker
+IDs, allele evidence, RefSeq v1 coordinates, graph marker projection, genotype
+path assignment and existing embedding orders. Outputs under
+`model_kernels/regulatory_eligibility_v1` include the compressed per-GID
+manifest, panel evidence, status and panel summaries, a projection work queue,
+and machine-readable provenance.
+
+`observed_marker_supported_sequence` is only a future provenance class until
+certified genotype calls have adequate allele evidence, physical coordinates,
+graph projection, sequence-window construction and embedding provenance.
+Pedigree-only entries remain `pedigree_imputation_candidate` with
+`required_not_evaluated` confidence gating; the builder never promotes them to
+observed sequence. The current manifest therefore records
+`observed_sequence_equivalent=False` for every GID.
+
+Before using the ledger for graph projection, rerun the builder from the pinned
+code commit and freeze its complete input/output contract:
+
+```bash
+PYTHON="$HOME/tools/tf_wheat_cpu/bin/python" \
+WHEATCONFORMER_CODE_ROOT="$HOME/tools/WheatConformer" \
+bash scripts/build_regulatory_eligibility_manifest.sh \
+  /DATA2/estancias/tesis_javier/model_DATA/genotipoXambiente
+
+PYTHON="$HOME/tools/tf_wheat_cpu/bin/python" \
+WHEATCONFORMER_CODE_ROOT="$HOME/tools/WheatConformer" \
+bash scripts/freeze_regulatory_eligibility_manifest.sh \
+  /DATA2/estancias/tesis_javier/model_DATA/genotipoXambiente
+```
+
+The freeze validator independently recomputes every GID classification, panel
+membership, summary and work-queue row. It also verifies the hashes of the
+catalog, pedigree order, panel orders, retained markers, available dosage
+matrices, coordinate sources, graph inputs and embedding orders. It writes a
+certification JSON, a check table and an `audit/regulatory_eligibility_*.sha256`
+manifest only when every check passes.
+
+## BrAPI Pedigree And Marker Recovery
+
+The legacy `query_germplasm_api_aliases.py` workflow searched aliases and
+passport metadata only; it did not request samples, callsets or genotype calls.
+Use the bounded recovery runner to query both ancestry and genotyping modules:
+
+```bash
+PYTHON="$HOME/tools/tf_wheat_cpu/bin/python" \
+WHEATCONFORMER_CODE_ROOT="$HOME/tools/WheatConformer" \
+BRAPI_RECOVERY_LIMIT=10 \
+BRAPI_RECOVERY_OFFSET=0 \
+BRAPI_FETCH_CALLS=1 \
+bash "$HOME/tools/WheatConformer/scripts/run_brapi_pedigree_marker_recovery.sh" \
+  /DATA2/estancias/tesis_javier/model_DATA/genotipoXambiente
+```
+
+The public default is T3/Wheat. Override it with semicolon-separated
+`NAME=URL` entries in `BRAPI_SERVERS`.
+Private bearer tokens are read only from environment variable names configured
+through `T3_BRAPI_TOKEN_ENV` or `CIMMYT_BRAPI_TOKEN_ENV`; token values are never
+written to request logs.
+
+Start with a small batch. Larger runs are resumable by assigning each batch a
+new `BRAPI_RECOVERY_OUT_DIR` and advancing `BRAPI_RECOVERY_OFFSET`; cached API
+responses are local to that output directory. GIGWA genotype recovery tries
+both callset calls and BrAPI allele-matrix search.
+
+The runner writes `brapi_run_status.json`, `brapi_request_log.tsv`,
+`brapi_failures.tsv` and a running QC table immediately. It prints each active
+query to the nohup log and opens a server circuit breaker after three
+consecutive timeout, authentication, DNS or server failures. Configure the
+threshold with `BRAPI_MAX_CONSECUTIVE_FAILURES`.
+Synchronous exact-name collection endpoints are tried before asynchronous
+search jobs; this avoids treating a successfully queued search as successful
+data retrieval when the result handle later times out.
+Returned samples and callsets are independently checked against the requested
+GID, BCID, germplasm ID or sample ID. Servers that ignore a filter may produce
+`review_candidate` rows for audit, but only `exact` rows can trigger callset or
+marker-call retrieval.
+
+The former CIMMYT DCP GIGWA host `gdata.cimmyt.org` is intentionally not a
+default: authoritative public DNS returned `NXDOMAIN` during the July 2026
+audit. CIMMYT's current Germinate Wheat API requires authentication and is not
+a drop-in public BrAPI-v2 replacement. Add a new CIMMYT endpoint through
+`BRAPI_SERVERS` only after its base URL and credentials are validated.
+
+## Authenticated CIMMYT Dataverse Recovery
+
+The CIMMYT Research Data & Software Repository Network is a Dataverse service,
+not a BrAPI server. Store its API token only in `CIMMYT_DATAVERSE_TOKEN`; the
+runner transmits it through `X-Dataverse-key` and never writes the value or a
+token fingerprint to logs or provenance.
+
+```bash
+PYTHON="$HOME/tools/tf_wheat_cpu/bin/python" \
+WHEATCONFORMER_CODE_ROOT="$HOME/tools/WheatConformer" \
+CIMMYT_DATAVERSE_LIMIT=10 \
+bash "$HOME/tools/WheatConformer/scripts/run_cimmyt_dataverse_recovery.sh" \
+  /DATA2/estancias/tesis_javier/model_DATA/genotipoXambiente
+```
+
+The bounded pilot validates the token, searches resolver identifiers and
+broader wheat genotype/pedigree discovery terms, enumerates dataset files, and
+downloads at most ten non-restricted candidate files up to 25 MiB each and
+100 MiB total. Downloaded text, gzip and zip content is scanned for exact GIDs,
+BCIDs, crosses and parents. Restricted or oversized files remain in the
+candidate manifest with an explicit skip reason. Repository evidence is never
+merged into dosage matrices or pedigree kernels automatically.
+
+The ten-row run is a pilot, not a repository-wide conclusion. Before declaring
+API recovery exhausted, run the discovery-first wide inventory:
+
+```bash
+PYTHON="$HOME/tools/tf_wheat_cpu/bin/python" \
+WHEATCONFORMER_CODE_ROOT="$HOME/tools/WheatConformer" \
+bash "$HOME/tools/WheatConformer/scripts/run_cimmyt_dataverse_wide_inventory.sh" \
+  /DATA2/estancias/tesis_javier/model_DATA/genotipoXambiente
+```
+
+This mode performs no resolver-specific API searches and downloads nothing by
+default. It paginates broad wheat/Triticum genotype, marker, germplasm and
+pedigree queries, inventories every discovered dataset/file, and writes
+`dataverse_search_coverage.tsv`. Every row must have `search_complete=True`
+before discovery is called complete. It still builds the full 12,711-row local
+resolver term catalog for the later content scan.
+
+Review the complete candidate manifest before enabling downloads. A second run
+in the same directory with `CIMMYT_DATAVERSE_WIDE_DOWNLOAD_CANDIDATES=1` reuses
+cached API responses and downloads ranked, unrestricted candidates within the
+configured file and byte budgets. Large or restricted marker files should be
+targeted explicitly after reviewing their dataset, sample map and authorization
+rather than increasing global budgets blindly.
+
+After the wide structured-evidence audit, build the controlled Tier-2 plan:
+
+```bash
+PYTHON="$HOME/tools/tf_wheat_cpu/bin/python" \
+WHEATCONFORMER_CODE_ROOT="$HOME/tools/WheatConformer" \
+bash "$HOME/tools/WheatConformer/scripts/plan_cimmyt_dataverse_tier2.sh" \
+  /DATA2/estancias/tesis_javier/model_DATA/genotipoXambiente
+```
+
+The planner inventories the complete discovered file catalog by restriction,
+size, role, platform and dataset-local resolver support. Before selecting any
+download, it scans `GENOTYPIC_DATA`, `TRIALS_AND_NURSERIES` and the legacy local
+`TRIALS_AND_NURSERIES_DATA` directory. Exact checksum and byte-size matches are
+reused automatically. Compression-normalized filenames and dataset-directory
+matches are written to `dataverse_tier2_local_equivalence_review.tsv` and are
+blocked from download until reviewed; filename similarity alone is never treated
+as proof of identity. It writes separate
+unrestricted and authorization-required plans. Marker matrices are selected
+only when a sample mapping exists in the same dataset or has already been
+downloaded. Only files with explicit wheat, Triticum or recognized wheat-trial
+evidence can be selected; maize and other crops are excluded, while ambiguous
+datasets require manual review. Defaults are 20 files, 2 GiB per file and 10 GiB
+total; files beyond those limits remain explicitly deferred. The remaining-file
+review is written to `dataverse_tier2_remaining_candidate_files.tsv`, with both
+unrestricted and authorized dispositions, and to
+`dataverse_tier2_remaining_dataset_bundles.tsv`, which aggregates remaining
+marker and sample-mapping files by dataset, restriction, size, platform and
+local-equivalence status. `CIMMYT_DATAVERSE_TIER2_MAX_LOCAL_HASH_BYTES` controls
+local checksum work independently from the prospective download-file limit.
+The structured evidence audit applies the same wheat-only gate before pedigree evidence is
+created and imports only checksum-certified entries from
+`dataverse_tier2_local_reuse_manifest.tsv`. The planner reads file metadata and
+bytes needed for checksums, but no phenotype values or evaluation outcomes, and
+performs no downloads.
+
+Run the unrestricted target list only after reviewing its TSV:
+
+```bash
+PYTHON="$HOME/tools/tf_wheat_cpu/bin/python" \
+WHEATCONFORMER_CODE_ROOT="$HOME/tools/WheatConformer" \
+CIMMYT_DATAVERSE_TIER2_PLAN_MODE=unrestricted \
+bash "$HOME/tools/WheatConformer/scripts/run_cimmyt_dataverse_tier2_download.sh" \
+  /DATA2/estancias/tesis_javier/model_DATA/genotipoXambiente
+```
+
+The selected 49th IBWSN payload is a 7z archive. Install the bounded archive
+reader in the server environment before downloading or auditing that batch:
+
+```bash
+"$HOME/tools/tf_wheat_cpu/bin/python" -m pip install py7zr
+```
+
+7z members are extracted only into a temporary directory, member paths are
+validated before extraction, and only supported structured marker/mapping files
+are parsed.
+
+The authorized plan additionally requires both an account that can access the
+restricted files and the explicit environment switch
+`CIMMYT_DATAVERSE_TIER2_CONFIRM_RESTRICTED=1`. Both runners revalidate target
+IDs and byte budgets before calling the existing target-only downloader.
+
+Candidate downloads are ranked by resolver-linked search evidence, file role,
+machine readability and GID/pedigree relevance. Restricted files remain opt-in;
+set `CIMMYT_DATAVERSE_INCLUDE_RESTRICTED=1` only when the account is authorized
+to access them. Raw pedigree strings are converted to bounded punctuation-free
+phrase searches to avoid repository query-parser failures while retaining the
+original term in the audit output.
+
+By default, API discovery remains bounded by `CIMMYT_DATAVERSE_LIMIT`, but all
+downloaded files are indexed against every resolver GID, BCID, parent and cross.
+This separates API request volume from local evidence recovery. Large resolver
+sets use an indexed exact-cell/GID scanner rather than a term-by-line nested
+loop, and existing downloads are reused when a run is resumed in place.
+Set `CIMMYT_DATAVERSE_TARGET_DATAFILE_IDS` to a comma-separated list of audited
+Dataverse file IDs when a supported dataset has a specific untested marker
+file. Targeted files are placed ahead of generic candidates but retain the same
+authorization, file-size and total-download safety limits.
+
+Run `scripts/audit_cimmyt_dataverse_structured_evidence.sh` after recovery to
+reopen downloaded TSV/CSV/TXT/XLSX files and certify matches at the source-row
+and source-cell level. Its outputs distinguish direct GIDs, unique selection
+histories, shared BCIDs/crosses and candidate marker bridges. No Dataverse hit
+is marked ready for direct marker assignment until the external sample axis and
+marker-call concordance have been certified separately.
+
+When structured evidence contains an exact unique selection history, run
+`scripts/audit_cimmyt_dataverse_two_hop_marker_bridges.sh`. It tests only
+dataset-local links of the form trial selection history to external germplasm
+alias to marker-matrix row or column. Ambiguous aliases and interior matrix-cell
+matches remain non-identifying; even a unique sample-axis candidate requires
+marker-call concordance before it can become a direct genotype assignment.
+
+After the two-hop and pedigree-enrichment audits are complete, adjudicate every
+candidate under the frozen identity policy:
+
+```bash
+PYTHON="$HOME/tools/tf_wheat_cpu/bin/python" \
+WHEATCONFORMER_CODE_ROOT="$HOME/tools/WheatConformer" \
+CIMMYT_DATAVERSE_RECOVERY_DIR="genotype_panels/cimmyt_dataverse_recovery_v1/wide_inventory_v1" \
+nohup bash "$HOME/tools/WheatConformer/scripts/run_marker_identity_adjudication.sh" \
+  /DATA2/estancias/tesis_javier/model_DATA/genotipoXambiente \
+  > logs/marker_identity_adjudication_v1.nohup.log 2>&1 &
+```
+
+The policy in `marker_identity_concordance_policy_v1.json` is phenotype-blind
+and fixes the identity and technical-replicate rules before results are read.
+The adjudicator writes the complete trial GID, selection history/cross,
+external identity, sample ID and physical matrix-axis path. Marker calls are
+streamed only for candidate replicate samples. Replicates require at least the
+panel-specific marker overlap and pairwise call concordance of `0.995`.
+
+DArTseq audit inputs are refreshed by default before adjudication, and their
+structured-evidence and resolver hashes must match exactly. Set
+`MARKER_IDENTITY_REFRESH_UPSTREAM=0` only when both existing provenance files
+already certify the same completed wide-inventory snapshot.
+
+Terminal classes are `accepted_unique_identity`,
+`accepted_concordant_replicates`, `requires_metadata_review`,
+`conflicting_marker_samples` and `family_only_not_assignable`. Accepted links
+remain marker-QC pending and are not inserted into a relationship kernel.
+Unresolved and conflicting links are retained in the regulatory eligibility
+overlay as `candidate_unresolved`, with `K_G`, `K_z` and genotype-specific
+sequence eligibility explicitly false. Existing 80K, Seeds DArTseq, IWYP35K,
+DArTAG and haplotype artifacts are re-audited from their sample-QC and duplicate
+concordance files; missing panel artifacts are reported rather than silently
+treated as absent biology.
+
+The reports distinguish two different meanings of a recovered identity:
+`not_in_panel_certified_order_gids` means that the GID would require a rebuild
+of that platform-specific genotype artifact, while
+`not_in_any_certified_panel_gids` means that the GID adds identity coverage not
+already present in any certified marker panel. Do not describe the first count
+as globally new marker coverage.
+
+Adjudications produced before those two fields were separated can be reconciled
+without hashing or scanning the large marker matrices again. The reconciliation
+is isolated from the source artifacts, preserves a hash of every classification
+and concordance decision, and rebuilds the regulatory overlay:
+
+```bash
+PYTHON="$HOME/tools/tf_wheat_cpu/bin/python" \
+WHEATCONFORMER_CODE_ROOT="$HOME/tools/WheatConformer" \
+bash "$HOME/tools/WheatConformer/scripts/reconcile_marker_identity_reporting.sh" \
+  /DATA2/estancias/tesis_javier/model_DATA/genotipoXambiente
+```
+
+The corrected outputs are written to
+`genotype_panels/marker_identity_adjudication_v1_reconciled` and the associated
+regulatory manifest to `model_kernels/regulatory_eligibility_v1_reconciled`.
+The reconciler reads completed reports and certified sample orders only; it
+does not read marker calls, phenotype values or evaluation outcomes and does
+not modify any kernel. It fails closed if any declared certified sample order
+is absent, because global novelty cannot be established from an incomplete
+panel universe. The wrapper validates the rebuilt regulatory artifact and
+writes `audit/regulatory_eligibility_reconciled.sha256` before reporting
+success.
+
+If unique selection-history evidence does not connect to marker calls, audit it
+as pedigree enrichment rather than discarding it:
+
+```bash
+PYTHON="$HOME/tools/tf_wheat_cpu/bin/python" \
+WHEATCONFORMER_CODE_ROOT="$HOME/tools/WheatConformer" \
+bash "$HOME/tools/WheatConformer/scripts/audit_cimmyt_dataverse_pedigree_enrichment.sh" \
+  /DATA2/estancias/tesis_javier/model_DATA/genotipoXambiente
+```
+
+The pedigree-enrichment audit reports multiple external GIDs or lineages,
+candidate aliases, explicit or conservatively parsed parent edges, unresolved
+tokens from complex pedigrees, prospective nodes/edges beyond the current K_A,
+and affected model rows by trait. It reads only sample, trait and environment
+identifiers from the model ledger. Every recovered alias and relationship is
+review-only: the audit never modifies K_A, never treats complex slash notation
+as a resolved two-parent cross, and requires canonical parent curation plus the
+existing conflict/cycle gate before an isolated replacement K_A can be built.
+
+Selection histories are decomposed into a BCID and developmental-stage tokens.
+The BCID, GID, cross and named parents are germplasm queries, but only the GID
+and BCID are used as direct sample/callset names. Stage suffixes such as `0Y`
+and `32Y` are not interpreted as parents.
+
+Outputs under `genotype_panels/brapi_recovery_v1` distinguish advertised API
+capabilities, attempted requests, exact germplasm matches, review-only
+candidates, pedigree edges, samples, callsets and actual marker calls. Response
+caching, failures, timeouts, parameters and file hashes are retained. A server
+advertising genotyping calls is not counted as marker recovery unless a callset
+and call rows were actually returned. These outputs are evidence only and are
+never merged into production dosage matrices automatically.
