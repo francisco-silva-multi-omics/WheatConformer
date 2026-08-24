@@ -7,7 +7,7 @@ echo "[1/9] Build/refresh trial GID metadata"
 python trial_GID_map.py
 
 echo "[2/9] Build requested genotype, phenotype, environment, annotation outputs"
-python build_requested_outputs.py
+python build_baseline.py
 
 echo "[2b/9] Build Gaussian/RBF genomic kernel"
 python build_gaussian_genomic_kernel.py

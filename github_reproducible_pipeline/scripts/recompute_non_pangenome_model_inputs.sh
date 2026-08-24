@@ -75,7 +75,7 @@ log "Logs: ${LOG_DIR}"
 log "Pangenome is external only. GFA='${PANGENOME_GFA}' BED='${PANGENOME_BED}' GBZ='${PANGENOME_GBZ}' MIN='${PANGENOME_MIN}' DIST='${PANGENOME_DIST}' HAL='${PANGENOME_HAL}'"
 
 run_step 01_trial_gid_map "$PYTHON" trial_GID_map.py
-run_step 02_requested_outputs "$PYTHON" build_requested_outputs.py
+run_step 02_requested_outputs "$PYTHON" build_baseline.py
 run_step 02b_gaussian_genomic_kernel "$PYTHON" build_gaussian_genomic_kernel.py \
   --linear-kernel genotype_panels/hmp/K_HMP.QCfiltered.meanDiag1.npy \
   --sample-order genotype_panels/hmp/hmp_K_sample_order.QCfiltered.tsv \
