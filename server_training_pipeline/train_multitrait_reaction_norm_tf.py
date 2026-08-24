@@ -583,6 +583,7 @@ def main() -> None:
     parser.add_argument("--environment-design-order", type=Path)
     parser.add_argument("--environment-design-manifest", type=Path)
     parser.add_argument("--environment-design-certification", type=Path)
+    parser.add_argument("--inner-selection-scenario-protocol", type=Path)
     parser.add_argument("--outer-evaluation-protocol", type=Path)
     parser.add_argument("--reaction-selection-lock", type=Path)
     parser.add_argument("--environment-selection-lock", type=Path)
@@ -641,6 +642,39 @@ def main() -> None:
     outer_protocol = None
     selection_lock = None
     environment_selection_lock = None
+    inner_selection_scenario_protocol = None
+    if args.inner_selection_scenario_protocol is not None:
+        if args.evaluation_stage != "inner_selection":
+            raise SystemExit(
+                "Inner-selection scenario authorization is restricted to inner selection"
+            )
+        inner_selection_scenario_protocol = json.loads(
+            args.inner_selection_scenario_protocol.read_text(encoding="utf-8")
+        )
+        scenario_authorization_checks = {
+            "status": inner_selection_scenario_protocol.get("status")
+            == "frozen_before_inner_validation",
+            "outer_unread": inner_selection_scenario_protocol.get(
+                "outer_test_metrics_read"
+            )
+            is False,
+            "final_holdout_unread": inner_selection_scenario_protocol.get(
+                "final_holdout_outcomes_read"
+            )
+            is False,
+            "scenarios_present": bool(
+                inner_selection_scenario_protocol.get("selection_scenarios")
+                or inner_selection_scenario_protocol.get("selection_scenario")
+            ),
+        }
+        failed_authorization = sorted(
+            name for name, passed in scenario_authorization_checks.items() if not passed
+        )
+        if failed_authorization:
+            raise SystemExit(
+                "Inner-selection scenario authorization failed: "
+                + ", ".join(failed_authorization)
+            )
     if args.evaluation_stage == "outer_evaluation":
         if (
             args.outer_evaluation_protocol is None
@@ -963,11 +997,21 @@ def main() -> None:
         )
     if args.evaluation_stage not in {"inner_selection", "outer_evaluation"}:
         mismatches.append("evaluation_stage must be inner_selection or outer_evaluation")
-    expected_scenarios = (
-        {str(reaction_protocol.get("scenario"))}
-        if args.evaluation_stage == "inner_selection"
-        else set((outer_protocol or {}).get("scenarios", {}))
-    )
+    if args.evaluation_stage == "inner_selection":
+        if inner_selection_scenario_protocol is None:
+            expected_scenarios = {str(reaction_protocol.get("scenario"))}
+        else:
+            expected_scenarios = set(
+                map(
+                    str,
+                    inner_selection_scenario_protocol.get(
+                        "selection_scenarios",
+                        [inner_selection_scenario_protocol.get("selection_scenario", "")],
+                    ),
+                )
+            )
+    else:
+        expected_scenarios = set((outer_protocol or {}).get("scenarios", {}))
     if args.evaluation_scenario not in expected_scenarios:
         mismatches.append(
             "evaluation_scenario: "
@@ -1738,6 +1782,14 @@ def main() -> None:
             }
             if environment_protocol is not None
             else {}
+        ),
+        "inner_selection_scenario_protocol": (
+            {
+                "path": str(args.inner_selection_scenario_protocol.resolve()),
+                "sha256": file_sha256(args.inner_selection_scenario_protocol),
+            }
+            if args.inner_selection_scenario_protocol is not None
+            else None
         ),
         "environment_architecture": args.environment_architecture or "",
         "reaction_candidate": reaction_candidate_name,

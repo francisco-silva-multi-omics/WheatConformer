@@ -1,0 +1,109 @@
+{
+  "protocol_version": "reaction_norm_trial_hierarchy_cross_scenario_guard_v1",
+  "status": "frozen_before_inner_validation",
+  "selection_data": "confirmed_cv1_winner_plus_future_inner_validation_guards",
+  "phenotype_values_read_at_freeze": false,
+  "outer_test_metrics_read": false,
+  "final_holdout_outcomes_read": false,
+  "selection_scenarios": [
+    "unseen_environments",
+    "unseen_genotypes_and_environments",
+    "temporal_holdout",
+    "country_holdout"
+  ],
+  "selected_reaction_candidate": "reaction_norm_identity_covariance",
+  "selected_environment_architecture": "explicit_E_REACTION_NORM_V1",
+  "selected_loss": "current_trait_row_balanced",
+  "source_confirmation": {
+    "hierarchy_protocol_sha256": "cb752d529ac5a5c947bf01e9ce11fb66b8ec95336b7f40a108006426eababba2",
+    "phase": "confirmation",
+    "selected_candidate": "trial_and_environment_intercepts",
+    "paired_inner_fold_count": 15,
+    "required_artifact_sha256": {
+      "trial_hierarchy_inner_screen_runs.tsv": "3aac0f6fea2036ab9dfdac71fe793551771710e044f94473e2df433f1aa2d091",
+      "trial_hierarchy_inner_screen_paired_metrics.tsv": "c0938e7336219a46c9e12a345ed1b104a4541e743502319ad0b42f4bbf5bdb06",
+      "trial_hierarchy_inner_screen_trait_metrics.tsv": "eb9fa22bf65243e8732b3facf795b7272654cbb0a9df305e0ae67e8ae614aa5b",
+      "trial_hierarchy_inner_screen_subset_metrics.tsv": "6834c9a7533257aa27ec969dd8061c3476e5d2e4139b713ffd3dd469645a37f9",
+      "trial_hierarchy_inner_screen_trait_summary.tsv": "29d5e0236da05991bb4c801226d8fc86d6eb0db32adff5db3e6c097d670525eb",
+      "trial_hierarchy_inner_screen_subset_summary.tsv": "fc586c783cdca998940c9be82e579682b5c9675bb136d91231c20731ccdc1ed5",
+      "trial_hierarchy_inner_screen_decision.tsv": "91200b8634f3946fd5de551ba9b5c7fecc4d6b20735609a4b3d576b6f1773f63"
+    }
+  },
+  "candidates": [
+    {
+      "name": "current_reaction_norm",
+      "trial_effect_enabled": false,
+      "environment_intercept_enabled": false,
+      "minimum_trial_trait_training_rows": 0,
+      "minimum_environment_trait_training_rows": 0,
+      "trial_penalty": 0.0,
+      "environment_penalty": 0.0
+    },
+    {
+      "name": "trial_and_environment_intercepts",
+      "trial_effect_enabled": true,
+      "environment_intercept_enabled": true,
+      "minimum_trial_trait_training_rows": 20,
+      "minimum_environment_trait_training_rows": 10,
+      "trial_penalty": 0.01,
+      "environment_penalty": 0.05
+    }
+  ],
+  "phase_1": {
+    "outer_folds_by_scenario": {
+      "unseen_environments": [0],
+      "unseen_genotypes_and_environments": [0],
+      "temporal_holdout": [0],
+      "country_holdout": [0]
+    },
+    "inner_folds": 3
+  },
+  "confirmation": {
+    "outer_folds_by_scenario": {
+      "unseen_environments": [0, 1, 2, 3, 4],
+      "unseen_genotypes_and_environments": [0, 1, 2, 3, 4],
+      "temporal_holdout": [0, 1, 2],
+      "country_holdout": [0, 1, 2, 3, 4]
+    },
+    "inner_folds": 3,
+    "candidates": "fixed_reference_and_confirmed_winner_only"
+  },
+  "acceptance": {
+    "minimum_relative_normalized_rmse_gain": 0.0,
+    "minimum_paired_inner_fold_win_rate": 0.4,
+    "maximum_mean_pearson_drop": 0.005,
+    "maximum_mean_calibration_error_increase": 0.0,
+    "maximum_retained_reference_relative_nrmse_loss": 0.005,
+    "maximum_primary_trait_relative_nrmse_loss": 0.01,
+    "primary_guard_traits": [
+      "DAYS_TO_HEADING",
+      "DAYS_TO_MATURITY",
+      "PLANT_HEIGHT",
+      "GRAIN_YIELD",
+      "1000_GRAIN_WEIGHT"
+    ],
+    "exploratory_traits": [
+      "ABOVE_GROUND_BIOMASS",
+      "TEST_WEIGHT"
+    ],
+    "required_scenarios": [
+      "unseen_environments",
+      "unseen_genotypes_and_environments",
+      "temporal_holdout",
+      "country_holdout"
+    ],
+    "maximum_scenario_relative_nrmse_loss": 0.01,
+    "minimum_scenario_fold_win_rate": 0.3333333333333333,
+    "maximum_scenario_pearson_drop": 0.01,
+    "maximum_scenario_calibration_error_increase": 0.01
+  },
+  "model_contract": {
+    "confirmed_cv1_candidate_fixed": true,
+    "no_candidate_choice_during_cross_scenario_guard": true,
+    "fold_environment_preprocessing_refitted": true,
+    "hierarchy_support_fit_from_inner_training_only": true,
+    "unseen_hierarchy_ids_use_zero_effect": true,
+    "outer_test_available_during_selection": false,
+    "final_holdout_available": false
+  }
+}

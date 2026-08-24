@@ -1,0 +1,48 @@
+{
+  "protocol_version": "reaction_norm_routed_reporting_v1",
+  "status": "reporting_only_after_frozen_outer_evaluation",
+  "model_selection_allowed": false,
+  "hyperparameter_selection_allowed": false,
+  "trait_selection_allowed": false,
+  "outer_test_metrics_used_for_selection": false,
+  "final_holdout_outcomes_allowed": false,
+  "within_environment": {
+    "environment_id_column": "env_kernel_id",
+    "minimum_rows_per_environment_trait": 5,
+    "top_k_fraction": 0.1,
+    "minimum_top_k": 1,
+    "maximum_top_k_fraction": 0.5,
+    "report_both_tails_for_directionally_ambiguous_traits": true,
+    "maximize_traits": [
+      "1000_GRAIN_WEIGHT",
+      "ABOVE_GROUND_BIOMASS",
+      "GRAIN_YIELD",
+      "TEST_WEIGHT"
+    ],
+    "directionally_ambiguous_traits": [
+      "DAYS_TO_HEADING",
+      "DAYS_TO_MATURITY",
+      "PLANT_HEIGHT"
+    ]
+  },
+  "calibration": {
+    "fit_partition": "disjoint_inner_validation_predictions",
+    "report_partition": "outer_test",
+    "negative_slope_status": "FLAG_NEGATIVE_VALIDATION_SLOPE",
+    "zero_variance_status": "FLAG_UNIDENTIFIABLE_VALIDATION_SLOPE"
+  },
+  "environment_range": {
+    "scenarios": ["temporal_holdout", "country_holdout"],
+    "fit_partition": "outer_training_environments_only",
+    "robust_quantile_low": 0.01,
+    "robust_quantile_high": 0.99,
+    "moderate_absolute_z": 3.0,
+    "extreme_absolute_z": 5.0,
+    "exclude_missingness_indicators_from_numeric_range": true
+  },
+  "trait_reporting_policy": {
+    "ABOVE_GROUND_BIOMASS": "exploratory_sparse_environment_support",
+    "TEST_WEIGHT": "exploratory_prior_outer_instability",
+    "default": "primary_quantitative_result"
+  }
+}

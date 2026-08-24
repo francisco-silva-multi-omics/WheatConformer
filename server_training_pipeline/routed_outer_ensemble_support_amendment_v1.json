@@ -1,0 +1,25 @@
+{
+  "policy_version": "routed_outer_ensemble_structural_exclusion_v1",
+  "status": "frozen_reporting_amendment",
+  "frozen_on": "2026-07-29",
+  "selection_data": "member_eligibility_and_frozen_trait_reporting_policy_only",
+  "parent_support_policy_sha256": "991d313f25692d5a07af652c979287de48f837956091f87ee1904758ff6f9c62",
+  "outer_protocol_sha256": "251ab22231e7a8c7f3cfb5bfd8721b7e2054057a21ac77109813b8aec640ab9b",
+  "validator_sha256": "8084039e8f43ad93ab3af32ae24509238d439f5a27519b5c695b6b03065078c9",
+  "minimum_test_members_unchanged": 2,
+  "action": "exclude_below_minimum_from_ensemble_and_metrics",
+  "allowed_exploratory_traits": [
+    "ABOVE_GROUND_BIOMASS",
+    "TEST_WEIGHT"
+  ],
+  "outer_test_identifiers_and_member_eligibility_read": true,
+  "outer_test_outcome_values_used": false,
+  "outer_test_metrics_read": false,
+  "outer_test_metrics_used_for_selection": false,
+  "model_training_modified": false,
+  "model_selection_modified": false,
+  "final_holdout_outcomes_read": false,
+  "require_excluded_observation_manifest": true,
+  "fail_on_primary_trait_exclusion": true,
+  "reason": "Rows predicted by fewer than the frozen two-member minimum cannot form a certified ensemble. Exclusion is restricted to traits already frozen as exploratory and is based only on structural member eligibility; the minimum is not lowered."
+}

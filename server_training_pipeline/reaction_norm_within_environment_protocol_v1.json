@@ -1,0 +1,156 @@
+{
+  "protocol_version": "reaction_norm_within_environment_objective_v1",
+  "status": "frozen_before_inner_validation",
+  "selection_data": "inner_validation_only",
+  "phenotype_values_read_at_freeze": false,
+  "prior_routed_outer_metrics_known": true,
+  "prior_routed_outer_metrics_used_as_screen_inputs": false,
+  "outer_test_metrics_read": false,
+  "final_holdout_outcomes_read": false,
+  "selected_reaction_candidate": "reaction_norm_identity_covariance",
+  "selected_environment_architecture": "explicit_E_REACTION_NORM_V1",
+  "selection_scenarios": [
+    "unseen_genotypes"
+  ],
+  "scenario_routes": {
+    "unseen_genotypes": {
+      "trial_hierarchy_candidate": "trial_and_environment_intercepts",
+      "environment_mean_availability": "training_environment_identifiers_available",
+      "future_environment_compatible": false
+    },
+    "unseen_environments": {
+      "trial_hierarchy_candidate": "current_reaction_norm",
+      "environment_mean_availability": "covariate_prediction_only",
+      "future_environment_compatible": true
+    },
+    "unseen_genotypes_and_environments": {
+      "trial_hierarchy_candidate": "current_reaction_norm",
+      "environment_mean_availability": "covariate_prediction_only",
+      "future_environment_compatible": true
+    },
+    "temporal_holdout": {
+      "trial_hierarchy_candidate": "current_reaction_norm",
+      "environment_mean_availability": "covariate_prediction_only",
+      "future_environment_compatible": true
+    },
+    "country_holdout": {
+      "trial_hierarchy_candidate": "current_reaction_norm",
+      "environment_mean_availability": "covariate_prediction_only",
+      "future_environment_compatible": true
+    }
+  },
+  "candidates": [
+    {
+      "name": "current_routed_reference",
+      "environment_mean_loss_weight": 0.0,
+      "genotype_deviation_loss_weight": 0.0,
+      "ranking_loss_weight": 0.0,
+      "ranking_temperature": 0.5,
+      "minimum_standardized_pair_gap": 0.1,
+      "uncertainty_gap_multiplier": 1.0,
+      "maximum_pairs_per_environment_trait": 256
+    },
+    {
+      "name": "mean_deviation",
+      "environment_mean_loss_weight": 0.05,
+      "genotype_deviation_loss_weight": 0.05,
+      "ranking_loss_weight": 0.0,
+      "ranking_temperature": 0.5,
+      "minimum_standardized_pair_gap": 0.1,
+      "uncertainty_gap_multiplier": 1.0,
+      "maximum_pairs_per_environment_trait": 256
+    },
+    {
+      "name": "mean_deviation_rank_low",
+      "environment_mean_loss_weight": 0.05,
+      "genotype_deviation_loss_weight": 0.05,
+      "ranking_loss_weight": 0.02,
+      "ranking_temperature": 0.5,
+      "minimum_standardized_pair_gap": 0.1,
+      "uncertainty_gap_multiplier": 1.0,
+      "maximum_pairs_per_environment_trait": 256
+    },
+    {
+      "name": "mean_deviation_rank_medium",
+      "environment_mean_loss_weight": 0.05,
+      "genotype_deviation_loss_weight": 0.05,
+      "ranking_loss_weight": 0.05,
+      "ranking_temperature": 0.5,
+      "minimum_standardized_pair_gap": 0.1,
+      "uncertainty_gap_multiplier": 1.0,
+      "maximum_pairs_per_environment_trait": 256
+    }
+  ],
+  "within_environment_metrics": {
+    "environment_id_column": "environment_id",
+    "minimum_rows_per_environment_trait": 10,
+    "minimum_comparable_pairs_per_environment_trait": 20,
+    "pairwise_tie_tolerance_standardized": 0.1,
+    "top_k_fraction": 0.1,
+    "minimum_top_k": 2,
+    "maximum_top_k_fraction": 0.25,
+    "maximize_traits": [
+      "1000_GRAIN_WEIGHT",
+      "ABOVE_GROUND_BIOMASS",
+      "GRAIN_YIELD",
+      "TEST_WEIGHT"
+    ],
+    "context_dependent_direction_traits": [
+      "DAYS_TO_HEADING",
+      "DAYS_TO_MATURITY",
+      "PLANT_HEIGHT"
+    ],
+    "selection_regret_metric": "mean_of_upper_and_lower_tail_regret_sd"
+  },
+  "phase_1": {
+    "outer_folds_by_scenario": {
+      "unseen_genotypes": [0]
+    },
+    "inner_folds": 3,
+    "candidates": "all"
+  },
+  "confirmation": {
+    "outer_folds_by_scenario": {
+      "unseen_genotypes": [0, 1, 2, 3, 4]
+    },
+    "inner_folds": 3,
+    "candidates": "reference_plus_phase_1_winner"
+  },
+  "acceptance": {
+    "minimum_centered_spearman_gain": 0.005,
+    "minimum_centered_spearman_fold_win_rate": 0.6666666666666666,
+    "minimum_pairwise_accuracy_gain": 0.005,
+    "maximum_tail_regret_increase_sd": 0.0,
+    "maximum_global_relative_normalized_rmse_loss": 0.005,
+    "maximum_global_pearson_drop": 0.005,
+    "maximum_calibration_error_increase": 0.0,
+    "maximum_primary_trait_centered_spearman_loss": 0.02,
+    "primary_guard_traits": [
+      "DAYS_TO_HEADING",
+      "DAYS_TO_MATURITY",
+      "PLANT_HEIGHT",
+      "GRAIN_YIELD",
+      "1000_GRAIN_WEIGHT"
+    ],
+    "exploratory_traits": [
+      "ABOVE_GROUND_BIOMASS",
+      "TEST_WEIGHT"
+    ]
+  },
+  "model_contract": {
+    "gaussian_nll_remains_primary": true,
+    "environment_mean_fit_partition": "inner_training_only",
+    "environment_mean_excludes_target_genotype": true,
+    "new_environment_mean_source": "E_REACTION_NORM_V1_covariates_only",
+    "pair_sampling_partition": "inner_training_only",
+    "pair_groups": "same_trait_and_environment_different_genotypes",
+    "pair_sampling_bounded": true,
+    "near_ties_excluded_or_uncertainty_gated": true,
+    "pair_weighting": "equal_trait_weight_then_equal_environment_weight",
+    "reaction_rank_unchanged": true,
+    "genomic_kernel_architecture_unchanged": true,
+    "environment_architecture_unchanged": true,
+    "outer_test_available_during_selection": false,
+    "final_holdout_available": false
+  }
+}

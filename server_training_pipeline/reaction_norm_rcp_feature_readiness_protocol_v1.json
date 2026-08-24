@@ -1,0 +1,55 @@
+{
+  "protocol_version": "reaction_norm_rcp_feature_readiness_v1",
+  "status": "phenotype_blind_readiness_audit_only",
+  "selection_data": "environment_feature_identifiers_lineage_and_historical_covariate_ranges_only",
+  "phenotype_values_allowed": false,
+  "outer_test_environment_identifiers_allowed": true,
+  "outer_test_outcomes_allowed": false,
+  "outer_test_metrics_allowed": false,
+  "final_holdout_outcomes_allowed": false,
+  "model_selection_allowed": false,
+  "future_covariate_matrices_allowed": false,
+  "rcp_predictions_allowed": false,
+  "duplicate_policy": {
+    "raw_numeric_absolute_tolerance": 1e-08,
+    "require_identical_missingness_for_exact_source_duplicates": true,
+    "semantic_duplicate_candidates_require_review": true,
+    "future_population_must_preserve_frozen_duplicates_consistently": true,
+    "recommend_deduplicated_environment_v2": true
+  },
+  "historical_range_rules": {
+    "continuous_climate": {
+      "primary_checks": "raw_range,robust_range,fold_standardized_z",
+      "moderate_absolute_z": 3.0,
+      "extreme_absolute_z": 5.0,
+      "hard_absolute_z": 8.0
+    },
+    "static_site_geometry": {
+      "primary_checks": "coordinate_domain,site_registry_identity,training_site_distance",
+      "fold_standardized_z_is_hard_gate": false
+    },
+    "sparse_management": {
+      "primary_checks": "declared_scenario,physical_domain,training_support,nonzero_prevalence",
+      "fold_standardized_z_is_hard_gate": false
+    },
+    "binary_or_confidence_indicator": {
+      "primary_checks": "binary_domain,deterministic_lineage,training_prevalence",
+      "fold_standardized_z_is_hard_gate": false
+    },
+    "cyclic_or_calendar": {
+      "primary_checks": "calendar_domain,circular_representation,sowing_policy_lineage",
+      "fold_standardized_z_is_hard_gate": false
+    },
+    "historical_only": {
+      "primary_checks": "replacement_formula_and_provenance_required",
+      "fold_standardized_z_is_hard_gate": false
+    }
+  },
+  "completion_policy": {
+    "audit_pass_means_inventory_complete_not_projection_allowed": true,
+    "every_current_fold_manifest_required": true,
+    "every_source_feature_must_be_classified": true,
+    "exact_source_duplicate_consistency_must_be_audited": true,
+    "future_projection_remains_blocked": true
+  }
+}

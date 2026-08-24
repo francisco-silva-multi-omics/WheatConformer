@@ -41,6 +41,13 @@ def main() -> None:
         default=None,
         help="Frozen policy permitting support-filtered members; omitted means all members are required.",
     )
+    parser.add_argument(
+        "--support-amendment",
+        type=Path,
+        default=None,
+        help="Frozen reporting-only amendment for excluding under-supported exploratory rows.",
+    )
+    parser.add_argument("--outer-protocol", type=Path, default=None)
     args = parser.parse_args()
 
     support_policy = None
@@ -56,6 +63,69 @@ def main() -> None:
         minimum_test_members = int(support_policy["minimum_test_members"])
         if not 2 <= minimum_test_members <= args.expected_inner_folds:
             raise ValueError("Outer ensemble minimum test members must be between 2 and the ensemble size")
+
+    support_amendment = None
+    allowed_exclusion_traits: set[str] = set()
+    if args.support_amendment is not None:
+        if support_policy is None or args.outer_protocol is None:
+            raise ValueError(
+                "A support amendment requires both the parent policy and outer protocol"
+            )
+        support_amendment = json.loads(
+            args.support_amendment.read_text(encoding="utf-8")
+        )
+        amendment_checks = {
+            "status": support_amendment.get("status")
+            == "frozen_reporting_amendment",
+            "parent_policy": support_amendment.get("parent_support_policy_sha256")
+            == file_sha256(args.support_policy),
+            "outer_protocol": support_amendment.get("outer_protocol_sha256")
+            == file_sha256(args.outer_protocol),
+            "minimum_unchanged": int(
+                support_amendment.get("minimum_test_members_unchanged", -1)
+            )
+            == minimum_test_members,
+            "action": support_amendment.get("action")
+            == "exclude_below_minimum_from_ensemble_and_metrics",
+            "outcomes_unused": support_amendment.get(
+                "outer_test_outcome_values_used"
+            )
+            is False,
+            "metrics_unread": support_amendment.get("outer_test_metrics_read")
+            is False,
+            "metrics_unselected": support_amendment.get(
+                "outer_test_metrics_used_for_selection"
+            )
+            is False,
+            "training_unchanged": support_amendment.get("model_training_modified")
+            is False,
+            "selection_unchanged": support_amendment.get(
+                "model_selection_modified"
+            )
+            is False,
+            "final_holdout_unread": support_amendment.get(
+                "final_holdout_outcomes_read"
+            )
+            is False,
+            "primary_exclusion_forbidden": support_amendment.get(
+                "fail_on_primary_trait_exclusion"
+            )
+            is True,
+        }
+        failed_amendment = sorted(
+            name for name, passed in amendment_checks.items() if not passed
+        )
+        if failed_amendment:
+            raise ValueError(
+                "Outer ensemble support amendment failed: "
+                + ", ".join(failed_amendment)
+            )
+        allowed_exclusion_traits = {
+            str(value)
+            for value in support_amendment.get("allowed_exploratory_traits", [])
+        }
+        if not allowed_exclusion_traits:
+            raise ValueError("Support amendment has no allowed exploratory traits")
 
     runs = []
     for run_dir in sorted(args.models_root.glob(args.run_glob)):
@@ -99,13 +169,68 @@ def main() -> None:
     member_counts = stacked_test.groupby("canonical_observation_id")[
         "_ensemble_member"
     ].nunique()
+    original_member_counts = member_counts.copy()
     insufficient = member_counts[member_counts.lt(minimum_test_members)]
+    exclusion_columns = [
+        "canonical_observation_id",
+        "trait_name_canonical",
+        "available_member_count",
+        "required_member_count",
+        "exclusion_reason",
+    ]
+    exclusions = pd.DataFrame(columns=exclusion_columns)
     if not insufficient.empty:
-        raise ValueError(
-            "Outer ensemble observations have insufficient structurally eligible members: "
-            f"minimum_required={minimum_test_members}; observations={len(insufficient)}; "
-            f"observed_minimum={int(insufficient.min())}"
+        identities = (
+            stacked_test[
+                ["canonical_observation_id", "trait_name_canonical"]
+            ]
+            .drop_duplicates()
+            .set_index("canonical_observation_id")
         )
+        ambiguous_traits = identities.index[identities.index.duplicated()].unique()
+        if len(ambiguous_traits):
+            raise ValueError(
+                "Under-supported observation IDs map to multiple traits: "
+                f"{ambiguous_traits[:10].tolist()}"
+            )
+        exclusions = identities.loc[insufficient.index].reset_index()
+        exclusions["available_member_count"] = exclusions[
+            "canonical_observation_id"
+        ].map(insufficient).astype(int)
+        exclusions["required_member_count"] = minimum_test_members
+        exclusions["exclusion_reason"] = (
+            "below_frozen_minimum_structurally_eligible_members"
+        )
+        by_trait = (
+            exclusions.groupby("trait_name_canonical", sort=True)
+            .size()
+            .to_dict()
+        )
+        disallowed = sorted(
+            set(exclusions["trait_name_canonical"].astype(str)).difference(
+                allowed_exclusion_traits
+            )
+        )
+        if support_amendment is None or disallowed:
+            detail = (
+                f"minimum_required={minimum_test_members}; "
+                f"observations={len(insufficient)}; "
+                f"observed_minimum={int(insufficient.min())}; "
+                f"by_trait={by_trait}"
+            )
+            if disallowed:
+                detail += f"; disallowed_primary_traits={disallowed}"
+            raise ValueError(
+                "Outer ensemble observations have insufficient structurally "
+                f"eligible members: {detail}"
+            )
+        excluded_ids = set(exclusions["canonical_observation_id"].astype(str))
+        stacked_test = stacked_test[
+            ~stacked_test["canonical_observation_id"].astype(str).isin(excluded_ids)
+        ].copy()
+        member_counts = member_counts.drop(index=list(excluded_ids))
+        if stacked_test.empty:
+            raise ValueError("Support amendment would exclude every outer-test row")
 
     identity_columns = [
         "phenotype_value",
@@ -152,6 +277,8 @@ def main() -> None:
     combined = pd.concat([validation, test], ignore_index=True)
     args.out_dir.mkdir(parents=True, exist_ok=True)
     write_table(combined, args.out_dir / f"{args.prefix}_predictions.parquet")
+    exclusion_path = args.out_dir / f"{args.prefix}_structural_exclusions.tsv"
+    exclusions.to_csv(exclusion_path, sep="\t", index=False)
 
     support = (
         test.groupby("trait_name_canonical", sort=True)
@@ -196,7 +323,12 @@ def main() -> None:
             "outer_test_used_for_selection": False,
             "test_member_sets_equal": test_sets_equal,
             "minimum_test_members": minimum_test_members,
-            "test_observation_union_count": int(len(member_counts)),
+            "test_observation_union_count": int(len(original_member_counts)),
+            "retained_test_observation_count": int(len(member_counts)),
+            "excluded_test_observation_count": int(len(exclusions)),
+            "excluded_test_traits": sorted(
+                exclusions["trait_name_canonical"].astype(str).unique().tolist()
+            ),
             "test_observation_intersection_count": int(len(set.intersection(*test_ids))),
             "partial_member_test_observations": int(
                 member_counts.lt(args.expected_inner_folds).sum()
@@ -211,6 +343,11 @@ def main() -> None:
                 for metadata, _ in runs
             },
             "support_report": str(support_path),
+            "structural_exclusion_report": {
+                "path": str(exclusion_path),
+                "sha256": file_sha256(exclusion_path),
+                "outcome_values_included": False,
+            },
             "support_policy": (
                 {
                     "path": str(args.support_policy),
@@ -218,6 +355,17 @@ def main() -> None:
                     "policy_version": support_policy["policy_version"],
                 }
                 if support_policy is not None
+                else None
+            ),
+            "support_amendment": (
+                {
+                    "path": str(args.support_amendment),
+                    "sha256": file_sha256(args.support_amendment),
+                    "policy_version": support_amendment["policy_version"],
+                    "outer_test_outcome_values_used": False,
+                    "outer_test_metrics_used_for_selection": False,
+                }
+                if support_amendment is not None
                 else None
             ),
         },

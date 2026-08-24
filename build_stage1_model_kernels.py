@@ -22,6 +22,10 @@ def norm_text(x: str) -> str:
     return re.sub(r"\s+", " ", str(x).strip().upper())
 
 
+def normalize_environment_ids(values: pd.Series) -> pd.Series:
+    return clean_str(values).str.replace(r"\s+", " ", regex=True)
+
+
 def read_table(path: Path, **kwargs) -> pd.DataFrame:
     suffixes = "".join(path.suffixes).lower()
     if suffixes.endswith(".parquet"):
@@ -82,6 +86,62 @@ def load_kernel_order(path: Path, col: str) -> tuple[pd.DataFrame, dict[str, int
     return order, {v: i for i, v in enumerate(ids)}
 
 
+def load_environment_alias_map(path: Path) -> pd.DataFrame:
+    aliases = pd.read_csv(path, sep="\t", dtype=str)
+    required = {"source_env_id", "target_env_id", "mapping_status"}
+    missing = sorted(required.difference(aliases.columns))
+    if missing:
+        raise SystemExit(f"Environment alias registry is missing columns: {missing}")
+    aliases = aliases[aliases["mapping_status"].eq("ACCEPTED_ALIAS")].copy()
+    aliases["source_env_id"] = normalize_environment_ids(aliases["source_env_id"])
+    aliases["target_env_id"] = clean_str(aliases["target_env_id"])
+    if aliases.empty:
+        raise SystemExit(f"Environment alias registry has no accepted aliases: {path}")
+    if aliases["source_env_id"].eq("").any() or aliases["target_env_id"].eq("").any():
+        raise SystemExit("Accepted environment aliases contain empty IDs")
+    if aliases["source_env_id"].duplicated().any():
+        raise SystemExit("Environment alias registry contains duplicate source IDs")
+    if aliases["target_env_id"].duplicated().any():
+        raise SystemExit("Environment alias registry contains duplicate target IDs")
+    if aliases["source_env_id"].eq(aliases["target_env_id"]).any():
+        raise SystemExit("Environment alias registry contains a source-to-self mapping")
+    return aliases
+
+
+def apply_environment_aliases(
+    frame: pd.DataFrame, env_col: str, aliases: pd.DataFrame
+) -> tuple[pd.DataFrame, dict[str, int]]:
+    local = frame.copy()
+    original_col = f"{env_col}_original"
+    if original_col in local.columns:
+        raise SystemExit(
+            f"Stage-1 table already contains reserved alias provenance column: {original_col}"
+        )
+    local[original_col] = clean_str(local[env_col])
+    mapping = dict(zip(aliases["source_env_id"], aliases["target_env_id"], strict=True))
+    normalized_source = normalize_environment_ids(local[original_col])
+    mapped = normalized_source.map(mapping)
+    local["environment_alias_applied"] = mapped.notna()
+    local["environment_alias_registry_source_id"] = np.where(
+        mapped.notna(), normalized_source, ""
+    )
+    local["environment_alias_mapping_status"] = np.where(
+        mapped.notna(), "ACCEPTED_ALIAS", "NOT_APPLICABLE"
+    )
+    local[env_col] = mapped.fillna(local[original_col])
+    stats = {
+        "environment_alias_registry_rows": len(aliases),
+        "environment_alias_applied_rows": int(local["environment_alias_applied"].sum()),
+        "environment_alias_applied_source_ids": int(
+            local.loc[
+                local["environment_alias_applied"],
+                "environment_alias_registry_source_id",
+            ].nunique()
+        ),
+    }
+    return local, stats
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Build model-ready stage-1 phenotype table and compact/dense kernels for GxE baselines."
@@ -114,6 +174,14 @@ def main() -> None:
     parser.add_argument("--env-order", type=Path, default=BASE / "environment" / "env_kernel_sample_order.tsv")
     parser.add_argument("--env-order-col", default="env_id")
     parser.add_argument("--env-col", default="env_kernel_id")
+    parser.add_argument(
+        "--environment-alias-map",
+        type=Path,
+        help=(
+            "Optional certified source_env_id -> target_env_id registry applied before "
+            "environment-order matching. Original environment IDs are preserved."
+        ),
+    )
     parser.add_argument("--out-dir", type=Path, default=BASE / "model_kernels" / "stage1_hmp_env")
     parser.add_argument("--prefix", default="stage1_hmp_env")
     parser.add_argument("--trait", action="append", help="Trait name to keep; can be repeated.")
@@ -167,6 +235,17 @@ def main() -> None:
     pheno[args.geno_col] = clean_str(pheno[args.geno_col])
     pheno[args.env_col] = clean_str(pheno[args.env_col])
     pheno = pheno[pheno[args.geno_col].ne("") & pheno[args.env_col].ne("")].copy()
+    environment_aliases = None
+    alias_stats = {
+        "environment_alias_registry_rows": 0,
+        "environment_alias_applied_rows": 0,
+        "environment_alias_applied_source_ids": 0,
+    }
+    if args.environment_alias_map:
+        environment_aliases = load_environment_alias_map(args.environment_alias_map)
+        pheno, alias_stats = apply_environment_aliases(
+            pheno, args.env_col, environment_aliases
+        )
 
     print("Loading genotype/environment kernels and orders ...", flush=True)
     K_g = np.load(args.geno_kernel, mmap_mode="r")
@@ -175,6 +254,25 @@ def main() -> None:
     K_g_epi2 = np.load(args.geno_epi2_kernel, mmap_mode="r") if args.geno_epi2_kernel and args.geno_epi2_kernel.exists() else None
     _, geno_index = load_kernel_order(args.geno_order, args.geno_order_col)
     _, env_index = load_kernel_order(args.env_order, args.env_order_col)
+    if environment_aliases is not None:
+        missing_alias_targets = sorted(
+            set(environment_aliases["target_env_id"]).difference(env_index)
+        )
+        if missing_alias_targets:
+            raise SystemExit(
+                "Environment alias targets are absent from the environment order; "
+                f"examples: {missing_alias_targets[:5]}"
+            )
+        existing_alias_sources = sorted(
+            set(environment_aliases["source_env_id"]).intersection(
+                normalize_environment_ids(pd.Series(env_index.keys()))
+            )
+        )
+        if existing_alias_sources:
+            raise SystemExit(
+                "Environment alias sources already occur in the environment order; "
+                f"examples: {existing_alias_sources[:5]}"
+            )
     if K_g.shape[0] != K_g.shape[1] or K_g.shape[0] != len(geno_index):
         raise SystemExit(f"Genotype kernel shape {K_g.shape} does not match order length {len(geno_index)}")
     if K_e.shape[0] != K_e.shape[1] or K_e.shape[0] != len(env_index):
@@ -194,6 +292,16 @@ def main() -> None:
     pheno = pheno.reset_index(drop=True)
     if pheno.empty:
         raise SystemExit("No stage-1 rows remain after matching to genotype and environment kernels")
+    if environment_aliases is not None:
+        alias_stats["environment_alias_applied_rows"] = int(
+            pheno["environment_alias_applied"].sum()
+        )
+        alias_stats["environment_alias_applied_source_ids"] = int(
+            pheno.loc[
+                pheno["environment_alias_applied"],
+                "environment_alias_registry_source_id",
+            ].nunique()
+        )
 
     pheno["observation_index"] = np.arange(len(pheno), dtype=np.int64)
     pheno["geno_kernel_index"] = pheno[args.geno_col].map(geno_index).astype(np.int32)
@@ -211,6 +319,10 @@ def main() -> None:
         "env_kernel_index",
         "env_id_pheno",
         "env_kernel_id",
+        "env_kernel_id_original",
+        "environment_alias_applied",
+        "environment_alias_registry_source_id",
+        "environment_alias_mapping_status",
         "trial_name",
         "cycle",
         "occ",
@@ -356,6 +468,18 @@ def main() -> None:
             {"metric": "unique_genotypes", "value": model_table[args.geno_col].nunique()},
             {"metric": "unique_environments", "value": model_table[args.env_col].nunique()},
             {"metric": "unique_traits", "value": model_table["trait_name_canonical"].nunique()},
+            {
+                "metric": "environment_alias_registry_rows",
+                "value": alias_stats["environment_alias_registry_rows"],
+            },
+            {
+                "metric": "environment_alias_applied_rows",
+                "value": alias_stats["environment_alias_applied_rows"],
+            },
+            {
+                "metric": "environment_alias_applied_source_ids",
+                "value": alias_stats["environment_alias_applied_source_ids"],
+            },
             {"metric": "linear_model_adjusted_rows", "value": int(model_table["stage1_model_status"].eq("linear_model_adjusted").sum())},
             {"metric": "fallback_rows", "value": int((~model_table["stage1_model_status"].eq("linear_model_adjusted")).sum())},
             {"metric": "rows_with_finite_weight", "value": int(np.isfinite(model_table["weight_g_e"]).sum())},

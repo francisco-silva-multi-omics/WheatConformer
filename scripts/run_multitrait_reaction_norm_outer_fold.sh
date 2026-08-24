@@ -15,7 +15,9 @@ EVALUATION_PROTOCOL="${REACTION_EVALUATION_PROTOCOL:-$CODE_ROOT/server_training_
 REACTION_PROTOCOL="${REACTION_PROTOCOL:-$CODE_ROOT/server_training_pipeline/reaction_norm_protocol_v1.json}"
 ENVIRONMENT_PROTOCOL="${REACTION_ENVIRONMENT_PROTOCOL:-$CODE_ROOT/server_training_pipeline/reaction_norm_environment_protocol_v1.json}"
 OUTER_PROTOCOL="${REACTION_OUTER_PROTOCOL:-$CODE_ROOT/server_training_pipeline/reaction_norm_outer_evaluation_protocol_v3.json}"
+HIERARCHY_PROTOCOL="${REACTION_TRIAL_HIERARCHY_PROTOCOL:-}"
 SUPPORT_POLICY="${REACTION_OUTER_SUPPORT_POLICY:-$CODE_ROOT/server_training_pipeline/outer_ensemble_support_policy.json}"
+SUPPORT_AMENDMENT="${REACTION_OUTER_SUPPORT_AMENDMENT:-}"
 BASE_EVALUATION_DIR="${REACTION_BASE_EVALUATION_DIR:-model_kernels/final_nested_evaluation_v5_fixed}"
 LEDGER="${REACTION_LEDGER:-model_kernels/multitrait_pedigree_env_uniform_tgw_certified/multitrait_pedigree_uniform_tgw_certified_observations.parquet}"
 TRAIT_ORDER="${REACTION_TRAIT_ORDER:-model_kernels/multitrait_pedigree_env_uniform_tgw_certified/multitrait_pedigree_uniform_tgw_certified_trait_order.tsv}"
@@ -25,7 +27,9 @@ HMP_MODEL_DIR="${REACTION_HMP_MODEL_DIR:-model_kernels/stage1_hmp_env_ke_diag_no
 GBS_MODEL_DIR="${REACTION_GBS_MODEL_DIR:-model_kernels/stage1_gbs_sawyt_env_ke_diag_norm}"
 DTH_MODEL_DIR="${REACTION_DTH_MODEL_DIR:-model_kernels/stage1_pedigree_env_dth_v2}"
 TRAIT_ENV_MANIFEST="${REACTION_TRAIT_ENV_MANIFEST:-model_kernels/trait_environment_v2/trait_environment_kernel_manifest.tsv}"
+SOURCE_TRAIT_ENV_MANIFEST="$TRAIT_ENV_MANIFEST"
 WINDOW_FEATURES="${REACTION_WINDOW_FEATURES:-environment/agronomic_api_weather_windows.tsv}"
+GLOBAL_ENVIRONMENT_DIR="${REACTION_GLOBAL_ENVIRONMENT_DIR:-environment}"
 CANONICAL_DIR="${REACTION_CANONICAL_DIR:-genotype_panels/pedigree_canonical_v3}"
 INPUT_DIR="${REACTION_INPUT_DIR:-model_kernels/reaction_norm_v1}"
 INNER_SCREEN_DIR="${REACTION_SCREEN_DIR:-model_kernels/reaction_norm_inner_screen_v1}"
@@ -36,7 +40,16 @@ ENVIRONMENT_MODELS_DIR="${REACTION_ENVIRONMENT_MODELS_DIR:-trained_models/reacti
 FREEZE_DIR="${REACTION_SELECTION_FREEZE_DIR:-audit/reaction_norm_explicit_environment_v3_frozen}"
 OUTER_DIR="${REACTION_OUTER_DIR:-model_kernels/reaction_norm_outer_evaluation_v3}"
 OUTER_MODELS_DIR="${REACTION_OUTER_MODELS_DIR:-trained_models/reaction_norm_outer_evaluation_v3_runs}"
+TRAIT_ENV_EXTENSION_DIR="${REACTION_TRAIT_ENV_EXTENSION_DIR:-$OUTER_DIR/trait_environment_frozen_extension_v2}"
+TRAIT_ENV_EXTENSION_IMPLEMENTATION="$CODE_ROOT/server_training_pipeline/extend_trait_environment_kernel.py"
 FORCE="${REACTION_OUTER_FORCE:-0}"
+
+TRAINER_MODULE="server_training_pipeline.train_multitrait_reaction_norm_tf"
+TRAINER_PATH="$CODE_ROOT/server_training_pipeline/train_multitrait_reaction_norm_tf.py"
+if [[ -n "$HIERARCHY_PROTOCOL" ]]; then
+  TRAINER_MODULE="server_training_pipeline.train_multitrait_reaction_norm_trial_hierarchy_tf"
+  TRAINER_PATH="$CODE_ROOT/server_training_pipeline/train_multitrait_reaction_norm_trial_hierarchy_tf.py"
+fi
 
 MANIFEST="$BASE_EVALUATION_DIR/nested_evaluation_entities.tsv"
 CONTRACT="$BASE_EVALUATION_DIR/nested_evaluation_contract.json"
@@ -62,12 +75,180 @@ log() { printf '[%s] %s\n' "$(timestamp)" "$*"; }
 for required in \
   "$EVALUATION_PROTOCOL" "$REACTION_PROTOCOL" "$ENVIRONMENT_PROTOCOL" "$OUTER_PROTOCOL" "$SUPPORT_POLICY" \
   "$LEDGER" "$TRAIT_ORDER" "$MANIFEST" "$CONTRACT" "$TRAIT_ENV_MANIFEST" \
-  "$WINDOW_FEATURES" "$ID_DIR/outer_training_environment_ids.tsv" \
+  "$WINDOW_FEATURES" \
   "$CANONICAL_DIR/K_A_CANONICAL_V3.npy" \
   "$CANONICAL_DIR/K_A_CANONICAL_V3_sample_order.tsv" \
-  "$ENVIRONMENT_DIR/K_geo.npy" "$ENVIRONMENT_DIR/K_E.qc.json"
+  "$GLOBAL_ENVIRONMENT_DIR/K_E.qc.json" \
+  "$BASE_MODEL_DIR/${BASE_PREFIX}_K_E_unique_order.tsv"
 do
   [[ -s "$required" ]] || { echo "Required outer-evaluation input is missing: $required" >&2; exit 2; }
+done
+if [[ -n "$HIERARCHY_PROTOCOL" && ! -s "$HIERARCHY_PROTOCOL" ]]; then
+  echo "Required routed hierarchy protocol is missing: $HIERARCHY_PROTOCOL" >&2
+  exit 2
+fi
+if [[ -n "$SUPPORT_AMENDMENT" && ! -s "$SUPPORT_AMENDMENT" ]]; then
+  echo "Required outer support amendment is missing: $SUPPORT_AMENDMENT" >&2
+  exit 2
+fi
+
+log "VERIFY outer-training IDs scenario=$SCENARIO outer=$OUTER_FOLD"
+mkdir -p "$ID_DIR"
+"$PYTHON" -m server_training_pipeline.export_final_evaluation_fold \
+  --ledger "$LEDGER" \
+  --manifest "$MANIFEST" \
+  --contract "$CONTRACT" \
+  --scenario "$SCENARIO" \
+  --outer-fold "$OUTER_FOLD" \
+  --out-dir "$ID_DIR"
+
+readarray -t GLOBAL_ENVIRONMENT_PATHS < <(
+  "$PYTHON" -m server_training_pipeline.resolve_environment_kernel_sources \
+    --qc "$GLOBAL_ENVIRONMENT_DIR/K_E.qc.json" \
+    --fallback-environment-dir "$GLOBAL_ENVIRONMENT_DIR" \
+    --fallback-weather-dir "$GLOBAL_ENVIRONMENT_DIR"
+)
+if (( ${#GLOBAL_ENVIRONMENT_PATHS[@]} != 2 )); then
+  echo "Could not resolve environment source paths from $GLOBAL_ENVIRONMENT_DIR/K_E.qc.json" >&2
+  exit 2
+fi
+GLOBAL_ENVIRONMENT_INPUT_DIR="${REACTION_ENVIRONMENT_INPUT_DIR:-${GLOBAL_ENVIRONMENT_PATHS[0]}}"
+GLOBAL_WEATHER_DIR="${REACTION_WEATHER_DIR:-${GLOBAL_ENVIRONMENT_PATHS[1]}}"
+TARGET_ENV_ORDER="$BASE_MODEL_DIR/${BASE_PREFIX}_K_E_unique_order.tsv"
+OUTER_ENV_IDS="$ID_DIR/outer_training_environment_ids.tsv"
+
+TRAIT_ENV_EXTENSION_REQUIRED="$("$PYTHON" - "$OUTER_PROTOCOL" <<'PY'
+import json, sys
+protocol = json.load(open(sys.argv[1]))
+print("1" if protocol.get("trait_environment_recovery_contract") else "0")
+PY
+)"
+
+if [[ "$TRAIT_ENV_EXTENSION_REQUIRED" == "1" ]]; then
+  EXTENDED_TRAIT_ENV_MANIFEST="$TRAIT_ENV_EXTENSION_DIR/trait_environment_kernel_manifest.tsv"
+  TRAIT_ENV_EXTENSION_QC="$TRAIT_ENV_EXTENSION_DIR/K_E_TGW_V2_extension_qc.json"
+
+  "$PYTHON" - "$OUTER_PROTOCOL" "$TRAIT_ENV_EXTENSION_IMPLEMENTATION" <<'PY'
+import hashlib, json, sys
+protocol = json.load(open(sys.argv[1]))
+contract = protocol["trait_environment_recovery_contract"]
+observed = hashlib.sha256(open(sys.argv[2], "rb").read()).hexdigest()
+if contract.get("implementation_sha256") != observed:
+    raise SystemExit(
+        "Frozen trait-environment extension implementation mismatch: "
+        f"expected={contract.get('implementation_sha256')} observed={observed}"
+    )
+if any(contract.get(key) is not False for key in [
+    "refit_feature_columns", "refit_feature_scaling", "phenotype_values_read",
+    "outer_test_metrics_read", "final_holdout_outcomes_read",
+]):
+    raise SystemExit("Frozen trait-environment recovery contract is not phenotype-blind")
+print("PASS frozen trait-environment extension implementation identity")
+PY
+
+  trait_environment_extension_is_current() {
+    [[ -s "$TRAIT_ENV_EXTENSION_QC" && -s "$EXTENDED_TRAIT_ENV_MANIFEST" ]] || return 1
+    "$PYTHON" - "$TRAIT_ENV_EXTENSION_QC" "$OUTER_PROTOCOL" \
+      "$SOURCE_TRAIT_ENV_MANIFEST" "$TARGET_ENV_ORDER" \
+      "$GLOBAL_ENVIRONMENT_INPUT_DIR/envdata.tsv" \
+      "$GLOBAL_ENVIRONMENT_INPUT_DIR/locdata.tsv" "$WINDOW_FEATURES" \
+      "$EXTENDED_TRAIT_ENV_MANIFEST" "$TRAIT_ENV_EXTENSION_IMPLEMENTATION" \
+      >/dev/null 2>&1 <<'PY'
+import hashlib, json, sys
+from pathlib import Path
+
+qc_path, protocol_path, source_manifest, target_order, envdata, locdata, windows, output_manifest, implementation = map(Path, sys.argv[1:])
+sha = lambda path: hashlib.sha256(path.read_bytes()).hexdigest()
+qc = json.loads(qc_path.read_text())
+contract = json.loads(protocol_path.read_text())["trait_environment_recovery_contract"]
+source_artifacts = qc.get("source_artifacts", {})
+output_artifacts = qc.get("output_artifacts", {})
+required_sources = [source_manifest, target_order, envdata, locdata, windows]
+checks = [
+    qc.get("status") == "PASS",
+    qc.get("protocol_version") == "trait_environment_frozen_extension_v2",
+    qc.get("kernel") == contract.get("kernel") == "K_E_TGW_V2",
+    qc.get("extension_policy") == contract.get("policy") == "frozen_feature_projection_preserve_shared_original_block",
+    qc.get("phenotype_values_read") is False,
+    qc.get("outer_test_metrics_read") is False,
+    qc.get("final_holdout_outcomes_read") is False,
+    qc.get("implementation_sha256") == contract.get("implementation_sha256") == sha(implementation),
+    float(qc.get("original_block_max_abs_delta", float("inf"))) <= float(contract["original_block_max_abs_tolerance"]),
+    int(qc.get("shared_source_target_environment_count", 0)) > 0,
+    int(qc.get("added_environment_count", 0)) > 0,
+    int(qc.get("source_environment_count", -1))
+        == int(qc.get("shared_source_target_environment_count", -2))
+        + int(qc.get("source_only_environment_count", -3)),
+    int(qc.get("target_environment_count", -1))
+        == int(qc.get("shared_source_target_environment_count", -2))
+        + int(qc.get("added_environment_count", -3)),
+    all(source_artifacts.get(str(path.resolve())) == sha(path.resolve()) for path in required_sources),
+    output_artifacts.get(str(output_manifest.resolve())) == sha(output_manifest.resolve()),
+]
+for path_text, expected in [*source_artifacts.items(), *output_artifacts.items()]:
+    path = Path(path_text)
+    checks.append(path.is_file() and sha(path) == expected)
+raise SystemExit(0 if all(checks) else 1)
+PY
+  }
+
+  if [[ "$FORCE" == "1" ]] || ! trait_environment_extension_is_current; then
+    log "EXTEND frozen K_E_TGW_V2 to recovered environment order"
+    "$PYTHON" -m server_training_pipeline.extend_trait_environment_kernel \
+      --root . \
+      --source-manifest "$SOURCE_TRAIT_ENV_MANIFEST" \
+      --target-order "$TARGET_ENV_ORDER" \
+      --envdata "$GLOBAL_ENVIRONMENT_INPUT_DIR/envdata.tsv" \
+      --locdata "$GLOBAL_ENVIRONMENT_INPUT_DIR/locdata.tsv" \
+      --window-features "$WINDOW_FEATURES" \
+      --out-dir "$TRAIT_ENV_EXTENSION_DIR" \
+      --kernel K_E_TGW_V2 \
+      --original-block-tolerance 5e-6
+  else
+    log "SKIP certified frozen K_E_TGW_V2 recovery extension"
+  fi
+  trait_environment_extension_is_current || {
+    echo "Frozen K_E_TGW_V2 recovery extension failed provenance verification" >&2
+    exit 2
+  }
+  TRAIT_ENV_MANIFEST="$EXTENDED_TRAIT_ENV_MANIFEST"
+fi
+
+fold_environment_is_current() {
+  [[ -s "$ENVIRONMENT_DIR/K_E.qc.json" ]] || return 1
+  "$PYTHON" - "$ENVIRONMENT_DIR/K_E.qc.json" "$OUTER_ENV_IDS" "$TARGET_ENV_ORDER" \
+    "$CODE_ROOT/build_environment_component_kernels.py" <<'PY' >/dev/null 2>&1
+import hashlib, json, sys
+from pathlib import Path
+qc_path, fit_ids, target_ids, builder = map(Path, sys.argv[1:])
+sha = lambda path: hashlib.sha256(path.read_bytes()).hexdigest()
+qc = json.loads(qc_path.read_text())
+checks = [
+    qc.get("feature_fit_scope") == "training_environments_only",
+    qc.get("fit_environment_ids_sha256") == sha(fit_ids),
+    qc.get("target_environment_ids_sha256") == sha(target_ids),
+    qc.get("builder_sha256") == sha(builder),
+]
+raise SystemExit(0 if all(checks) else 1)
+PY
+}
+
+if [[ "$FORCE" == "1" ]] || ! fold_environment_is_current; then
+  log "BUILD fold-local generic environment components scenario=$SCENARIO outer=$OUTER_FOLD"
+  mkdir -p "$ENVIRONMENT_DIR"
+  "$PYTHON" "$CODE_ROOT/build_environment_component_kernels.py" \
+    --environment-dir "$GLOBAL_ENVIRONMENT_INPUT_DIR" \
+    --weather-dir "$GLOBAL_WEATHER_DIR" \
+    --out-dir "$ENVIRONMENT_DIR" \
+    --fit-environment-ids "$OUTER_ENV_IDS" \
+    --target-environment-ids "$TARGET_ENV_ORDER" \
+    --require-fetched-weather
+else
+  log "SKIP certified fold-local generic environment components scenario=$SCENARIO outer=$OUTER_FOLD"
+fi
+
+for required in "$ENVIRONMENT_DIR/K_geo.npy" "$ENVIRONMENT_DIR/K_E.qc.json"; do
+  [[ -s "$required" ]] || { echo "Required fold environment input is missing: $required" >&2; exit 2; }
 done
 
 "$PYTHON" - "$OUTER_PROTOCOL" \
@@ -119,6 +300,35 @@ for assignment in "${OUTER_SETTINGS[@]}"; do
     scenario_seed_offset) SCENARIO_SEED_OFFSET="$value" ;;
   esac
 done
+
+RUN_CANDIDATE="$SELECTED_CANDIDATE"
+hierarchy_train_args=()
+hierarchy_verify_args=()
+if [[ -n "$HIERARCHY_PROTOCOL" ]]; then
+  RUN_CANDIDATE="$("$PYTHON" - "$OUTER_PROTOCOL" "$HIERARCHY_PROTOCOL" "$SCENARIO" <<'PY'
+import hashlib, json, sys
+outer_path, hierarchy_path, scenario = sys.argv[1:]
+if hashlib.sha256(open(outer_path, "rb").read()).hexdigest() != hashlib.sha256(
+    open(hierarchy_path, "rb").read()
+).hexdigest():
+    raise SystemExit("Routed hierarchy protocol must equal the outer protocol")
+protocol = json.load(open(outer_path))
+route = protocol.get("scenario_routes", {}).get(scenario)
+if not isinstance(route, dict):
+    raise SystemExit(f"Missing routed hierarchy policy for {scenario}")
+print(route["trial_hierarchy_candidate"])
+PY
+)"
+  hierarchy_train_args=(
+    --trial-hierarchy-protocol "$HIERARCHY_PROTOCOL"
+    --trial-hierarchy-candidate "$RUN_CANDIDATE"
+    --reaction-candidate "$SELECTED_CANDIDATE"
+  )
+  hierarchy_verify_args=(
+    --trial-hierarchy-protocol "$HIERARCHY_PROTOCOL"
+    --trial-hierarchy-candidate "$RUN_CANDIDATE"
+  )
+fi
 
 if [[ "${REACTION_SELECTION_ALREADY_VERIFIED:-0}" != "1" ]]; then
   if [[ ! -s "$SELECTION_LOCK" || ! -s "$SELECTION_CHECKSUMS" ]]; then
@@ -184,13 +394,16 @@ log "PREPARE frozen canonical-v3 reaction-norm inputs"
   --out-dir "$INPUT_DIR"
 GENOTYPE_MANIFEST="$INPUT_DIR/reaction_norm_genotype_manifest.tsv"
 
-readarray -t ENVIRONMENT_PATHS < <("$PYTHON" - "$ENVIRONMENT_DIR/K_E.qc.json" <<'PY'
-import json, sys
-qc = json.load(open(sys.argv[1]))
-print(qc["environment_input_dir"])
-print(qc["weather_feature_input_dir"])
-PY
+readarray -t ENVIRONMENT_PATHS < <(
+  "$PYTHON" -m server_training_pipeline.resolve_environment_kernel_sources \
+    --qc "$ENVIRONMENT_DIR/K_E.qc.json" \
+    --fallback-environment-dir "$GLOBAL_ENVIRONMENT_INPUT_DIR" \
+    --fallback-weather-dir "$GLOBAL_WEATHER_DIR"
 )
+if (( ${#ENVIRONMENT_PATHS[@]} != 2 )); then
+  echo "Could not resolve fold environment source paths from $ENVIRONMENT_DIR/K_E.qc.json" >&2
+  exit 2
+fi
 ENVIRONMENT_INPUT_DIR="${REACTION_ENVIRONMENT_INPUT_DIR:-${ENVIRONMENT_PATHS[0]}}"
 WEATHER_DIR="${REACTION_WEATHER_DIR:-${ENVIRONMENT_PATHS[1]}}"
 
@@ -334,7 +547,8 @@ verify_member() {
   "$PYTHON" -m server_training_pipeline.verify_reaction_norm_run \
     --run-dir "$run_dir" \
     --prefix "$prefix" \
-    --candidate "$SELECTED_CANDIDATE" \
+    --candidate "$RUN_CANDIDATE" \
+    --reaction-candidate "$SELECTED_CANDIDATE" \
     --stage outer_evaluation \
     --seed "$seed" \
     --scenario "$SCENARIO" \
@@ -350,7 +564,8 @@ verify_member() {
     --environment-architecture "${SELECTED_ENVIRONMENT_ARCHITECTURE}" \
     --environment-design-certification "$REACTION_ENV_DIR/E_REACTION_NORM_V1_certification.json" \
     --certification-summary "$CERTIFICATION" \
-    --trainer "$CODE_ROOT/server_training_pipeline/train_multitrait_reaction_norm_tf.py" \
+    "${hierarchy_verify_args[@]}" \
+    --trainer "$TRAINER_PATH" \
     --factorization-implementation "$CODE_ROOT/server_training_pipeline/kernel_factorization.py"
 }
 
@@ -412,7 +627,8 @@ for ((inner_fold=0; inner_fold<MEMBER_COUNT; inner_fold++)); do
   fi
   mkdir -p "$run_dir"
   log "TRAIN frozen outer member scenario=$SCENARIO outer=$OUTER_FOLD inner=$inner_fold"
-  "$PYTHON" -m server_training_pipeline.train_multitrait_reaction_norm_tf \
+  "$PYTHON" -m "$TRAINER_MODULE" \
+    "${hierarchy_train_args[@]}" \
     "${common[@]}" \
     --inner-fold "$inner_fold" \
     --seed "$seed" \
@@ -424,11 +640,19 @@ done
 
 ensemble_name="final_nested_reaction_norm_${SCENARIO}_outer${OUTER_FOLD}"
 ensemble_dir="$OUTER_MODELS_DIR/$ensemble_name"
+support_amendment_args=()
+if [[ -n "$SUPPORT_AMENDMENT" ]]; then
+  support_amendment_args=(
+    --support-amendment "$SUPPORT_AMENDMENT"
+    --outer-protocol "$OUTER_PROTOCOL"
+  )
+fi
 "$PYTHON" -m server_training_pipeline.ensemble_nested_outer_predictions \
   --models-root "$OUTER_MODELS_DIR" \
   --run-glob "nested_outer_member_reaction_norm_${SCENARIO}_outer${OUTER_FOLD}_inner*" \
   --expected-inner-folds "$MEMBER_COUNT" \
   --support-policy "$SUPPORT_POLICY" \
+  "${support_amendment_args[@]}" \
   --out-dir "$ensemble_dir" \
   --prefix "$ensemble_name"
 

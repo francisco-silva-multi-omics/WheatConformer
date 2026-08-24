@@ -18,6 +18,10 @@ def main() -> None:
     parser.add_argument("--environment-architecture-protocol", type=Path)
     parser.add_argument("--environment-architecture")
     parser.add_argument("--environment-design-certification", type=Path)
+    parser.add_argument("--loss-balance-protocol", type=Path)
+    parser.add_argument("--loss-balance-candidate")
+    parser.add_argument("--trial-hierarchy-protocol", type=Path)
+    parser.add_argument("--trial-hierarchy-candidate")
     parser.add_argument(
         "--stage",
         choices=["inner_selection", "outer_evaluation"],
@@ -167,6 +171,116 @@ def main() -> None:
                     and file_sha256(path) == artifact.get("sha256")
                     and design_metadata.get(metadata_key) == artifact.get("sha256")
                 )
+    if (args.loss_balance_protocol is None) != (args.loss_balance_candidate is None):
+        raise SystemExit(
+            "Loss-balance verification requires both its protocol and candidate"
+        )
+    if args.loss_balance_protocol is not None:
+        loss_protocol = json.loads(
+            args.loss_balance_protocol.read_text(encoding="utf-8")
+        )
+        loss_candidates = {
+            str(value["name"]): value
+            for value in loss_protocol.get("candidates", [])
+        }
+        if args.loss_balance_candidate not in loss_candidates:
+            raise SystemExit("Loss-balance candidate is absent from its protocol")
+        loss_metadata = metadata.get("loss_balance", {})
+        diagnostics_path = args.run_dir / f"{args.prefix}_loss_weight_diagnostics.tsv"
+        checks.update(
+            {
+                "loss_balance_protocol_status": loss_protocol.get("status")
+                == "frozen_before_inner_validation",
+                "loss_balance_candidate": loss_metadata.get("candidate")
+                == args.loss_balance_candidate,
+                "loss_balance_policy": loss_metadata.get("policy")
+                == loss_candidates[args.loss_balance_candidate],
+                "loss_balance_protocol": loss_metadata.get("protocol_sha256")
+                == file_sha256(args.loss_balance_protocol),
+                "loss_balance_fit_partition": loss_metadata.get(
+                    "count_fit_partition"
+                )
+                == "inner_training_only",
+                "loss_balance_recovery_status_unused": loss_metadata.get(
+                    "recovery_status_used_for_weighting"
+                )
+                is False,
+                "loss_balance_outer_unread": loss_metadata.get(
+                    "outer_test_metrics_read"
+                )
+                is False,
+                "loss_balance_final_holdout_unread": loss_metadata.get(
+                    "final_holdout_outcomes_read"
+                )
+                is False,
+                "loss_balance_diagnostics": diagnostics_path.is_file()
+                and loss_metadata.get("diagnostics_sha256")
+                == file_sha256(diagnostics_path),
+            }
+        )
+    if (args.trial_hierarchy_protocol is None) != (
+        args.trial_hierarchy_candidate is None
+    ):
+        raise SystemExit(
+            "Trial-hierarchy verification requires both its protocol and candidate"
+        )
+    if args.trial_hierarchy_protocol is not None:
+        hierarchy_protocol = json.loads(
+            args.trial_hierarchy_protocol.read_text(encoding="utf-8")
+        )
+        hierarchy_candidates = {
+            str(value["name"]): value
+            for value in hierarchy_protocol.get(
+                "hierarchy_candidates", hierarchy_protocol.get("candidates", [])
+            )
+        }
+        if args.trial_hierarchy_candidate not in hierarchy_candidates:
+            raise SystemExit("Trial-hierarchy candidate is absent from its protocol")
+        hierarchy_metadata = metadata.get("trial_hierarchy", {})
+        support_path = args.run_dir / f"{args.prefix}_trial_hierarchy_support.tsv"
+        checks.update(
+            {
+                "trial_hierarchy_protocol_status": hierarchy_protocol.get("status")
+                == (
+                    "frozen_before_inner_validation"
+                    if args.stage == "inner_selection"
+                    else "frozen_after_inner_validation_before_outer_test"
+                ),
+                "trial_hierarchy_candidate": hierarchy_metadata.get("candidate")
+                == args.trial_hierarchy_candidate,
+                "trial_hierarchy_contract": hierarchy_metadata.get(
+                    "candidate_contract"
+                )
+                == hierarchy_candidates[args.trial_hierarchy_candidate],
+                "trial_hierarchy_protocol": hierarchy_metadata.get(
+                    "protocol_sha256"
+                )
+                == file_sha256(args.trial_hierarchy_protocol),
+                "trial_hierarchy_fit_partition": hierarchy_metadata.get(
+                    "support_fit_partition"
+                )
+                == "inner_training_only",
+                "trial_hierarchy_support_phenotype_blind": hierarchy_metadata.get(
+                    "phenotype_values_used_for_support"
+                )
+                is False,
+                "trial_hierarchy_unseen_policy": hierarchy_metadata.get(
+                    "unseen_entity_policy"
+                )
+                == "zero_effect",
+                "trial_hierarchy_outer_unread": hierarchy_metadata.get(
+                    "outer_test_metrics_read"
+                )
+                is False,
+                "trial_hierarchy_final_holdout_unread": hierarchy_metadata.get(
+                    "final_holdout_outcomes_read"
+                )
+                is False,
+                "trial_hierarchy_support": support_path.is_file()
+                and hierarchy_metadata.get("support_sha256")
+                == file_sha256(support_path),
+            }
+        )
     protected_rows = int(
         preprocessing.get("protected_outcome_rows_cleared_before_preprocessing", 0)
     )
@@ -194,8 +308,9 @@ def main() -> None:
         environment_lock = json.loads(
             args.environment_selection_lock.read_text(encoding="utf-8")
         )
-        checks.update(
-            {
+        route = outer.get("scenario_routes", {}).get(args.scenario)
+        routed = isinstance(route, dict)
+        outer_checks = {
                 "outer_test_metrics_read": metadata.get("outer_test_metrics_read")
                 is True,
                 "outer_protocol": metadata.get("outer_evaluation_protocol", {}).get(
@@ -206,7 +321,7 @@ def main() -> None:
                     "sha256"
                 )
                 == file_sha256(args.reaction_selection_lock),
-                "selected_candidate": args.candidate
+                "selected_candidate": reaction_candidate
                 == outer.get("selected_candidate")
                 == lock.get("selected_candidate"),
                 "selection_lock_pass": lock.get("status") == "PASS"
@@ -223,7 +338,26 @@ def main() -> None:
                 == environment_lock.get("selected_environment_architecture"),
                 "protected_outcomes_not_mutated": protected_rows == 0,
             }
-        )
+        if routed:
+            outer_checks.update(
+                {
+                    "routed_hierarchy_candidate": args.candidate
+                    == route.get("trial_hierarchy_candidate"),
+                    "routed_reaction_candidate": reaction_candidate
+                    == route.get("reaction_candidate"),
+                    "routed_environment_architecture": environment_candidate_name
+                    == route.get("environment_architecture"),
+                    "selection_lock_routes": lock.get("scenario_routes")
+                    == outer.get("scenario_routes"),
+                    "hierarchy_protocol_is_outer_protocol": args.trial_hierarchy_protocol
+                    is not None
+                    and file_sha256(args.trial_hierarchy_protocol)
+                    == file_sha256(args.outer_evaluation_protocol),
+                }
+            )
+        else:
+            outer_checks["unrouted_candidate"] = args.candidate == reaction_candidate
+        checks.update(outer_checks)
         if environment_candidate is not None and bool(
             environment_candidate.get("environment_design_required", False)
         ):

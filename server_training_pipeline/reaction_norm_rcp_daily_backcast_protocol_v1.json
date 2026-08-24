@@ -1,0 +1,54 @@
+{
+  "protocol_version": "reaction_norm_rcp_daily_backcast_v1",
+  "status": "frozen_before_daily_backcast_fetch",
+  "selection_data": "certified_environment_request_identifiers_only",
+  "phenotype_values_allowed": false,
+  "outer_test_environment_identifiers_allowed": false,
+  "outer_test_outcomes_allowed": false,
+  "outer_test_metrics_allowed": false,
+  "final_holdout_outcomes_allowed": false,
+  "model_selection_allowed": false,
+  "future_covariate_matrices_allowed": false,
+  "rcp_predictions_allowed": false,
+  "api": {
+    "provider": "Open-Meteo",
+    "endpoint": "https://archive-api.open-meteo.com/v1/archive",
+    "model": "era5",
+    "timezone": "GMT",
+    "coverage_start_date": "1940-01-01",
+    "date_clipping_allowed": false,
+    "precipitation_unit": "mm",
+    "daily_variables": {
+      "pr": "precipitation_sum",
+      "et0": "et0_fao_evapotranspiration"
+    },
+    "hourly_variables": {
+      "soil_moisture_0_7": "soil_moisture_0_to_7cm",
+      "soil_moisture_7_28": "soil_moisture_7_to_28cm"
+    }
+  },
+  "response_contract": {
+    "minimum_expected_date_coverage_fraction": 0.98,
+    "duplicate_dates_allowed": false,
+    "nonfinite_precipitation_allowed": false,
+    "nonfinite_et0_allowed_when_requested": false,
+    "soil_moisture_is_optional": true,
+    "one_cache_file_per_request_id": true,
+    "cache_format": "parquet"
+  },
+  "execution": {
+    "resume_required": true,
+    "bounded_pilot_default_requests": 25,
+    "default_workers": 2,
+    "default_timeout_seconds": 120,
+    "default_retries": 5,
+    "default_retry_sleep_seconds": 2.0
+  },
+  "completion_policy": {
+    "all_ready_unique_requests_required_before_reconstruction": true,
+    "out_of_coverage_requests_must_be_reported": true,
+    "failed_requests_must_not_be_imputed": true,
+    "daily_fetch_does_not_authorize_future_population": true,
+    "daily_fetch_does_not_generate_rcp_matrices_or_predictions": true
+  }
+}

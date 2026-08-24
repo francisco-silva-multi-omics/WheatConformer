@@ -90,6 +90,15 @@ def main() -> None:
     parser.add_argument("--weight-min-effective-sample-fraction", type=float, default=0.0)
     parser.add_argument("--weight-max-top-1pct-share", type=float, default=1.0)
     parser.add_argument("--write-tsv", action="store_true")
+    parser.add_argument(
+        "--canonicalize-panel-sample-id",
+        action="store_true",
+        help=(
+            "Use the certified compact genotype-order ID as panel_sample_id for "
+            "grouped split assignment, preserving any incoming value as "
+            "source_panel_sample_id."
+        ),
+    )
     args = parser.parse_args()
 
     root = args.root.resolve()
@@ -178,6 +187,12 @@ def main() -> None:
     observations["env_compact_index"] = observations["env_compact_index"].astype(np.int32)
     observations["genotype_id"] = observations["geno_compact_index"].map(g_compact_to_id)
     observations["environment_id"] = observations["env_compact_index"].map(e_compact_to_id)
+    if args.canonicalize_panel_sample_id:
+        if "panel_sample_id" in observations.columns:
+            observations["source_panel_sample_id"] = observations[
+                "panel_sample_id"
+            ]
+        observations["panel_sample_id"] = observations["genotype_id"]
 
     duplicate_ids = observations["canonical_observation_id"].fillna("").astype(str).duplicated()
     if bool(duplicate_ids.any()):
@@ -237,6 +252,11 @@ def main() -> None:
             "minimum_effective_sample_fraction": args.weight_min_effective_sample_fraction,
             "maximum_top_1pct_weight_share": args.weight_max_top_1pct_share,
         },
+        "panel_sample_id_policy": (
+            "certified_compact_genotype_order_id"
+            if args.canonicalize_panel_sample_id
+            else "source_observation_value"
+        ),
     }
     (out_dir / f"{args.out_prefix}_lineage.json").write_text(
         json.dumps(lineage, indent=2), encoding="utf-8"

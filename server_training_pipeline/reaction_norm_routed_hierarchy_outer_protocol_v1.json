@@ -1,0 +1,211 @@
+{
+  "protocol_version": "multitrait_reaction_norm_routed_hierarchy_outer_v1",
+  "status": "frozen_after_inner_validation_before_outer_test",
+  "frozen_on": "2026-07-28",
+  "selection_data": "completed_inner_validation_only_with_identifier_routing",
+  "inner_validation_phenotype_values_read": true,
+  "outer_test_metrics_read_at_freeze": false,
+  "outer_test_metrics_used_for_routing": false,
+  "final_holdout_outcomes_read": false,
+  "inner_reaction_protocol_version": "multitrait_reaction_norm_v1",
+  "inner_reaction_protocol_sha256": "90080ab003a0f21dfe4c8bee780ae0f12f72da49a13236543e506b0905f38bfd",
+  "environment_architecture_protocol_version": "reaction_norm_environment_v1",
+  "environment_architecture_protocol_sha256": "d5fd09a7b3de568ef39fd5a8a15af2bd5cb5b7cdde8e4354ab17d88037d74b4c",
+  "evaluation_protocol_version": "reaction_norm_trial_hierarchy_development_v1",
+  "evaluation_protocol_sha256": "8a70e03e5943cf8b50350fa5e84a7311efa54f29ea9901697e34975dedd6eadf",
+  "selected_candidate": "reaction_norm_identity_covariance",
+  "selected_environment_architecture": "explicit_E_REACTION_NORM_V1",
+  "selected_model_label": "multitrait_reaction_norm_routed_hierarchy_v1_frozen",
+  "selected_configuration": {
+    "max_rank_genotype": 128,
+    "max_rank_environment": 64,
+    "reaction_rank": 32,
+    "trait_covariance_shrinkage": 1.0,
+    "trait_covariance_minimum_pairs": 20,
+    "ridge_penalty": 0.0001,
+    "residual_scale_floor": 0.05,
+    "epochs": 200,
+    "batch_size": 8192,
+    "learning_rate": 0.001,
+    "patience": 25,
+    "intra_op_threads": 16,
+    "inter_op_threads": 2
+  },
+  "required_kernels": [
+    "K_A_CANONICAL_V3",
+    "K_E_GEO",
+    "K_E_WEATHER",
+    "K_E_STRESS",
+    "K_E_MGMT",
+    "K_E_TGW_V2",
+    "K_E_REACTION_NORM_V1"
+  ],
+  "hierarchy_candidates": [
+    {
+      "name": "current_reaction_norm",
+      "trial_effect_enabled": false,
+      "environment_intercept_enabled": false,
+      "minimum_trial_trait_training_rows": 0,
+      "minimum_environment_trait_training_rows": 0,
+      "trial_penalty": 0.0,
+      "environment_penalty": 0.0
+    },
+    {
+      "name": "trial_and_environment_intercepts",
+      "trial_effect_enabled": true,
+      "environment_intercept_enabled": true,
+      "minimum_trial_trait_training_rows": 20,
+      "minimum_environment_trait_training_rows": 10,
+      "trial_penalty": 0.01,
+      "environment_penalty": 0.05
+    }
+  ],
+  "scenario_routes": {
+    "unseen_environments": {
+      "reaction_candidate": "reaction_norm_identity_covariance",
+      "environment_architecture": "explicit_E_REACTION_NORM_V1",
+      "trial_hierarchy_candidate": "current_reaction_norm",
+      "routing_basis": "environment_id_not_available_in_training",
+      "future_environment_compatible": true
+    },
+    "unseen_genotypes": {
+      "reaction_candidate": "reaction_norm_identity_covariance",
+      "environment_architecture": "explicit_E_REACTION_NORM_V1",
+      "trial_hierarchy_candidate": "trial_and_environment_intercepts",
+      "routing_basis": "environment_id_available_in_training",
+      "future_environment_compatible": false
+    },
+    "unseen_genotypes_and_environments": {
+      "reaction_candidate": "reaction_norm_identity_covariance",
+      "environment_architecture": "explicit_E_REACTION_NORM_V1",
+      "trial_hierarchy_candidate": "current_reaction_norm",
+      "routing_basis": "environment_id_not_available_in_training",
+      "future_environment_compatible": true
+    },
+    "temporal_holdout": {
+      "reaction_candidate": "reaction_norm_identity_covariance",
+      "environment_architecture": "explicit_E_REACTION_NORM_V1",
+      "trial_hierarchy_candidate": "current_reaction_norm",
+      "routing_basis": "future_cycle_transfer",
+      "future_environment_compatible": true
+    },
+    "country_holdout": {
+      "reaction_candidate": "reaction_norm_identity_covariance",
+      "environment_architecture": "explicit_E_REACTION_NORM_V1",
+      "trial_hierarchy_candidate": "current_reaction_norm",
+      "routing_basis": "country_environment_transfer",
+      "future_environment_compatible": true
+    }
+  },
+  "source_decisions": {
+    "known_environment_confirmation": {
+      "protocol_sha256": "cb752d529ac5a5c947bf01e9ce11fb66b8ec95336b7f40a108006426eababba2",
+      "phase": "confirmation",
+      "selected_candidate": "trial_and_environment_intercepts",
+      "paired_inner_fold_count": 15,
+      "required_artifact_sha256": {
+        "trial_hierarchy_inner_screen_runs.tsv": "3aac0f6fea2036ab9dfdac71fe793551771710e044f94473e2df433f1aa2d091",
+        "trial_hierarchy_inner_screen_paired_metrics.tsv": "c0938e7336219a46c9e12a345ed1b104a4541e743502319ad0b42f4bbf5bdb06",
+        "trial_hierarchy_inner_screen_trait_metrics.tsv": "eb9fa22bf65243e8732b3facf795b7272654cbb0a9df305e0ae67e8ae614aa5b",
+        "trial_hierarchy_inner_screen_subset_metrics.tsv": "6834c9a7533257aa27ec969dd8061c3476e5d2e4139b713ffd3dd469645a37f9",
+        "trial_hierarchy_inner_screen_trait_summary.tsv": "29d5e0236da05991bb4c801226d8fc86d6eb0db32adff5db3e6c097d670525eb",
+        "trial_hierarchy_inner_screen_subset_summary.tsv": "fc586c783cdca998940c9be82e579682b5c9675bb136d91231c20731ccdc1ed5",
+        "trial_hierarchy_inner_screen_decision.tsv": "91200b8634f3946fd5de551ba9b5c7fecc4d6b20735609a4b3d576b6f1773f63"
+      }
+    },
+    "environment_transfer_guard": {
+      "protocol_sha256": "28fb2768788a22f99b1e399d909fe8a5718bff7b0f1f4508de83965d325038e0",
+      "phase": "phase_1",
+      "selected_candidate": "current_reaction_norm",
+      "paired_inner_fold_count": 12,
+      "required_artifact_sha256": {
+        "trial_hierarchy_inner_screen_runs.tsv": "796c7555eeed24be5044ddd665f0e17087fa9fde39e8e0b963039b8a00ad593c",
+        "trial_hierarchy_inner_screen_paired_metrics.tsv": "cb971eb0e31b585b80750644a41b058974b34fd08259e297dd8af448333ce0f6",
+        "trial_hierarchy_inner_screen_trait_metrics.tsv": "2cdf4d5bf2727ba1aae5a65b3790a6084d572a3938b03623d2867f7f60695e90",
+        "trial_hierarchy_inner_screen_subset_metrics.tsv": "1379cb1e8f7770c1f9254b85a84f52313b3a4c0ca77b8a7744fa5dfd11c364f7",
+        "trial_hierarchy_inner_screen_trait_summary.tsv": "9d46260e0072ae1d2feb671f55a3f2ce317281cc16fc18ea2b2b16074b7cc09a",
+        "trial_hierarchy_inner_screen_subset_summary.tsv": "78c7f611151872740648e8c927c80319c049af939434484516024f4cde614a4e",
+        "trial_hierarchy_inner_screen_scenario_summary.tsv": "7207bcb8948075ca41b30117aa846bf3a0b7e9d78f040d4123f60c0bf39a06d5",
+        "trial_hierarchy_inner_screen_decision.tsv": "4e25f9a93cb3560fa44075d1e0688ebcd2e16831209c393b80ab0b013e3f5368"
+      }
+    }
+  },
+  "environment_architecture_contract": {
+    "reaction_feature_mode": "explicit_environment_axes",
+    "kernel_interaction_allowlist": ["K_E_TGW_V2"],
+    "environment_design_required": true,
+    "environment_preprocessing_fit_partition": "outer_training_environments_only",
+    "climatology_donor_partition": "outer_training_environments_only",
+    "weather_windows": "fixed_sowing_relative_only",
+    "actual_target_phenology_dates_allowed": false,
+    "generic_environment_main_effects_remain_separate": true,
+    "K_E_TGW_V2_retained": true
+  },
+  "traits": [
+    "DAYS_TO_HEADING",
+    "DAYS_TO_MATURITY",
+    "PLANT_HEIGHT",
+    "GRAIN_YIELD",
+    "1000_GRAIN_WEIGHT",
+    "ABOVE_GROUND_BIOMASS",
+    "TEST_WEIGHT"
+  ],
+  "trait_reporting_policy": {
+    "ABOVE_GROUND_BIOMASS": "exploratory_sparse_environment_support",
+    "TEST_WEIGHT": "exploratory_prior_outer_instability",
+    "default": "primary_quantitative_result"
+  },
+  "scenarios": {
+    "unseen_environments": 5,
+    "unseen_genotypes": 5,
+    "unseen_genotypes_and_environments": 5,
+    "temporal_holdout": 3,
+    "country_holdout": 5
+  },
+  "scenario_seed_offsets": {
+    "unseen_environments": 0,
+    "unseen_genotypes": 10000,
+    "unseen_genotypes_and_environments": 20000,
+    "temporal_holdout": 30000,
+    "country_holdout": 40000
+  },
+  "outer_member_policy": {
+    "member_count": 3,
+    "base_seed": 96001,
+    "member_seed_stride": 10,
+    "outer_fold_seed_stride": 100,
+    "training_partition": "inner_training",
+    "early_stopping_partition": "inner_validation",
+    "outer_test_combination": "arithmetic_mean_over_structurally_eligible_members",
+    "support_policy_sha256": "991d313f25692d5a07af652c979287de48f837956091f87ee1904758ff6f9c62"
+  },
+  "implementation": {
+    "hierarchy_trainer_sha256": "0314319c0de9e7f6e3d7757b0a9d3aa242cd5602f4937e457583dbe78bd2cd8c",
+    "base_trainer_sha256": "1de81976c65e315f73cf256e7c055ad583742344d915b61c0e2eeb0837752a8b",
+    "factorization_sha256": "7af3d084b692e96cac4832bcbc8a71a7f2ea1ea86cd23bdb1d17d1f1bc2f64df",
+    "run_verifier_sha256": "7e9422f6e3585e2096a4e55c45e863dfc0d61708913489fbf867801b9d2b4f1d",
+    "outer_verifier_sha256": "6d158c38f5cd459fb0954e11773549eaced5ba6ff9350e7574f1f849abb297fc"
+  },
+  "environment_implementation": {
+    "builder_sha256": "c6467483f1f1f63122a1c349268d977e2256a2036e2469c835f17ba2e07cf494",
+    "certifier_sha256": "7d1194b9403cbc1b91d4dd097b26a0ed2a95c3a828800ba7422b3552211031e2"
+  },
+  "model_contract": {
+    "identifier_only_routing": true,
+    "no_further_hyperparameter_selection": true,
+    "no_further_environment_architecture_selection": true,
+    "no_further_hierarchy_selection": true,
+    "no_trait_removal_after_inner_validation": true,
+    "outer_test_used_for_training_or_early_stopping": false,
+    "outer_test_used_only_for_locked_reporting": true,
+    "hierarchy_support_fit_partition": "inner_training_only",
+    "environment_representation_fit_partition": "outer_training_environments_only",
+    "unseen_hierarchy_ids_use_zero_effect": true,
+    "future_environment_route": "current_reaction_norm",
+    "factorization_mode": "train_nystrom",
+    "kernel_centering": true,
+    "outer_fold_count": 23,
+    "outer_model_fit_count": 69,
+    "final_holdout_available": false
+  }
+}

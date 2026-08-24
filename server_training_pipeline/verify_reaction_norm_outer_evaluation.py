@@ -59,6 +59,8 @@ def main() -> None:
     required_kernels = set(outer["required_kernels"])
     selected_candidate = str(outer["selected_candidate"])
     selected_model_label = str(outer["selected_model_label"])
+    scenario_routes = outer.get("scenario_routes", {})
+    routed_protocol = bool(scenario_routes)
     expected_members = int(outer["outer_member_policy"]["member_count"])
     expected_grid = {
         (scenario, fold)
@@ -131,6 +133,16 @@ def main() -> None:
             "final_holdout_available"
         )
         is False,
+        "scenario_routes_complete": not routed_protocol
+        or set(scenario_routes) == set(outer["scenarios"]),
+        "selection_lock_routes": not routed_protocol
+        or lock.get("scenario_routes") == scenario_routes,
+        "implementation_trainer": not routed_protocol
+        or outer.get("implementation", {}).get("hierarchy_trainer_sha256")
+        == trainer_sha256,
+        "implementation_factorization": not routed_protocol
+        or outer.get("implementation", {}).get("factorization_sha256")
+        == factorization_sha256,
     }
 
     member_rows: list[dict[str, object]] = []
@@ -150,11 +162,18 @@ def main() -> None:
         provenance_status, provenance_detail = classify_metadata(
             metadata, trainer_sha256, factorization_sha256
         )
+        route = scenario_routes.get(scenario, {})
+        hierarchy = metadata.get("trial_hierarchy", {})
         local_checks = {
             "known_grid": (scenario, outer_fold) in expected_grid,
             "inner_fold": 0 <= inner_fold < expected_members,
             "stage": metadata.get("evaluation_stage") == "outer_evaluation",
-            "candidate": metadata.get("hyperparameter_label") == selected_candidate,
+            "candidate": metadata.get("hyperparameter_label")
+            == (
+                route.get("trial_hierarchy_candidate")
+                if routed_protocol
+                else selected_candidate
+            ),
             "model_label": metadata.get("model_label") == selected_model_label,
             "kernels": set(metadata.get("active_kernels", [])) == required_kernels,
             "outer_protocol": metadata.get("outer_evaluation_protocol", {}).get(
@@ -184,6 +203,19 @@ def main() -> None:
             is False,
             "provenance": provenance_status in VALID_STATUSES,
         }
+        if routed_protocol:
+            local_checks.update(
+                {
+                    "reaction_candidate": metadata.get("reaction_candidate")
+                    == selected_candidate
+                    == route.get("reaction_candidate"),
+                    "hierarchy_candidate": hierarchy.get("candidate")
+                    == route.get("trial_hierarchy_candidate"),
+                    "hierarchy_protocol": hierarchy.get("protocol_sha256")
+                    == outer_sha256,
+                    "scenario_route": hierarchy.get("scenario_route") == route,
+                }
+            )
         predictions = read_table(prediction_path)
         split_values = set(predictions["split"].astype(str))
         local_checks["prediction_splits"] = split_values == {"val", "test"}
@@ -235,13 +267,20 @@ def main() -> None:
         scenario = str(external.get("scenario", ""))
         outer_fold = int(external.get("outer_fold", -1))
         key = (scenario, outer_fold)
+        route = scenario_routes.get(scenario, {})
+        hierarchy = metadata.get("trial_hierarchy", {})
         predictions = read_table(prediction_path)
         test = predictions[predictions["split"].astype(str).eq("test")].copy()
         local_checks = {
             "known_grid": key in expected_grid,
             "unique_grid": key not in ensemble_grid,
             "stage": metadata.get("evaluation_stage") == "outer_evaluation",
-            "candidate": metadata.get("hyperparameter_label") == selected_candidate,
+            "candidate": metadata.get("hyperparameter_label")
+            == (
+                route.get("trial_hierarchy_candidate")
+                if routed_protocol
+                else selected_candidate
+            ),
             "model_label": metadata.get("model_label") == selected_model_label,
             "ensemble_members": int(ensemble.get("member_count", -1))
             == expected_members,
@@ -261,6 +300,18 @@ def main() -> None:
                 .all()
             ),
         }
+        if routed_protocol:
+            local_checks.update(
+                {
+                    "reaction_candidate": metadata.get("reaction_candidate")
+                    == selected_candidate
+                    == route.get("reaction_candidate"),
+                    "hierarchy_candidate": hierarchy.get("candidate")
+                    == route.get("trial_hierarchy_candidate"),
+                    "hierarchy_protocol": hierarchy.get("protocol_sha256")
+                    == outer_sha256,
+                }
+            )
         failed = sorted(name for name, passed in local_checks.items() if not passed)
         if failed:
             raise SystemExit(f"Outer ensemble failed {failed}: {run_dir}")
@@ -344,6 +395,7 @@ def main() -> None:
         "outer_test_metrics_used_for_selection": False,
         "final_holdout_outcomes_read": False,
         "selected_candidate": selected_candidate,
+        "scenario_routes": scenario_routes,
         "scenario_count": len(outer["scenarios"]),
         "outer_fold_count": len(expected_grid),
         "outer_member_count": len(member_rows),
