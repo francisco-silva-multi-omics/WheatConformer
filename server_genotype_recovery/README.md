@@ -1,0 +1,182 @@
+# Recovered Genotype Panel Kernels
+
+This workflow exhaustively inventories genotype-linked identifiers under
+`GENOTYPIC_DATA`, resolves them against the canonical trial catalog, and builds
+separate platform-specific kernels for raw panels missed by the preview audit.
+
+It does not concatenate raw markers across platforms. Marker identity, allele
+coding, missingness, ascertainment, and platform effects differ between 80k,
+Seeds of Discovery DArTseq, and IWYP 35k. Each panel is parsed and certified
+independently, then exposed to the multi-trait model as an opt-in partial expert.
+
+## Supported Matrices
+
+| Platform | Matrix orientation | Trial-ID resolution |
+| --- | --- | --- |
+| `80k_hexaploid` | sample by marker Flapjack text | canonical aliases and explicit IDs |
+| `seeds_dartseq` | marker by sample text | `SampleIDvsGID_45610samples.txt` |
+| `iwyp35k` | marker by sample with IWYP preamble | GID preamble |
+| `dartag` | two numeric marker-by-sample batches | canonical GIDs in matrix headers |
+| `haplotype_blocks` | sample-by-block categorical haplotypes | canonical GID column |
+
+The `.flapjack` files in the Seeds and Mexican datasets are SQLite project
+containers. The genotype builder intentionally reads their text matrix mirrors;
+the exhaustive audit records the containers in its file inventory.
+
+## Server Execution
+
+```bash
+cd /DATA2/estancias/tesis_javier/model_DATA/genotipoXambiente
+export PYTHON="$HOME/tools/tf_wheat_cpu/bin/python"
+export WHEATCONFORMER_CODE_ROOT="$HOME/tools/WheatConformer"
+
+nohup bash scripts/run_genotypic_panel_recovery.sh . \
+  > logs/genotypic_panel_recovery.nohup.log 2>&1 &
+```
+
+The runner prepends `WHEATCONFORMER_CODE_ROOT` and invokes Python in safe-path
+mode. This prevents older Python packages copied into the data directory from
+shadowing the selected Git checkout.
+
+All requested platform inputs are preflighted before exhaustive scanning or
+kernel construction. Default inputs may be relocated below `GENOTYPIC_DATA`
+only when an exact basename resolves uniquely. DArTAG numeric CSVs may remain
+gzip-compressed; the parser reads `.csv.gz` directly. Missing or ambiguous
+sources remain hard failures and are never silently skipped.
+
+Run or retry selected panels without repeating the others:
+
+```bash
+PLATFORMS="80k_hexaploid" \
+  nohup bash scripts/run_genotypic_panel_recovery.sh . \
+  > logs/genotypic_panel_recovery_80k.nohup.log 2>&1 &
+
+PLATFORMS="seeds_dartseq iwyp35k" SAVE_DOSAGE=0 \
+  nohup bash scripts/run_genotypic_panel_recovery.sh . \
+  > logs/genotypic_panel_recovery_seeds_iwyp.nohup.log 2>&1 &
+```
+
+The full run writes exhaustive match evidence, per-platform sample and marker
+QC, linear VanRaden and Gaussian/RBF kernels, retained marker/sample orders,
+kernel certification, and
+`genotype_panels/recovered/recovered_genotype_kernel_manifest.tsv`.
+
+Before scanning platforms, the runner rebuilds its canonical trial-GID catalog
+from `metadata_outputs/all_trials_genotype_manifest_resolved.tsv`. It therefore
+does not depend on a generated forensic CSV being present at a fixed path. If a
+compatible `canonical_genotype_mapping_audited.csv` exists anywhere below
+`audit/`, the latest compatible copy contributes only the historical "missed by
+preview audit" flag. Selected source paths and hashes are recorded in
+`audit/genotypic_recovery/canonical_genotype_catalog_provenance.json`.
+
+Set `CANONICAL_GENOTYPE_CATALOG` to require a specific prepared catalog, or
+`PRIOR_GENOTYPE_AUDIT_CATALOG` to require a specific compatible forensic
+catalog for the historical comparison.
+
+Recovered kernels are `enabled_default=False`. They must pass ledger alignment
+certification and multi-seed validation ablation before being admitted to the
+quantitative baseline.
+
+The large CIMMYT bread-wheat HapMap file is already the source of the existing
+`K_G_HMP_LINEAR` and `K_G_HMP_RBF` experts. It is not rebuilt as a nominally
+new platform. Likewise, the existing SAWYT GBS files remain the source of
+`K_G_GBS_LINEAR` and `K_G_GBS_RBF`. Identifier counts from MAS spreadsheets or
+phenotype workbooks are not treated as marker-matrix coverage.
+
+After kernel construction, the runner audits every candidate against the
+sealed v5 entity assignments. The audit uses identifiers and inner-training
+support only; it does not read phenotype values, outer-test metrics, or final
+holdout outcomes. Outputs under `model_kernels/genomic_candidate_screen_v1`
+include development coverage, fold-level support, kernel QC, and pairwise
+kernel correlations.
+
+Phase one compares each supported linear candidate separately against the two
+reference architectures. It never fits the generated "all supported linear"
+arm. Candidate pairs with at least 30 shared genotypes and absolute sampled
+kernel correlation of at least 0.90 are recorded in
+`genomic_candidate_high_redundancy_pairs.tsv`; such candidates must compete
+individually before any combination is considered. Combination and RBF arms are
+deferred to later inner-validation phases.
+
+The quantitative screen governs only whether a recovered relationship kernel
+is admitted as a standalone `K_G` expert. A negative result does not discard a
+certified marker panel. Certified panels remain available for marker-to-graph
+projection and may expand the set of genotypes with directly supported
+regulatory embeddings and `K_z` membership. The support audit records this
+independent retention rule in
+`genomic_candidate_regulatory_retention_policy.tsv` and in its provenance
+JSON.
+
+Direct marker/path-derived embeddings must be labeled
+`observed_marker_supported_sequence`. If pedigree `K_A` is later used to
+propagate embeddings to ungenotyped entries, those values must be labeled
+`imputed_pedigree`, carry a confidence score and gating decision, and remain
+distinguishable from observed genotype-specific sequence. Pedigree propagation
+must never create nominal marker calls or graph paths.
+
+## Default QC
+
+- sample missingness at most `0.20`;
+- sample heterozygosity at most `0.20`;
+- marker missingness at most `0.20`;
+- marker heterozygosity at most `0.20`;
+- minor allele frequency at least `0.01`;
+- duplicate canonical GIDs resolved by lowest missingness, then lowest
+  heterozygosity, then stable source-sample order;
+- missing calls mean-imputed only after QC for VanRaden construction;
+- linear kernel mean-diagonal scaled;
+- RBF gamma recorded from the median positive pairwise distance heuristic.
+
+The DArTAG numeric export is the exception to the sample-heterozygosity rule:
+its polyploid targeted calls contain a high fraction of code `1`, so sample
+heterozygosity is audited but not used for exclusion (`1.0` maximum). The
+marker-level heterozygosity threshold remains `0.20`, which removes unstable
+or pseudo-heterozygous loci before VanRaden construction.
+
+DArTAG duplicate GIDs are resolved by sample QC after writing cross-batch call
+concordance. Haplotype blocks use an equal-weight, centered categorical-state
+kernel after sample/block missingness and common-state filtering; they are not
+forced into diploid SNP dosage coding.
+
+## Development-Only Screening
+
+Do not modify or reuse the completed v5 outer-test results to choose these
+experts. First run the support audit, then screen eligible candidates only in
+inner grouped validation folds. Freeze the accepted architecture under a new
+protocol version before repeating outer evaluation. Keep the final holdout
+sealed throughout discovery.
+
+Run one frozen outer-training context at a time; this command creates only
+inner-selection predictions and metrics:
+
+```bash
+PYTHON="$HOME/tools/tf_wheat_cpu/bin/python" \
+WHEATCONFORMER_CODE_ROOT="$HOME/tools/WheatConformer" \
+bash scripts/run_genomic_expert_inner_screen.sh \
+  /DATA2/estancias/tesis_javier/model_DATA/genotipoXambiente \
+  unseen_genotypes 0
+```
+
+Repeat across the immutable outer-training contexts for
+`unseen_environments`, `unseen_genotypes`,
+`unseen_genotypes_and_environments`, `temporal_holdout`, and
+`country_holdout`. The runner consumes only plan rows marked `ready` in
+`genomic_candidate_ablation_plan.tsv`; RBF candidates and single-step `H` are
+deferred by default. It writes no outer-test ensemble.
+
+After completing every declared outer-training context for a scenario,
+aggregate the paired inner-validation results without reading outer tests:
+
+```bash
+python -P -m server_genotype_recovery.summarize_inner_screen \
+  --root . \
+  --scenario unseen_genotypes \
+  --expected-outer-folds 5 \
+  --expected-inner-folds 3
+```
+
+The summary verifies the complete architecture/fold grid, matched seeds and
+matched training configurations. Quantitative rejection never changes the
+independent regulatory-panel retention policy.
+
+The RBF kernel is generated for ablation but is not enabled automatically.

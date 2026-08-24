@@ -71,7 +71,11 @@ def load_sample_order(path: Path, col: str) -> list[str]:
     order = pd.read_csv(path, sep="\t", dtype=str)
     if col not in order.columns:
         raise SystemExit(f"Order file {path} does not contain column {col}")
-    return [clean_id(x) for x in order[col] if clean_id(x)]
+    values = [clean_id(x) for x in order[col] if clean_id(x)]
+    duplicates = pd.Series(values)[pd.Series(values).duplicated(keep=False)].unique().tolist()
+    if duplicates:
+        raise SystemExit(f"Order file {path} contains duplicate IDs: {duplicates[:10]}")
+    return values
 
 
 def build_parent_table(args) -> pd.DataFrame:
@@ -82,6 +86,11 @@ def build_parent_table(args) -> pd.DataFrame:
     p1_col = args.parent1_col or first_existing(df.columns.tolist(), P1_CANDIDATES)
     p2_col = args.parent2_col or first_existing(df.columns.tolist(), P2_CANDIDATES)
     cross_col = args.cross_col or first_existing(df.columns.tolist(), CROSS_CANDIDATES)
+    require_explicit_parents = bool(getattr(args, "require_explicit_parent_columns", False))
+    if require_explicit_parents and not (p1_col or p2_col):
+        raise SystemExit(
+            "Explicit canonical parent columns are required; cross-name parsing is disabled for audited K_A construction"
+        )
 
     rows = []
     for row in df.to_dict("records"):
@@ -90,7 +99,7 @@ def build_parent_table(args) -> pd.DataFrame:
             continue
         p1 = clean_id(row[p1_col]) if p1_col else ""
         p2 = clean_id(row[p2_col]) if p2_col else ""
-        if (not p1 or not p2) and cross_col:
+        if (not p1 or not p2) and cross_col and not require_explicit_parents:
             cp1, cp2 = parse_cross(row[cross_col])
             p1 = p1 or cp1
             p2 = p2 or cp2
@@ -99,9 +108,42 @@ def build_parent_table(args) -> pd.DataFrame:
         if p2 == gid:
             p2 = ""
         rows.append({"sample_id": gid, "parent1": p1, "parent2": p2})
-    ped = pd.DataFrame(rows).drop_duplicates("sample_id", keep="first")
+    ped = pd.DataFrame(rows).drop_duplicates(["sample_id", "parent1", "parent2"])
     if ped.empty:
         raise SystemExit("No usable pedigree rows found")
+    conflicts = ped.groupby("sample_id", dropna=False).size()
+    conflicts = conflicts[conflicts > 1]
+    if not conflicts.empty:
+        conflict_rows = ped[ped["sample_id"].isin(conflicts.index)].sort_values(["sample_id", "parent1", "parent2"])
+        conflict_path = args.out_dir / "pedigree_conflicts.tsv"
+        conflict_rows.to_csv(conflict_path, sep="\t", index=False)
+        raise SystemExit(
+            f"Conflicting pedigree assignments for {len(conflicts)} sample IDs; "
+            f"review {conflict_path}. Examples: {conflicts.index[:10].tolist()}"
+        )
+    if bool(getattr(args, "require_parents_in_pedigree", False)):
+        sample_ids = set(ped["sample_id"])
+        parent_ids = set(ped["parent1"]) | set(ped["parent2"])
+        missing_parent_rows = sorted(parent_ids - sample_ids - {""})
+        if missing_parent_rows:
+            missing_path = args.out_dir / "pedigree_parents_missing_from_universe.tsv"
+            pd.DataFrame({"parent_id": missing_parent_rows}).to_csv(missing_path, sep="\t", index=False)
+            raise SystemExit(
+                f"{len(missing_parent_rows)} parent IDs are absent from the reviewed pedigree universe; "
+                f"review {missing_path}"
+            )
+    required_id_regex = getattr(args, "required_id_regex", None)
+    if required_id_regex:
+        pattern = re.compile(required_id_regex)
+        pedigree_ids = set(ped["sample_id"]) | set(ped["parent1"]) | set(ped["parent2"])
+        invalid_ids = sorted(value for value in pedigree_ids - {""} if not pattern.fullmatch(value))
+        if invalid_ids:
+            invalid_path = args.out_dir / "pedigree_noncanonical_ids.tsv"
+            pd.DataFrame({"pedigree_id": invalid_ids}).to_csv(invalid_path, sep="\t", index=False)
+            raise SystemExit(
+                f"{len(invalid_ids)} pedigree IDs do not match required pattern {required_id_regex!r}; "
+                f"review {invalid_path}"
+            )
     return ped
 
 
@@ -127,11 +169,10 @@ def additive_relationship(ped: pd.DataFrame, requested_order: list[str] | None) 
                 unresolved.remove(gid)
                 progressed = True
         if not progressed:
-            # Break pedigree cycles conservatively by treating one unresolved node as a founder.
-            gid = sorted(unresolved)[0]
-            parent_map[gid] = ("", "")
-            resolved.append(gid)
-            unresolved.remove(gid)
+            raise ValueError(
+                "Pedigree contains a cycle or unresolved parent dependency involving "
+                f"{sorted(unresolved)[:10]}"
+            )
 
     idx = {gid: i for i, gid in enumerate(resolved)}
     A = np.zeros((len(resolved), len(resolved)), dtype=np.float64)
@@ -189,6 +230,23 @@ def additive_relationship(ped: pd.DataFrame, requested_order: list[str] | None) 
     return A.astype(np.float32), resolved, qc
 
 
+def assert_relationship_valid(matrix: np.ndarray, order: list[str], sample_size: int = 1024) -> None:
+    if len(order) != len(set(order)):
+        raise ValueError("K_A order contains duplicate sample IDs")
+    if matrix.shape != (len(order), len(order)):
+        raise ValueError(f"K_A shape {matrix.shape} does not match order length {len(order)}")
+    if not np.isfinite(matrix).all():
+        raise ValueError("K_A contains nonfinite values")
+    symmetry_error = float(np.max(np.abs(matrix - matrix.T)))
+    if symmetry_error > 1e-6:
+        raise ValueError(f"K_A is asymmetric; max_abs_diff={symmetry_error}")
+    selected = np.linspace(0, len(order) - 1, min(len(order), sample_size), dtype=int)
+    block = np.asarray(matrix[np.ix_(selected, selected)], dtype=np.float64)
+    min_eigenvalue = float(np.linalg.eigvalsh((block + block.T) / 2.0).min())
+    if min_eigenvalue < -1e-5:
+        raise ValueError(f"K_A is materially non-PSD; sampled_min_eigenvalue={min_eigenvalue}")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Build additive pedigree relationship kernel K_A.")
     parser.add_argument("--pedigree-table", type=Path, required=True)
@@ -196,6 +254,20 @@ def main() -> None:
     parser.add_argument("--parent1-col")
     parser.add_argument("--parent2-col")
     parser.add_argument("--cross-col")
+    parser.add_argument(
+        "--require-explicit-parent-columns",
+        action="store_true",
+        help="Disable parent extraction from cross-name strings and require explicit parent columns.",
+    )
+    parser.add_argument(
+        "--require-parents-in-pedigree",
+        action="store_true",
+        help="Require every nonmissing parent ID to have a row in the reviewed pedigree table.",
+    )
+    parser.add_argument(
+        "--required-id-regex",
+        help="Optional full-match regular expression required for every nonmissing child and parent ID.",
+    )
     parser.add_argument("--sample-order", type=Path, help="Optional TSV order to force K_A sample order.")
     parser.add_argument("--sample-order-col", default="sample_id")
     parser.add_argument("--out-dir", type=Path, default=Path("genotype_panels/pedigree"))
@@ -213,8 +285,16 @@ def main() -> None:
             K = (K / mean_diag).astype(np.float32)
             qc.loc[len(qc)] = ["scaled_mean_diagonal", float(np.mean(np.diag(K)))]
 
+    assert_relationship_valid(K, order)
+
     np.save(args.out_dir / f"{args.prefix}.npy", K)
     pd.DataFrame({"sample_id": order}).to_csv(args.out_dir / f"{args.prefix}_sample_order.tsv", sep="\t", index=False)
+    pd.DataFrame({"row_index": np.arange(len(order)), "sample_id": order}).to_csv(
+        args.out_dir / f"{args.prefix}_row_order.tsv", sep="\t", index=False
+    )
+    pd.DataFrame({"column_index": np.arange(len(order)), "sample_id": order}).to_csv(
+        args.out_dir / f"{args.prefix}_column_order.tsv", sep="\t", index=False
+    )
     ped.to_csv(args.out_dir / "pedigree_parent_table.tsv", sep="\t", index=False)
     qc.to_csv(args.out_dir / f"{args.prefix}_qc.tsv", sep="\t", index=False)
     print(K.shape, K.dtype)

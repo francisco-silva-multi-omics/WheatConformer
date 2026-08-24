@@ -15,6 +15,12 @@ python -m pip install -r requirements/test.txt
 python -m pytest -q
 ```
 
+For the complete forensic audit, including figures and archive inspection:
+
+```bash
+python -m pip install -r requirements/audit.txt
+```
+
 Prepare raw folders manually:
 
 ```bash
@@ -68,6 +74,14 @@ conda create -n wheattrain -y python=3.11
 conda activate wheattrain
 python -m pip install -r requirements/training_tensorflow.txt
 bash scripts/03_run_training.sh
+```
+
+For the established Python 3.11 CPU environment using TensorFlow 2.15.1, use
+the pinned combined audit/training dependency set instead:
+
+```bash
+python -m pip install --upgrade --upgrade-strategy only-if-needed \
+  -r requirements/training_tensorflow_cpu.txt
 ```
 
 The original `scripts/03_run_training.sh` route is strictly one trait per

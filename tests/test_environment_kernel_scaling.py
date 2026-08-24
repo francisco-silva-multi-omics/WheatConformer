@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import shutil
 from pathlib import Path
 
@@ -68,5 +69,63 @@ def test_environment_kernel_main_writes_scaled_components_and_provenance(tmp_pat
     ]).issubset(weights.columns)
     assert np.isclose(weights["normalized_weight"].sum(), 1.0)
     assert (tmp_path / "qc_location_key_collisions.tsv").exists()
+    assert (tmp_path / "env_kernel_row_order.tsv").exists()
+    assert (tmp_path / "env_kernel_column_order.tsv").exists()
     assert np.isclose(np.diag(np.load(tmp_path / "K_E.npy")).mean(), 1.0)
     assert (tmp_path / "K_E.raw.npy").exists()
+
+
+def test_environment_kernel_main_supports_non_destructive_output_dir(tmp_path, monkeypatch) -> None:
+    source = tmp_path / "source"
+    output = tmp_path / "corrected"
+    source.mkdir()
+    shutil.copyfile(FIXTURES / "toy_envdata.tsv", source / "envdata.tsv")
+    shutil.copyfile(FIXTURES / "toy_locdata.tsv", source / "locdata.tsv")
+    monkeypatch.setattr(pd.DataFrame, "to_parquet", lambda self, path, index=False: None)
+
+    environment_kernels.main(environment_dir=source, output_dir=output)
+
+    assert not (source / "K_E.npy").exists()
+    assert (output / "K_E.npy").exists()
+    qc = json.loads((output / "K_E.qc.json").read_text(encoding="utf-8"))
+    assert qc["environment_input_dir"] == str(source.resolve())
+    assert qc["environment_output_dir"] == str(output.resolve())
+    assert len(qc["builder_sha256"]) == 64
+
+
+def test_environment_kernel_main_fits_and_outputs_only_declared_environment_ids(
+    tmp_path, monkeypatch
+) -> None:
+    source = tmp_path / "source"
+    output = tmp_path / "fold"
+    source.mkdir()
+    shutil.copyfile(FIXTURES / "toy_envdata.tsv", source / "envdata.tsv")
+    shutil.copyfile(FIXTURES / "toy_locdata.tsv", source / "locdata.tsv")
+    target_ids = [
+        "t1|1|1|Mexico|mx1|c1",
+        "t2|1|2|Mexico|mx2|c2",
+        "t3|1|1|Kenya|ke1|c3",
+    ]
+    target_path = tmp_path / "target.tsv"
+    fit_path = tmp_path / "fit.tsv"
+    pd.DataFrame({"env_id": target_ids}).to_csv(target_path, sep="\t", index=False)
+    pd.DataFrame({"env_id": target_ids[:2]}).to_csv(fit_path, sep="\t", index=False)
+    monkeypatch.setattr(pd.DataFrame, "to_parquet", lambda self, path, index=False: None)
+
+    environment_kernels.main(
+        environment_dir=source,
+        output_dir=output,
+        fit_environment_ids=fit_path,
+        target_environment_ids=target_path,
+    )
+
+    order = pd.read_csv(output / "env_kernel_sample_order.tsv", sep="\t")
+    assert order["env_id"].tolist() == target_ids
+    kernel = np.load(output / "K_E.npy")
+    assert kernel.shape == (3, 3)
+    assert np.isclose(np.diag(kernel)[:2].mean(), 1.0)
+    qc = json.loads((output / "K_E.qc.json").read_text(encoding="utf-8"))
+    assert qc["feature_fit_scope"] == "training_environments_only"
+    assert qc["target_environment_count"] == 3
+    assert len(qc["fit_environment_ids_sha256"]) == 64
+    assert len(qc["target_environment_ids_sha256"]) == 64

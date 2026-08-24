@@ -4,6 +4,8 @@ set -euo pipefail
 ROOT="${1:-.}"
 cd "$ROOT"
 
+export PYTHONSAFEPATH=1
+
 PYTHON="${PYTHON:-python}"
 MODEL_DIR="${MULTITRAIT_MODEL_DIR:-model_kernels/stage1_pedigree_env}"
 MODEL_PREFIX="${MULTITRAIT_MODEL_PREFIX:-stage1_pedigree_env}"
@@ -11,21 +13,174 @@ VARIANT="${MULTITRAIT_VARIANT:-ess25}"
 LEDGER_DIR="${MULTITRAIT_LEDGER_DIR:-model_kernels/multitrait_pedigree_env_${VARIANT}}"
 LEDGER_PREFIX="${MULTITRAIT_LEDGER_PREFIX:-multitrait_pedigree_${VARIANT}}"
 EXPERT_DIR="${MULTITRAIT_EXPERT_DIR:-model_kernels/multitrait_kernel_experts}"
+ENVIRONMENT_DIR="${MULTITRAIT_ENVIRONMENT_DIR:-environment}"
 HMP_MODEL_DIR="${MULTITRAIT_HMP_MODEL_DIR:-model_kernels/stage1_hmp_env_ke_diag_norm}"
 GBS_MODEL_DIR="${MULTITRAIT_GBS_MODEL_DIR:-model_kernels/stage1_gbs_sawyt_env_ke_diag_norm}"
 DTH_MODEL_DIR="${MULTITRAIT_DTH_MODEL_DIR:-model_kernels/stage1_pedigree_env_dth_v2}"
 TRAIT_ENV_MANIFEST="${MULTITRAIT_TRAIT_ENV_MANIFEST:-model_kernels/trait_environment_v2/trait_environment_kernel_manifest.tsv}"
+RECOVERED_GENOTYPE_MANIFEST="${MULTITRAIT_RECOVERED_GENOTYPE_MANIFEST:-genotype_panels/recovered/recovered_genotype_kernel_manifest.tsv}"
 SEEDS="${MULTITRAIT_SEEDS:-2026,2027,2028,2029}"
 MODES="${MULTITRAIT_MODES:-env,additive,full}"
 TRAITS="${MULTITRAIT_TRAITS:-DAYS_TO_HEADING,DAYS_TO_MATURITY,PLANT_HEIGHT,GRAIN_YIELD,1000_GRAIN_WEIGHT,ABOVE_GROUND_BIOMASS,TEST_WEIGHT}"
 FORCE="${MULTITRAIT_FORCE:-0}"
 EXCLUDE_KERNELS="${MULTITRAIT_EXCLUDE_KERNELS:-}"
 INCLUDE_DISABLED_KERNELS="${MULTITRAIT_INCLUDE_DISABLED_KERNELS:-}"
+REQUIRE_ACTIVE_KERNELS="${MULTITRAIT_REQUIRE_ACTIVE_KERNELS:-}"
+FORBID_ACTIVE_KERNELS="${MULTITRAIT_FORBID_ACTIVE_KERNELS:-}"
+RANK_G="${MULTITRAIT_RANK_G:-128}"
+RANK_E="${MULTITRAIT_RANK_E:-64}"
+LATENT_DIM="${MULTITRAIT_LATENT_DIM:-16}"
+EPOCHS="${MULTITRAIT_EPOCHS:-200}"
+BATCH_SIZE="${MULTITRAIT_BATCH_SIZE:-8192}"
+LEARNING_RATE="${MULTITRAIT_LR:-0.001}"
+WEIGHT_DECAY="${MULTITRAIT_WEIGHT_DECAY:-0.0001}"
+PATIENCE="${MULTITRAIT_PATIENCE:-25}"
+INTRA_OP_THREADS="${MULTITRAIT_INTRA_OP_THREADS:-16}"
+INTER_OP_THREADS="${MULTITRAIT_INTER_OP_THREADS:-2}"
+MIN_TRAIN_ROWS_PER_TRAIT="${MULTITRAIT_MIN_TRAIN_ROWS_PER_TRAIT:-100}"
+MIN_EVAL_ROWS_PER_TRAIT="${MULTITRAIT_MIN_EVAL_ROWS_PER_TRAIT:-20}"
 
 mkdir -p "$LEDGER_DIR" "$EXPERT_DIR" trained_models/model_comparisons logs
 
 timestamp() { date '+%Y-%m-%d %H:%M:%S'; }
 log() { printf '[%s] %s\n' "$(timestamp)" "$*"; }
+
+run_is_complete() {
+  local mode="$1"
+  local seed="$2"
+  local model_label="$3"
+  "$PYTHON" - \
+    "$VARIANT" "$mode" "$seed" "$model_label" "$TRAITS" \
+    "$ledger" "$MIN_TRAIN_ROWS_PER_TRAIT" "$MIN_EVAL_ROWS_PER_TRAIT" \
+    "$RANK_G" "$RANK_E" "$LATENT_DIM" "$EPOCHS" "$BATCH_SIZE" \
+    "$LEARNING_RATE" "$WEIGHT_DECAY" "$PATIENCE" \
+    "$INTRA_OP_THREADS" "$INTER_OP_THREADS" "$registry" \
+    "$INCLUDE_DISABLED_KERNELS" "$EXCLUDE_KERNELS" \
+    "$REQUIRE_ACTIVE_KERNELS" "$FORBID_ACTIVE_KERNELS" \
+    "$LEDGER_DIR/certification/multitrait_kernel_certification_summary.json" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+from server_training_pipeline.compare_multitrait_variants import (
+    csv_values,
+    load_run,
+    retained_traits_for_split,
+)
+from server_training_pipeline.kernel_registry_contract import (
+    active_kernel_names,
+    require_active_kernel_contract,
+    training_input_identities,
+)
+
+(
+    variant,
+    mode,
+    seed,
+    model_label,
+    traits_csv,
+    ledger_path,
+    min_train_rows,
+    min_eval_rows,
+    rank_g,
+    rank_e,
+    latent_dim,
+    epochs,
+    batch_size,
+    learning_rate,
+    weight_decay,
+    patience,
+    intra_op_threads,
+    inter_op_threads,
+    registry_path,
+    include_disabled_kernels,
+    exclude_kernels,
+    require_active_kernels,
+    forbid_active_kernels,
+    certification_summary_path,
+) = sys.argv[1:]
+traits = set(csv_values(traits_csv))
+expected_configuration = {
+    "max_rank_genotype": int(rank_g),
+    "max_rank_environment": int(rank_e),
+    "latent_dim": int(latent_dim),
+    "epochs": int(epochs),
+    "batch_size": int(batch_size),
+    "learning_rate": float(learning_rate),
+    "weight_decay": float(weight_decay),
+    "patience": int(patience),
+    "intra_op_threads": int(intra_op_threads),
+    "inter_op_threads": int(inter_op_threads),
+}
+
+try:
+    import pandas as pd
+
+    ledger_file = Path(ledger_path)
+    if ledger_file.suffix == ".parquet":
+        ledger_frame = pd.read_parquet(
+            ledger_file, columns=["trait_name_canonical", "env_kernel_id"]
+        )
+    else:
+        ledger_frame = pd.read_csv(
+            ledger_file,
+            sep="\t",
+            usecols=["trait_name_canonical", "env_kernel_id"],
+        )
+    expected_retained_traits, _ = retained_traits_for_split(
+        ledger_frame,
+        traits,
+        int(seed),
+        int(min_train_rows),
+        int(min_eval_rows),
+    )
+    run = load_run(
+        Path.cwd().resolve(),
+        Path.cwd().resolve() / "trained_models",
+        variant,
+        mode,
+        int(seed),
+    )
+    metadata = run["metadata"]
+    registry = pd.read_csv(registry_path, sep="\t")
+    expected_active_kernels = active_kernel_names(
+        registry,
+        include_disabled=include_disabled_kernels,
+        exclude=exclude_kernels,
+        retained_traits=expected_retained_traits,
+    )
+    require_active_kernel_contract(
+        expected_active_kernels,
+        required=require_active_kernels,
+        forbidden=forbid_active_kernels,
+    )
+    certification = json.loads(Path(certification_summary_path).read_text(encoding="utf-8"))
+    expected_input_identities = training_input_identities(
+        certification, expected_active_kernels
+    )
+    checks = {
+        "prediction_metric_grid": bool(run["prediction_metric_keys"]),
+        "retained_traits": set(metadata.get("traits", []))
+        == expected_retained_traits,
+        "model_label": metadata.get("model_label") == model_label,
+        "training_configuration": metadata.get("training_configuration")
+        == expected_configuration,
+        "active_kernels": set(metadata.get("active_kernels", []))
+        == expected_active_kernels,
+        "training_input_identities": metadata.get("training_input_identities")
+        == expected_input_identities,
+    }
+    failed = [name for name, passed in checks.items() if not passed]
+    if failed:
+        raise ValueError(f"failed completeness checks: {failed}")
+except Exception as exc:
+    print(
+        f"INCOMPLETE variant={variant} mode={mode} seed={seed}: {exc}",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+PY
+}
 
 "$PYTHON" - <<'PY'
 import tensorflow as tf
@@ -69,6 +224,9 @@ fi
 if [[ "${MULTITRAIT_REQUIRE_TRAIT_ENV_MANIFEST:-0}" == "1" ]]; then
   prepare_args+=(--require-trait-environment-manifest)
 fi
+if [[ "${MULTITRAIT_REQUIRE_RECOVERED_GENOTYPE_MANIFEST:-0}" == "1" ]]; then
+  prepare_args+=(--require-recovered-genotype-manifest)
+fi
 log "START prepare aligned K_A, HMP/GBS K_G, and environment experts"
 "$PYTHON" -m server_training_pipeline.prepare_multitrait_kernel_registry \
   --root . \
@@ -78,11 +236,34 @@ log "START prepare aligned K_A, HMP/GBS K_G, and environment experts"
   --gbs-model-dir "$GBS_MODEL_DIR" \
   --dth-model-dir "$DTH_MODEL_DIR" \
   --trait-environment-manifest "$TRAIT_ENV_MANIFEST" \
+  --recovered-genotype-manifest "$RECOVERED_GENOTYPE_MANIFEST" \
+  --environment-dir "$ENVIRONMENT_DIR" \
   --out-dir "$EXPERT_DIR" \
   "${prepare_args[@]}"
 log "DONE prepare kernel experts"
 
 registry="$EXPERT_DIR/multitrait_kernel_registry.tsv"
+"$PYTHON" - "$registry" "$INCLUDE_DISABLED_KERNELS" "$EXCLUDE_KERNELS" \
+  "$REQUIRE_ACTIVE_KERNELS" "$FORBID_ACTIVE_KERNELS" <<'PY'
+import sys
+
+import pandas as pd
+
+from server_training_pipeline.kernel_registry_contract import (
+    active_kernel_names,
+    require_active_kernel_contract,
+)
+
+registry_path, include_disabled, exclude, required, forbidden = sys.argv[1:]
+registry = pd.read_csv(registry_path, sep="\t")
+active = active_kernel_names(
+    registry,
+    include_disabled=include_disabled,
+    exclude=exclude,
+)
+require_active_kernel_contract(active, required=required, forbidden=forbidden)
+print("Active-kernel contract:", ";".join(sorted(active)))
+PY
 log "START certify complete kernel-expert registry"
 "$PYTHON" -m server_training_pipeline.audit_multitrait_kernels \
   --root . \
@@ -131,8 +312,11 @@ for seed in "${seed_values[@]}"; do
     run_dir="trained_models/multitrait_quantitative_${VARIANT}_${mode}_seed${seed}"
     prefix="multitrait_quantitative_${VARIANT}_${mode}_seed${seed}"
     if [[ "$FORCE" != "1" && -s "$run_dir/${prefix}_trait_metrics.tsv" ]]; then
-      log "SKIP seed=$seed mode=$mode: metrics exist"
-      continue
+      if run_is_complete "$mode" "$seed" "$model_label"; then
+        log "SKIP seed=$seed mode=$mode: complete matched outputs exist"
+        continue
+      fi
+      log "REBUILD seed=$seed mode=$mode: existing outputs are incomplete or stale"
     fi
     mkdir -p "$run_dir"
     log "START seed=$seed mode=$mode"
@@ -147,16 +331,18 @@ for seed in "${seed_values[@]}"; do
       --model-label "$model_label" \
       --split gho_environment \
       --seed "$seed" \
-      --max-rank-genotype "${MULTITRAIT_RANK_G:-128}" \
-      --max-rank-environment "${MULTITRAIT_RANK_E:-64}" \
-      --latent-dim "${MULTITRAIT_LATENT_DIM:-16}" \
-      --epochs "${MULTITRAIT_EPOCHS:-200}" \
-      --batch-size "${MULTITRAIT_BATCH_SIZE:-8192}" \
-      --learning-rate "${MULTITRAIT_LR:-0.001}" \
-      --weight-decay "${MULTITRAIT_WEIGHT_DECAY:-0.0001}" \
-      --patience "${MULTITRAIT_PATIENCE:-25}" \
-      --intra-op-threads "${MULTITRAIT_INTRA_OP_THREADS:-16}" \
-      --inter-op-threads "${MULTITRAIT_INTER_OP_THREADS:-2}" \
+      --min-train-rows-per-trait "$MIN_TRAIN_ROWS_PER_TRAIT" \
+      --min-eval-rows-per-trait "$MIN_EVAL_ROWS_PER_TRAIT" \
+      --max-rank-genotype "$RANK_G" \
+      --max-rank-environment "$RANK_E" \
+      --latent-dim "$LATENT_DIM" \
+      --epochs "$EPOCHS" \
+      --batch-size "$BATCH_SIZE" \
+      --learning-rate "$LEARNING_RATE" \
+      --weight-decay "$WEIGHT_DECAY" \
+      --patience "$PATIENCE" \
+      --intra-op-threads "$INTRA_OP_THREADS" \
+      --inter-op-threads "$INTER_OP_THREADS" \
       "${kernel_filter_args[@]}" \
       "${extra_args[@]}"
     log "DONE seed=$seed mode=$mode"

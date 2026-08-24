@@ -1,0 +1,116 @@
+{
+  "protocol_version": "multitrait_quantitative_final_v5",
+  "status": "frozen",
+  "frozen_after_discovery": "2026-07-17",
+  "discovery_seeds_forbidden": [2026, 2027, 2028, 2029],
+  "traits": [
+    "DAYS_TO_HEADING",
+    "DAYS_TO_MATURITY",
+    "PLANT_HEIGHT",
+    "GRAIN_YIELD",
+    "1000_GRAIN_WEIGHT",
+    "ABOVE_GROUND_BIOMASS",
+    "TEST_WEIGHT"
+  ],
+  "climatology_eligible_traits": [
+    "DAYS_TO_HEADING",
+    "DAYS_TO_MATURITY",
+    "GRAIN_YIELD"
+  ],
+  "climatology_ineligible_traits": [
+    "PLANT_HEIGHT",
+    "1000_GRAIN_WEIGHT",
+    "ABOVE_GROUND_BIOMASS",
+    "TEST_WEIGHT"
+  ],
+  "generic_weather_variant": "current_corrected_v1",
+  "raw_date_recovery_enabled": false,
+  "include_disabled_kernels": ["K_E_TGW_V2"],
+  "final_model_mode": "full",
+  "diagnostic_model_modes": ["env", "additive"],
+  "weight_policy": {
+    "weight_power": 0.0,
+    "minimum_effective_sample_fraction": 1.0,
+    "maximum_top_1pct_weight_share": 0.02,
+    "variance_floor_quantile": 0.01,
+    "missing_variance_quantile": 0.75,
+    "weight_clip_quantile": 0.99
+  },
+  "outer_folds": 5,
+  "inner_folds": 3,
+  "final_holdout_assignment_id": "multitrait_quantitative_final_v4",
+  "scenario_assignment_id": "multitrait_quantitative_final_v4",
+  "scenario_outer_folds": {
+    "unseen_environments": 5,
+    "unseen_genotypes": 5,
+    "unseen_genotypes_and_environments": 5,
+    "temporal_holdout": 3,
+    "country_holdout": 5
+  },
+  "scenario_genotype_expert_policy": {
+    "country_holdout": {
+      "excluded_experts": ["K_G_HMP"],
+      "excluded_kernels": ["K_G_HMP_LINEAR", "K_G_HMP_RBF"],
+      "reason": "India contains 92.9% of HMP-linked GIDs; broad country holdout is a pedigree+GBS+environment fallback"
+    }
+  },
+  "final_holdout_policy": "deterministic_environment_block_minimum_support",
+  "final_holdout_support": {
+    "minimum_environment_fraction": 0.1,
+    "minimum_environment_count": 50,
+    "maximum_environment_fraction": 0.2,
+    "minimum_rows_per_trait": 20
+  },
+  "trait_environment_support": {
+    "default_minimum_holdout_fraction": 0.1,
+    "trait_minimum_holdout_environments": {
+      "ABOVE_GROUND_BIOMASS": 5,
+      "TEST_WEIGHT": 10
+    },
+    "minimum_development_environment_fraction": 0.75,
+    "minimum_development_environments": 15
+  },
+  "protected_genotype_experts": [
+    "K_G_HMP",
+    "K_G_GBS"
+  ],
+  "final_holdout_genotype_expert_support": {
+    "minimum_development_unique_genotypes": 10,
+    "minimum_development_unique_fraction": 0.75,
+    "minimum_development_observation_rows": 100,
+    "minimum_holdout_unique_genotypes": 2,
+    "minimum_holdout_unique_fraction": 0.01,
+    "minimum_holdout_observation_rows": 20
+  },
+  "nested_genotype_expert_support": {
+    "minimum_train_unique_genotypes": 3,
+    "minimum_train_unique_fraction": 0.1,
+    "minimum_train_observation_rows": 20
+  },
+  "generalization_families": {
+    "unseen_environments": ["unseen_environments"],
+    "unseen_genotypes": ["unseen_genotypes"],
+    "unseen_genotypes_and_environments": ["unseen_genotypes_and_environments"],
+    "temporal_country_holdout": ["temporal_holdout", "country_holdout"]
+  },
+  "hyperparameter_candidates": [
+    {
+      "name": "frozen_base",
+      "latent_dim": 16,
+      "learning_rate": 0.001,
+      "weight_decay": 0.0001,
+      "rank_genotype": 128,
+      "rank_environment": 64
+    },
+    {
+      "name": "regularized",
+      "latent_dim": 16,
+      "learning_rate": 0.001,
+      "weight_decay": 0.001,
+      "rank_genotype": 128,
+      "rank_environment": 64
+    }
+  ],
+  "selection_metric": "validation_macro_normalized_rmse",
+  "selection_tiebreaker": "validation_macro_pearson"
+}

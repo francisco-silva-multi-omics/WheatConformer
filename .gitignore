@@ -24,6 +24,8 @@
 !server_training_pipeline/**
 !server_gbs_pipeline/
 !server_gbs_pipeline/**
+!server_genotype_recovery/
+!server_genotype_recovery/**
 !docs/
 !docs/**
 !scripts/
@@ -117,6 +119,12 @@ multi_omics_data/
 !scripts/*.sh
 !scripts/*.slurm
 !requirements/*.txt
+
+# Forensic audit code and human-readable reports. Generated audit tables remain local.
+!audit/
+audit/*
+!audit/*.py
+!audit/*.md
 
 # Toy-data-only automated tests and CI
 !tests/

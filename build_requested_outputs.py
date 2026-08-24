@@ -389,11 +389,18 @@ def build_hmp_qcfiltered_outputs() -> None:
     X_filt.to_parquet(out / "hmp_sample_by_marker.QCfiltered.parquet", index=False)
     np.save(out / "K_HMP.QCfiltered.npy", K)
     np.save(out / "K_HMP.QCfiltered.meanDiag1.npy", K_mean_diag1)
-    pd.DataFrame({"sample_id": sample_ids_filt}).to_csv(
+    hmp_order = pd.DataFrame({"sample_id": sample_ids_filt})
+    hmp_order.to_csv(
         out / "hmp_K_sample_order.QCfiltered.tsv",
         sep="\t",
         index=False,
     )
+    hmp_order.assign(row_index=np.arange(len(hmp_order), dtype=np.int32))[["row_index", "sample_id"]].to_csv(
+        out / "hmp_K_row_order.QCfiltered.tsv", sep="\t", index=False
+    )
+    hmp_order.assign(column_index=np.arange(len(hmp_order), dtype=np.int32))[
+        ["column_index", "sample_id"]
+    ].to_csv(out / "hmp_K_column_order.QCfiltered.tsv", sep="\t", index=False)
 
     print("Original samples:", len(sample_ids))
     print("Original markers:", len(marker_cols))

@@ -8,6 +8,10 @@ import numpy as np
 
 STRICT_INDUCTIVE_SPLIT_MODES = {
     "gho_environment",
+    "gho_cycle",
+    "gho_trial",
+    "gho_country",
+    "gho_family",
     "cv1_genotype",
     "cv1_environment",
     "cv0_genotype_environment",
@@ -18,12 +22,32 @@ def effective_factorization_mode(requested_mode: str, split_mode: str, warn: boo
     if requested_mode == "train_nystrom" and split_mode not in STRICT_INDUCTIVE_SPLIT_MODES:
         if warn:
             warnings.warn(
-                f"train_nystrom is restricted to held-out genotype/environment benchmarking; "
+                f"train_nystrom is restricted to grouped entity holdout benchmarking; "
                 f"using full_transductive for {split_mode!r}.",
                 stacklevel=2,
             )
         return "full_transductive"
     return requested_mode
+
+
+def factorization_training_support(
+    train_ids: np.ndarray,
+    factorization_mode: str,
+    center: bool,
+    minimum_ids: int = 2,
+) -> tuple[bool, str]:
+    """Return whether a kernel expert is estimable from a fold's training entities."""
+    unique_ids = np.unique(np.asarray(train_ids, dtype=np.int32))
+    if unique_ids.size == 0:
+        return False, "no_eligible_training_kernel_ids"
+    required_ids = max(2, int(minimum_ids))
+    if unique_ids.size < required_ids:
+        if required_ids > 2:
+            return False, f"expert_requires_at_least_{required_ids}_training_ids"
+        if factorization_mode == "train_nystrom" and center:
+            return False, "centered_train_nystrom_requires_at_least_two_training_ids"
+        return False, "expert_requires_at_least_two_training_ids"
+    return True, ""
 
 
 def kernel_factors(
@@ -72,11 +96,17 @@ def kernel_factors(
     order = np.argsort(vals)[::-1]
     vals = vals[order]
     vecs = vecs[:, order]
+    maximum_eigenvalue = float(vals[0]) if vals.size else float("nan")
     keep = vals > 1e-8
     vals = vals[keep][:rank]
     vecs = vecs[:, keep][:, :rank]
     if vals.size == 0:
-        raise ValueError(f"Kernel has no positive eigenvalues above tolerance: {path}")
+        raise ValueError(
+            f"Kernel has no positive eigenvalues above tolerance: {path}; "
+            f"factorization_mode={factorization_mode}; "
+            f"train_kernel_dimension={K_train.shape[0]}; centered={center}; "
+            f"jitter={jitter}; maximum_eigenvalue={maximum_eigenvalue:.8g}"
+        )
     if factorization_mode == "full_transductive":
         factors = vecs * np.sqrt(vals)[None, :]
     else:

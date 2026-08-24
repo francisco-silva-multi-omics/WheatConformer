@@ -7,6 +7,7 @@ import pytest
 
 from server_training_pipeline.kernel_factorization import (
     effective_factorization_mode,
+    factorization_training_support,
     kernel_factors,
     retained_eigenvalues,
 )
@@ -34,12 +35,36 @@ def test_tensorflow_nystrom_excludes_heldout_ids_and_projects_all_rows(tmp_path:
     assert retained_eigenvalues(factors_a, train_ids).shape == (2,)
 
 
-def test_full_transductive_default_and_strict_mode_resolution() -> None:
+@pytest.mark.parametrize(
+    "split_mode",
+    [
+        "gho_environment",
+        "gho_cycle",
+        "gho_trial",
+        "gho_country",
+        "gho_family",
+        "cv1_genotype",
+        "cv1_environment",
+        "cv0_genotype_environment",
+    ],
+)
+def test_grouped_holdouts_use_strict_nystrom(split_mode: str) -> None:
+    assert (
+        effective_factorization_mode("train_nystrom", split_mode, warn=True)
+        == "train_nystrom"
+    )
+
+
+def test_full_transductive_default_and_noninductive_mode_resolution() -> None:
     assert effective_factorization_mode("full_transductive", "cv1_genotype") == "full_transductive"
     assert effective_factorization_mode("train_nystrom", "cv1_genotype") == "train_nystrom"
-    assert effective_factorization_mode("train_nystrom", "gho_environment", warn=True) == "train_nystrom"
-    with pytest.warns(UserWarning, match="held-out genotype/environment"):
-        assert effective_factorization_mode("train_nystrom", "gho_cycle", warn=True) == "full_transductive"
+    with pytest.warns(UserWarning, match="grouped entity holdout"):
+        assert (
+            effective_factorization_mode(
+                "train_nystrom", "cv2_random_observation", warn=True
+            )
+            == "full_transductive"
+        )
 
 
 def test_cv1_genotype_train_ids_define_strict_kernel_dimension(tmp_path: Path) -> None:
@@ -49,6 +74,44 @@ def test_cv1_genotype_train_ids_define_strict_kernel_dimension(tmp_path: Path) -
     assert factors.shape[0] == 5
     assert metadata["train_kernel_dimension"] == 3
     assert metadata["rank_retained"] <= 3
+
+
+def test_centered_fold_expert_with_one_training_id_is_not_estimable() -> None:
+    supported, reason = factorization_training_support(
+        np.array([7, 7]), "train_nystrom", center=True
+    )
+
+    assert not supported
+    assert reason == "centered_train_nystrom_requires_at_least_two_training_ids"
+
+
+def test_fold_expert_with_two_training_ids_is_estimable() -> None:
+    supported, reason = factorization_training_support(
+        np.array([7, 11, 7]), "train_nystrom", center=True
+    )
+
+    assert supported
+    assert reason == ""
+
+
+def test_sparse_expert_requires_declared_training_support() -> None:
+    supported, reason = factorization_training_support(
+        np.array([1, 2, 3, 4]),
+        "train_nystrom",
+        center=True,
+        minimum_ids=5,
+    )
+    assert not supported
+    assert reason == "expert_requires_at_least_5_training_ids"
+
+    supported, reason = factorization_training_support(
+        np.array([1, 2, 3, 4, 5]),
+        "train_nystrom",
+        center=True,
+        minimum_ids=5,
+    )
+    assert supported
+    assert reason == ""
 
 
 def test_tensorflow_trainer_records_factorization_provenance() -> None:
@@ -70,3 +133,14 @@ def test_tensorflow_trainer_records_factorization_provenance() -> None:
         "rank_e_retained",
     ]:
         assert field in source
+
+
+def test_final_runner_has_fatal_inductive_factorization_preflight() -> None:
+    source = (
+        Path(__file__).resolve().parents[1]
+        / "scripts"
+        / "run_nested_multitrait_final_fold.sh"
+    ).read_text(encoding="utf-8")
+    assert "PASS inductive factorization preflight" in source
+    assert 'effective != "train_nystrom"' in source
+    assert "Final nested evaluation requires train-only Nystrom factorization" in source

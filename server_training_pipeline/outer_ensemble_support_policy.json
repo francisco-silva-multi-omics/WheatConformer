@@ -1,0 +1,13 @@
+{
+  "policy_version": "nested_outer_ensemble_support_v1",
+  "status": "frozen",
+  "frozen_on": "2026-07-17",
+  "alignment_key": "canonical_observation_id",
+  "combination": "arithmetic_mean_over_structurally_eligible_members",
+  "expected_member_count": 3,
+  "minimum_test_members": 2,
+  "allow_trait_support_filtering": true,
+  "require_identity_columns_to_match": true,
+  "outer_test_outcomes_used_to_define_policy": false,
+  "reason": "A frozen temporal fold structurally filtered one trait from one inner member; the policy was defined from support metadata and canonical ID sets without inspecting or using outer-test outcome metrics."
+}

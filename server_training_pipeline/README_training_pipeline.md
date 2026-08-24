@@ -202,7 +202,182 @@ rejected experts remain diagnostic. Trait inclusion is a separate decision:
 an accepted kernel strengthens evidence for its eligible trait but does not by
 itself add a poorly supported trait to the seven-trait family.
 
-## 2B. Legacy Single-Trait Multikernel GxE Baseline
+## 2B. Frozen Nested Evaluation And Overfitting Control
+
+The discovery runs using seeds `2026-2029` are not reused for final model
+selection. The immutable protocol is:
+
+```text
+server_training_pipeline/final_evaluation_protocol.json
+```
+
+It freezes the seven-trait family, the full multi-kernel architecture,
+`K_E_TGW_V2`, and climatology eligibility for exactly:
+
+```text
+DAYS_TO_HEADING
+DAYS_TO_MATURITY
+GRAIN_YIELD
+```
+
+The protocol creates five outer folds and three grouped inner folds for unseen
+environments, unseen genotypes, unseen genotypes and environments, temporal
+holdout, and country holdout. Temporal and country scenarios form one reported
+generalization family. The most recent cycle is written to a separate final
+holdout manifest and is omitted before any phenotype scaling, weight fitting,
+early stopping, or metric calculation.
+
+Fold-local preprocessing is enforced as follows:
+
+* Precision-weight variance floors, missing-variance fills, clipping, and
+  tempering are fitted on the active training partition only.
+* Environment missing-value statistics, feature scaling, and diagonal kernel
+  scaling use outer-training environment IDs only.
+* Climatology donors are restricted to outer-training environments.
+* Kernel centering and Nystrom factorization use inner-training IDs only.
+* Environment/temporal/country tests retain Stage-1 adjusted targets because
+  Stage-1 fits are isolated within environment-trait groups. Genotype and CV0
+  tests use genotype-environment raw means and raw sampling variances, avoiding
+  nuisance fits that included held genotypes.
+* Inner-selection runs emit validation metrics only. They cannot write outer
+  test metrics. The selected configuration is retrained for each inner fold;
+  its outer predictions are averaged once before reporting.
+
+On the server, point to the frozen current-v1 weather feature and audit
+directories. The raw-date recovery arm is intentionally not used.
+
+```bash
+export PYTHON="$HOME/tools/tf_wheat_cpu/bin/python"
+export WHEATCONFORMER_CODE_ROOT="$HOME/tools/WheatConformer"
+export PYTHONSAFEPATH=1
+export FINAL_EVAL_WEATHER_DIR="environment_weather_recovery_v1"
+export FINAL_EVAL_WEATHER_AUDIT_DIR="model_kernels/weather_recovery_audit_v1/api_final"
+
+bash "$WHEATCONFORMER_CODE_ROOT/scripts/run_nested_multitrait_final_fold.sh" \
+  /DATA2/estancias/tesis_javier/model_DATA/genotipoXambiente \
+  unseen_environments 0
+```
+
+Use outer-fold indices `0-4`, except `temporal_holdout`, which uses `0-2`.
+Valid scenarios are:
+
+```text
+unseen_environments
+unseen_genotypes
+unseen_genotypes_and_environments
+temporal_holdout
+country_holdout
+```
+
+The default runs the frozen full model. Set `FINAL_EVAL_MODES=env,additive,full`
+only for a predeclared diagnostic ablation; the outer test still cannot select
+hyperparameters. Each invocation is resumable and writes fold contracts under
+`model_kernels/final_nested_evaluation_v5_fixed/` and model runs under
+`trained_models/final_nested_evaluation_v5_fixed_runs/`. The final holdout is a
+deterministically selected environment block constructed without phenotype
+values. It contains at least 10% (and at least 50) of model environments, at
+least 20 rows for every frozen trait, and explicit HMP/GBS representation in
+both development and holdout partitions. `ABOVE_GROUND_BIOMASS` requires five
+holdout environments, `TEST_WEIGHT` requires ten, and every other trait
+requires at least 10% of its available environments. Every trait retains at
+least 75% and at least 15 environments for development.
+The builder refuses to freeze a block larger than 20% of environments or one
+that leaves a protected genotype expert unidentifiable. Inspect
+`final_holdout_preflight.json`,
+`final_holdout_cycle_support.tsv`, `final_holdout_trait_support.tsv`, and
+`final_holdout_genotype_expert_support.tsv` before starting any fold.
+`nested_fold_genotype_expert_support.tsv` additionally certifies every required
+expert in every inner-training partition. The frozen nested threshold requires at least three exact
+IDs, at least 10% of the expert's development GIDs, and at least 20 mapped
+training observations. The fractional requirement prevents a nominally
+factorable but scientifically empty HMP branch.
+
+HMP marker diversity begins in 2016, so the frozen temporal evaluation uses
+three outer test cycles (`2020-2022`), each with three support-valid historical
+validation windows. HMP is geographically concentrated: India contains 92.9%
+of HMP-linked ledger GIDs. Broad `country_holdout` therefore excludes
+`K_G_HMP_LINEAR` and `K_G_HMP_RBF` consistently in every fold and is reported
+as the pedigree+GBS+environment fallback, not as the full HMP-bridge model.
+HMP remains required for unseen environments, unseen genotypes, combined CV0,
+and recent temporal evaluation.
+
+The fold-local climatology expert is intentionally sparse and coverage-gated.
+Its certification uses an absolute floor of five eligible environments instead
+of a brittle percentage of the complete environment universe. Each training
+partition must also contain at least five distinct eligible climatology
+environments; otherwise that branch is deterministically dropped and recorded
+in the run's `fold_expert_support.tsv` rather than being estimated from
+insufficient support.
+
+Outer ensembles use the frozen `outer_ensemble_support_policy.json`. Test
+observations must have predictions from at least two structurally eligible
+inner members. Available predictions are averaged by canonical observation ID;
+identity columns must agree exactly, single-member predictions remain fatal,
+and member counts are written per observation and trait. This accommodates a
+trait that is legitimately support-filtered from one inner member without
+weakening split or ledger-alignment checks. The policy was frozen from support
+metadata without inspecting or using temporal outer-test outcome metrics.
+
+All grouped holdout scenarios, including cycle and country holdouts, use
+train-only Nyström kernel factorization. Held-out entities are projected from
+training factors and never participate in the eigendecomposition. Run metadata
+and resume verification include the factorization implementation hash, so
+results produced by an earlier transductive allowlist cannot be reused as final
+temporal or country evaluations.
+
+The earlier `final_nested_evaluation_v1` single-cycle manifest is retained only
+as a failed preflight record. Its one-environment 2022 holdout must not be used
+for training or final reporting. `final_nested_evaluation_v2` is also retained
+only as a failed design record: its recent-cycle block left only one of 2,263
+HMP-linked ledger genotypes in development, making the HMP experts unidentifiable.
+Its support-balanced successor, `final_nested_evaluation_v3`, is retained as a
+valid preflight record but was superseded before any model metrics were
+inspected because `TEST_WEIGHT` had only five holdout environments. The exact
+v3 protocol is archived as `final_evaluation_protocol_v3.json`.
+`final_nested_evaluation_v4` is retained as a failed nested-support preflight:
+its trait-balanced holdout passed, but the unconstrained country and pre-2016
+temporal folds left only one HMP GID in several training partitions. Its exact
+protocol is archived as `final_evaluation_protocol_v4.json`. The v5 holdout
+uses the v4 assignment identity, preserving the already accepted trait balance.
+The original `final_nested_evaluation_v5` directory is retained as a failed
+contract-metadata record: its builder incorrectly wrote the v4 assignment ID
+as the v5 protocol version. No model results from that directory are valid.
+
+Final reports are:
+
+```text
+trained_models/final_nested_evaluation_v5_fixed_summary/nested_outer_fold_metrics.tsv
+trained_models/final_nested_evaluation_v5_fixed_summary/nested_outer_fold_summary.tsv
+```
+
+Before using those reports, audit every contributing run and derived artifact:
+
+```bash
+python -m server_training_pipeline.audit_nested_factorization_provenance \
+  --models-root trained_models/final_nested_evaluation_v5_fixed_runs \
+  --evaluation-dir model_kernels/final_nested_evaluation_v5_fixed \
+  --summary-dir trained_models/final_nested_evaluation_v5_fixed_summary \
+  --trainer "$WHEATCONFORMER_CODE_ROOT/server_training_pipeline/train_multitrait_multikernel_tf.py" \
+  --factorization-implementation "$WHEATCONFORMER_CODE_ROOT/server_training_pipeline/kernel_factorization.py" \
+  --out-dir audit/final_nested_factorization_provenance
+```
+
+The JSON `reporting_status` must be `PASS` before the aggregate reports are
+used. `run_inventory_status` can remain `FAIL` only for explicitly unreferenced
+historical directories listed by the audit; referenced decisions, ensembles,
+and summaries must all be valid. A
+temporal or country run that records `full_transductive` is invalid and must be
+rebuilt. The audit narrowly preserves historical unseen-environment,
+unseen-genotype, and combined-CV0 runs whose metadata proves that every active
+expert used train-only Nystrom factorization.
+
+They include fold means, standard deviations, 95% t confidence intervals,
+validation-fitted calibration, and improvement over the train mean. There is
+deliberately no final-holdout evaluation command in this runner. That holdout
+is evaluated once only after outer-fold results, hyperparameters, and reporting
+code are frozen in a separate release commit.
+
+## 2C. Legacy Single-Trait Multikernel GxE Baseline
 
 Run:
 
@@ -494,3 +669,15 @@ python scripts/05_check_model_methodology_readiness.py --strict
 Strict readiness fails on missing baseline artifacts and requested-trait
 validation/leakage files. Graph-pangenome paths, `K_z`, and operator-based REML
 are reported as future work rather than baseline failures.
+
+## 7. Weather Coverage Recovery
+
+The non-destructive weather recovery workflow classifies missingness causes,
+retries NASA POWER, uses Open-Meteo ERA5 as a historical fallback, and builds a
+separate location-season climatology expert with certified coverage masks. It
+never overwrites the current corrected environment kernels and uses validation
+only for adoption decisions across seeds 2026-2029.
+
+See [weather_recovery_pipeline.md](../docs/weather_recovery_pipeline.md) for the
+server command, optional reviewed date/location supplements, outputs, and
+acceptance thresholds.

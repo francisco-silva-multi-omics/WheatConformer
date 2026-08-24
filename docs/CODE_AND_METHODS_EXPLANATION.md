@@ -881,6 +881,18 @@ K_z(g,g') = exp(-gamma ||z_g - z_g'||^2)
 
 `K_z` is intended to represent functional/regulatory similarity between genotypes. It complements `K_G`, which represents genome-wide additive marker similarity.
 
+Marker-panel retention for `K_z` is independent of standalone `K_G` ablation.
+A recovered panel that does not improve the quantitative relationship-kernel
+baseline is still retained when it supplies certified genotype-specific
+variants that can be projected to graph coordinates and sequence windows.
+
+For directly supported genotypes, regulatory embeddings are classified as
+`observed_marker_supported_sequence`. Pedigree `K_A` may later propagate an
+embedding estimate to an ungenotyped entry, but that result is classified as
+`imputed_pedigree`, requires an explicit confidence score and gate, and is not
+equivalent to observed genotype-specific sequence. No pedigree propagation is
+allowed to synthesize nominal marker calls or graph-path assignments.
+
 ## 21. Functional Annotation
 
 Main script:

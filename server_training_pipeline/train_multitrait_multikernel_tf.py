@@ -13,10 +13,42 @@ import pandas as pd
 import tensorflow as tf
 
 try:
-    from .kernel_factorization import effective_factorization_mode, kernel_factors
+    from .final_evaluation_contract import file_sha256, load_protocol, require_non_discovery_seed
+    from .kernel_factorization import (
+        effective_factorization_mode,
+        factorization_training_support,
+        kernel_factors,
+    )
+    from .kernel_registry_contract import training_input_identities
+    from .nested_evaluation import (
+        SCENARIO_MODES,
+        assign_nested_split,
+        manifest_identity,
+        verify_manifest_contract,
+    )
+    from .observation_weights import (
+        apply_precision_weight_transform,
+        fit_precision_weight_transform,
+    )
     from .split_utils import canonical_split_mode, make_split, split_group_column, split_leakage_record
 except ImportError:
-    from kernel_factorization import effective_factorization_mode, kernel_factors
+    from final_evaluation_contract import file_sha256, load_protocol, require_non_discovery_seed
+    from kernel_factorization import (
+        effective_factorization_mode,
+        factorization_training_support,
+        kernel_factors,
+    )
+    from kernel_registry_contract import training_input_identities
+    from nested_evaluation import (
+        SCENARIO_MODES,
+        assign_nested_split,
+        manifest_identity,
+        verify_manifest_contract,
+    )
+    from observation_weights import (
+        apply_precision_weight_transform,
+        fit_precision_weight_transform,
+    )
     from split_utils import canonical_split_mode, make_split, split_group_column, split_leakage_record
 
 
@@ -341,11 +373,19 @@ class MultiTraitKernelExperts(tf.keras.Model):
         active_count = tf.reduce_sum(tf.cast(active, tf.float32), axis=1, keepdims=True)
         tf.debugging.assert_positive(active_count, message="An observation has no available kernel expert")
         if self.gate_logits is None:
-            gates = tf.cast(active, tf.float32) / active_count
+            eligible_count = tf.reduce_sum(
+                tf.cast(trait_eligible, tf.float32), axis=1, keepdims=True
+            )
+            gates = tf.cast(trait_eligible, tf.float32) / eligible_count
         else:
             logits = tf.gather(self.gate_logits, trait_index)
-            masked_logits = tf.where(active, logits, tf.constant(-1e9, dtype=tf.float32))
+            masked_logits = tf.where(
+                trait_eligible, logits, tf.constant(-1e9, dtype=tf.float32)
+            )
             gates = tf.nn.softmax(masked_logits, axis=1)
+        # Coverage gates remove unavailable experts without changing the weights of
+        # the remaining experts for that row. This avoids pairwise renormalization.
+        gates = gates * tf.cast(row_available, tf.float32)
         prediction = tf.reduce_sum(term_values * gates, axis=1)
         return tf.gather(self.intercept, trait_index) + prediction
 
@@ -406,6 +446,26 @@ def add_expert_indices(
         id_col = str(spec["id_col"])
         compact = pd.to_numeric(order["compact_kernel_index"], errors="raise").astype(int)
         lookup = dict(zip(order[id_col].fillna("").astype(str), compact))
+        coverage_path_value = spec.get("coverage_path", "")
+        coverage_path_text = (
+            "" if pd.isna(coverage_path_value) else str(coverage_path_value).strip()
+        )
+        coverage_mask_applied = bool(coverage_path_text)
+        if coverage_mask_applied:
+            coverage_id_col = str(spec.get("coverage_id_col", id_col)).strip() or id_col
+            coverage_column = str(spec.get("coverage_column", "available")).strip() or "available"
+            mask = pd.read_csv(Path(coverage_path_text), sep="\t", dtype=str)
+            required = {coverage_id_col, coverage_column}
+            missing = sorted(required.difference(mask.columns))
+            if missing:
+                raise SystemExit(f"{coverage_path_text} is missing columns: {missing}")
+            mask_ids = mask[coverage_id_col].fillna("").astype(str).str.strip()
+            if mask_ids.eq("").any() or mask_ids.duplicated().any():
+                raise SystemExit(
+                    f"{coverage_path_text} has empty or duplicate IDs in {coverage_id_col}"
+                )
+            available_ids = set(mask_ids[mask[coverage_column].map(parse_bool)])
+            lookup = {key: value for key, value in lookup.items() if key in available_ids}
         ledger_id_col = "genotype_id" if axis == "genotype" else "environment_id"
         column = f"expert_index__{safe_name(name)}"
         ledger[column] = ledger[ledger_id_col].fillna("").astype(str).map(lookup).fillna(-1).astype(np.int32)
@@ -426,6 +486,8 @@ def add_expert_indices(
                     "rows": len(group),
                     "available_rows": int(available.sum()),
                     "availability_fraction": float(available.mean()),
+                    "coverage_mask_applied": coverage_mask_applied,
+                    "coverage_path": coverage_path_text,
                 }
             )
     ledger["has_marker_kernel"] = (
@@ -435,6 +497,24 @@ def add_expert_indices(
         ledger["has_marker_kernel"], "marker_available", "pedigree_only"
     )
     return ledger, columns, pd.DataFrame(coverage_rows)
+
+
+def assign_active_marker_coverage(
+    frame: pd.DataFrame,
+    registry: pd.DataFrame,
+    expert_columns: list[str],
+) -> None:
+    marker_columns = [
+        column
+        for column, (_, spec) in zip(expert_columns, registry.iterrows())
+        if str(spec["kernel"]).startswith("K_G_")
+    ]
+    frame["has_marker_kernel"] = (
+        frame[marker_columns].ge(0).any(axis=1) if marker_columns else False
+    )
+    frame["genomic_coverage_group"] = np.where(
+        frame["has_marker_kernel"], "marker_available", "pedigree_only"
+    )
 
 
 def make_dataset(
@@ -517,10 +597,22 @@ def main() -> None:
     parser.add_argument("--out-dir", type=Path, required=True)
     parser.add_argument("--prefix", default="multitrait_kernel_experts")
     parser.add_argument("--model-label", default="multitrait_kernel_experts")
+    parser.add_argument("--hyperparameter-label", default="frozen_base")
     parser.add_argument("--trait", action="append")
     parser.add_argument("--exclude-kernel", action="append", default=[])
     parser.add_argument("--include-disabled-kernel", action="append", default=[])
     parser.add_argument("--split", default="gho_environment")
+    parser.add_argument("--split-manifest", type=Path)
+    parser.add_argument("--split-contract", type=Path)
+    parser.add_argument("--evaluation-protocol", type=Path)
+    parser.add_argument("--evaluation-scenario", choices=sorted(SCENARIO_MODES))
+    parser.add_argument("--outer-fold", type=int)
+    parser.add_argument("--inner-fold", type=int)
+    parser.add_argument(
+        "--evaluation-stage",
+        choices=["discovery", "inner_selection", "outer_evaluation"],
+        default="discovery",
+    )
     parser.add_argument("--test-fraction", type=float, default=0.2)
     parser.add_argument("--val-fraction", type=float, default=0.1)
     parser.add_argument("--seed", type=int, default=2026)
@@ -547,7 +639,40 @@ def main() -> None:
     parser.add_argument("--patience", type=int, default=25)
     parser.add_argument("--intra-op-threads", type=int, default=16)
     parser.add_argument("--inter-op-threads", type=int, default=2)
+    parser.add_argument(
+        "--stage1-policy",
+        choices=["existing_adjusted", "leakage_safe_by_scenario"],
+        default="existing_adjusted",
+    )
+    parser.add_argument("--fold-local-weights", action="store_true")
+    parser.add_argument("--weight-var-floor-quantile", type=float, default=0.01)
+    parser.add_argument("--weight-missing-var-quantile", type=float, default=0.75)
+    parser.add_argument("--weight-clip-quantile", type=float, default=0.99)
+    parser.add_argument("--weight-power", type=float, default=0.0)
+    parser.add_argument("--weight-min-effective-sample-fraction", type=float, default=1.0)
+    parser.add_argument("--weight-max-top-1pct-share", type=float, default=0.02)
     args = parser.parse_args()
+
+    manifest_arguments = [
+        args.split_manifest,
+        args.split_contract,
+        args.evaluation_scenario,
+        args.outer_fold,
+        args.inner_fold,
+    ]
+    if any(value is not None for value in manifest_arguments) and not all(
+        value is not None for value in manifest_arguments
+    ):
+        raise SystemExit(
+            "Nested evaluation requires --split-manifest, --split-contract, "
+            "--evaluation-scenario, --outer-fold, and --inner-fold together"
+        )
+    if args.evaluation_stage != "discovery" and args.split_manifest is None:
+        raise SystemExit("Non-discovery evaluation requires an immutable split manifest")
+    protocol = None
+    if args.split_manifest is not None:
+        protocol = load_protocol(args.evaluation_protocol)
+        require_non_discovery_seed(args.seed, protocol)
 
     certification = json.loads(args.certification_summary.read_text(encoding="utf-8"))
     if certification.get("status") != "PASS":
@@ -566,12 +691,19 @@ def main() -> None:
         raise SystemExit("No kernel experts remain after registry filtering")
     certified_kernels = certification.get("kernel_identities", {})
     certified_orders = certification.get("order_identities", {})
+    certified_coverage = certification.get("coverage_identities", {})
     for _, spec in registry.iterrows():
         name = str(spec["kernel"])
         require_certified_file(Path(str(spec["kernel_path"])), certified_kernels.get(name, {}), name)
         require_certified_file(
             Path(str(spec["order_path"])), certified_orders.get(name, {}), f"{name} order"
         )
+        coverage_value = spec.get("coverage_path", "")
+        coverage_text = "" if pd.isna(coverage_value) else str(coverage_value).strip()
+        if coverage_text:
+            require_certified_file(
+                Path(coverage_text), certified_coverage.get(name, {}), f"{name} coverage mask"
+            )
 
     if args.no_genotype_main and args.no_environment_main and args.no_interaction:
         raise SystemExit("At least one main effect or interaction must remain active")
@@ -583,13 +715,6 @@ def main() -> None:
     tf.config.threading.set_inter_op_parallelism_threads(args.inter_op_threads)
 
     ledger = read_table(args.ledger)
-    for column in ["phenotype_value", "weight_g_e"]:
-        ledger[column] = pd.to_numeric(ledger[column], errors="coerce")
-        values = ledger[column].to_numpy(dtype=np.float64)
-        if not np.isfinite(values).all():
-            raise SystemExit(f"Ledger column {column} contains non-finite values")
-    if np.any(ledger["weight_g_e"].to_numpy(dtype=np.float64) <= 0):
-        raise SystemExit("Ledger weight_g_e contains non-positive values")
     trait_order = pd.read_csv(args.trait_order, sep="\t")
     if args.trait:
         requested = {value.strip().upper() for value in args.trait}
@@ -599,20 +724,62 @@ def main() -> None:
     ledger = ledger.reset_index(drop=True)
     if ledger.empty:
         raise SystemExit("No observations remain after trait filtering")
-
-    canonical_split = canonical_split_mode(args.split, warn=True)
-    group_col = split_group_column(canonical_split)
-    train_index, val_index, test_index = make_split(
-        ledger, canonical_split, args.seed, args.test_fraction, args.val_fraction, group_col
-    )
+    requested_trait_names = sorted(ledger["trait_name_canonical"].unique().tolist())
+    external_split_identity: dict[str, object] = {}
+    if args.split_manifest is not None:
+        split_contract = verify_manifest_contract(args.split_manifest, args.split_contract)
+        if split_contract.get("protocol_sha256") != protocol["protocol_sha256"]:
+            raise SystemExit(
+                "Evaluation manifest and protocol hashes do not match: "
+                f"manifest={split_contract.get('protocol_sha256')} "
+                f"protocol={protocol['protocol_sha256']}"
+            )
+        if split_contract.get("protocol_version") != protocol["protocol_version"]:
+            raise SystemExit(
+                "Evaluation manifest and protocol versions do not match: "
+                f"manifest={split_contract.get('protocol_version')} "
+                f"protocol={protocol['protocol_version']}"
+            )
+        observed_ledger_sha256 = file_sha256(args.ledger)
+        if observed_ledger_sha256 != split_contract.get("ledger_sha256"):
+            raise SystemExit(
+                "Evaluation manifest was frozen against another ledger: "
+                f"expected={split_contract.get('ledger_sha256')} "
+                f"observed={observed_ledger_sha256}"
+            )
+        split_manifest = pd.read_csv(args.split_manifest, sep="\t", dtype=str)
+        train_index, val_index, test_index, omitted_index, leakage = assign_nested_split(
+            ledger,
+            split_manifest,
+            scenario=args.evaluation_scenario,
+            outer_fold=args.outer_fold,
+            inner_fold=args.inner_fold,
+        )
+        canonical_split = SCENARIO_MODES[args.evaluation_scenario]
+        group_col = split_group_column(canonical_split)
+        external_split_identity = manifest_identity(args.split_manifest, args.split_contract)
+        external_split_identity.update(
+            {
+                "scenario": args.evaluation_scenario,
+                "outer_fold": args.outer_fold,
+                "inner_fold": args.inner_fold,
+                "omitted_rows": int(len(omitted_index)),
+            }
+        )
+    else:
+        canonical_split = canonical_split_mode(args.split, warn=True)
+        group_col = split_group_column(canonical_split)
+        train_index, val_index, test_index = make_split(
+            ledger, canonical_split, args.seed, args.test_fraction, args.val_fraction, group_col
+        )
+        leakage = split_leakage_record(
+            ledger, args.seed, canonical_split, train_index, val_index, test_index, group_col
+        )
     split_labels = np.full(len(ledger), "", dtype=object)
     split_labels[train_index] = "train"
     split_labels[val_index] = "val"
     split_labels[test_index] = "test"
     ledger["split"] = split_labels
-    leakage = split_leakage_record(
-        ledger, args.seed, canonical_split, train_index, val_index, test_index, group_col
-    )
     if leakage["leakage_status"] != "pass":
         raise SystemExit(f"Split leakage detected: {leakage}")
 
@@ -625,9 +792,64 @@ def main() -> None:
         & support["val"].ge(args.min_eval_rows_per_trait)
         & support["test"].ge(args.min_eval_rows_per_trait)
     ].index.tolist()
+    support_report = support[["train", "val", "test"]].reset_index()
+    support_report["min_train_rows_required"] = args.min_train_rows_per_trait
+    support_report["min_eval_rows_required"] = args.min_eval_rows_per_trait
+    support_report["retained"] = support_report["trait_name_canonical"].isin(retained)
+    support_report["filter_reason"] = support_report.apply(
+        lambda row: "retained"
+        if row["retained"]
+        else ";".join(
+            reason
+            for reason, failed in [
+                ("insufficient_train_rows", row["train"] < args.min_train_rows_per_trait),
+                ("insufficient_val_rows", row["val"] < args.min_eval_rows_per_trait),
+                ("insufficient_test_rows", row["test"] < args.min_eval_rows_per_trait),
+            ]
+            if failed
+        ),
+        axis=1,
+    )
     ledger = ledger[ledger["trait_name_canonical"].isin(retained)].copy().reset_index(drop=True)
     if len(retained) < 2:
         raise SystemExit(f"Multi-trait training requires at least two supported traits; found {retained}")
+    # Final-holdout and structurally omitted CV0 rows leave memory before any
+    # phenotype-derived scaling or weight statistic is fitted.
+    ledger = ledger[ledger["split"].isin(["train", "val", "test"])].copy().reset_index(drop=True)
+
+    stage1_policy_applied = "existing_adjusted"
+    if args.stage1_policy == "leakage_safe_by_scenario" and args.split_manifest is not None:
+        if args.evaluation_scenario in {
+            "unseen_genotypes",
+            "unseen_genotypes_and_environments",
+        }:
+            raw_columns = {"raw_mean", "raw_sd", "n_plot_records"}
+            missing_raw_columns = sorted(raw_columns.difference(ledger.columns))
+            if missing_raw_columns:
+                raise SystemExit(
+                    "Leakage-safe genotype evaluation requires raw plot summaries in the ledger: "
+                    f"missing={missing_raw_columns}"
+                )
+            raw_mean = pd.to_numeric(ledger["raw_mean"], errors="coerce").replace(
+                [np.inf, -np.inf], np.nan
+            )
+            if raw_mean.isna().any():
+                raise SystemExit("raw_mean contains non-finite values")
+            ledger["phenotype_value"] = raw_mean
+            raw_sd = pd.to_numeric(ledger["raw_sd"], errors="coerce")
+            raw_n = pd.to_numeric(ledger["n_plot_records"], errors="coerce")
+            raw_variance = np.square(raw_sd) / raw_n.where(raw_n.gt(0))
+            ledger["var_g_e"] = raw_variance.replace([np.inf, -np.inf], np.nan)
+            stage1_policy_applied = "genotype_environment_raw_mean_and_sampling_variance"
+        else:
+            stage1_policy_applied = "environment_isolated_stage1_adjustment"
+    for column in ["phenotype_value", "weight_g_e"]:
+        ledger[column] = pd.to_numeric(ledger[column], errors="coerce")
+        values = ledger[column].to_numpy(dtype=np.float64)
+        if not np.isfinite(values).all():
+            raise SystemExit(f"Ledger column {column} contains non-finite values")
+    if np.any(ledger["weight_g_e"].to_numpy(dtype=np.float64) <= 0):
+        raise SystemExit("Ledger weight_g_e contains non-positive values")
 
     retained_order = trait_order[trait_order["trait_name_canonical"].isin(retained)].copy()
     retained_order = retained_order.sort_values("trait_index").reset_index(drop=True)
@@ -643,6 +865,19 @@ def main() -> None:
         )
     ].copy().reset_index(drop=True)
     ledger, expert_columns, coverage = add_expert_indices(ledger, registry)
+
+    fold_weight_parameters = pd.DataFrame()
+    if args.fold_local_weights:
+        fold_weight_parameters = fit_precision_weight_transform(
+            ledger[ledger["split"].eq("train")],
+            floor_quantile=args.weight_var_floor_quantile,
+            missing_variance_quantile=args.weight_missing_var_quantile,
+            clip_quantile=args.weight_clip_quantile,
+            weight_power=args.weight_power,
+            min_effective_sample_fraction=args.weight_min_effective_sample_fraction,
+            max_top_1pct_share=args.weight_max_top_1pct_share,
+        )
+        ledger = apply_precision_weight_transform(ledger, fold_weight_parameters)
 
     scaling_rows = []
     ledger["y_scaled"] = np.nan
@@ -672,15 +907,54 @@ def main() -> None:
     centered = not args.no_center_kernels
     factor_configurations = []
     train_ids_by_expert = []
+    active_expert_positions = []
+    fold_expert_support_rows = []
     for expert_index, (_, spec) in enumerate(registry.iterrows()):
         column = expert_columns[expert_index]
         eligible = trait_set(spec["eligible_traits"])
         local = train if eligible is None else train[
             train["trait_name_canonical"].str.upper().isin(eligible)
         ]
-        train_ids = local.loc[local[column].ge(0), column].unique().astype(np.int32)
-        if not len(train_ids):
-            raise SystemExit(f"{spec['kernel']} has no eligible training IDs")
+        eligible_rows = local[column].ge(0)
+        observed_train_ids = np.unique(
+            local.loc[eligible_rows, column].to_numpy(dtype=np.int32)
+        )
+        minimum_training_ids_value = spec.get("minimum_training_entities", 2)
+        minimum_training_ids = (
+            2
+            if pd.isna(minimum_training_ids_value)
+            else max(2, int(minimum_training_ids_value))
+        )
+        supported, inactive_reason = factorization_training_support(
+            observed_train_ids,
+            effective_mode,
+            centered,
+            minimum_ids=minimum_training_ids,
+        )
+        fold_expert_support_rows.append(
+            {
+                "kernel": str(spec["kernel"]),
+                "axis": str(spec["axis"]),
+                "eligible_traits": str(spec["eligible_traits"]),
+                "eligible_training_rows": int(eligible_rows.sum()),
+                "unique_training_kernel_ids": int(observed_train_ids.size),
+                "minimum_training_kernel_ids": minimum_training_ids,
+                "effective_factorization_mode": effective_mode,
+                "kernel_centered": centered,
+                "fold_status": "ACTIVE" if supported else "DROPPED",
+                "inactive_reason": inactive_reason,
+            }
+        )
+        if not supported:
+            print(
+                f"DROPPED fold-local kernel expert {spec['kernel']}: {inactive_reason}; "
+                f"eligible_training_rows={int(eligible_rows.sum())}; "
+                f"unique_training_kernel_ids={observed_train_ids.size}",
+                flush=True,
+            )
+            continue
+        active_expert_positions.append(expert_index)
+        train_ids = observed_train_ids
         if effective_mode != "train_nystrom":
             train_ids = None
         train_ids_by_expert.append(train_ids)
@@ -696,6 +970,41 @@ def main() -> None:
                 "train_index_digest": index_digest(train_ids),
             }
         )
+    fold_expert_support = pd.DataFrame(fold_expert_support_rows)
+    fold_expert_support_path = args.out_dir / f"{args.prefix}_fold_expert_support.tsv"
+    fold_expert_support.to_csv(fold_expert_support_path, sep="\t", index=False)
+    if not active_expert_positions:
+        raise SystemExit(
+            "No kernel experts have at least two eligible training IDs; "
+            f"see {fold_expert_support_path}"
+        )
+    registry = registry.iloc[active_expert_positions].copy().reset_index(drop=True)
+    expert_columns = [expert_columns[index] for index in active_expert_positions]
+    required_axes = set()
+    if not args.no_genotype_main or not args.no_interaction:
+        required_axes.add("genotype")
+    if not args.no_environment_main or not args.no_interaction:
+        required_axes.add("environment")
+    active_axes = set(registry["axis"].astype(str))
+    missing_axes = sorted(required_axes.difference(active_axes))
+    if missing_axes:
+        raise SystemExit(
+            f"Fold-local expert filtering removed required model axes {missing_axes}; "
+            f"see {fold_expert_support_path}"
+        )
+    for frame in (ledger, train, val, test):
+        assign_active_marker_coverage(frame, registry, expert_columns)
+    support_columns = [
+        "kernel",
+        "eligible_training_rows",
+        "unique_training_kernel_ids",
+        "minimum_training_kernel_ids",
+        "fold_status",
+        "inactive_reason",
+    ]
+    coverage = coverage.merge(
+        fold_expert_support[support_columns], on="kernel", how="left", validate="many_to_one"
+    )
     cache_configuration = {
         "experts": factor_configurations,
         "effective_factorization_mode": effective_mode,
@@ -812,7 +1121,10 @@ def main() -> None:
 
     metric_output = []
     prediction_outputs = []
-    for split_name, frame in [("val", val), ("test", test)]:
+    evaluation_frames = [("val", val)]
+    if args.evaluation_stage != "inner_selection":
+        evaluation_frames.append(("test", test))
+    for split_name, frame in evaluation_frames:
         frame = frame.copy().reset_index(drop=True)
         frame["y_pred_scaled"] = predict_scaled(model, frame, expert_columns, args.batch_size)
         frame["y_pred"] = [
@@ -879,6 +1191,13 @@ def main() -> None:
     improvement.to_csv(args.out_dir / f"{args.prefix}_vs_train_mean.tsv", sep="\t", index=False)
     history.to_csv(args.out_dir / f"{args.prefix}_history.tsv", sep="\t", index=False)
     scaling.to_csv(args.out_dir / f"{args.prefix}_trait_scaling.tsv", sep="\t", index=False)
+    if not fold_weight_parameters.empty:
+        fold_weight_parameters.to_csv(
+            args.out_dir / f"{args.prefix}_fold_weight_parameters.tsv", sep="\t", index=False
+        )
+    support_report.to_csv(
+        args.out_dir / f"{args.prefix}_trait_split_support.tsv", sep="\t", index=False
+    )
     retained_order.to_csv(args.out_dir / f"{args.prefix}_trait_order.tsv", sep="\t", index=False)
     gate_frame.to_csv(args.out_dir / f"{args.prefix}_kernel_gates.tsv", sep="\t", index=False)
     coverage.to_csv(args.out_dir / f"{args.prefix}_kernel_coverage.tsv", sep="\t", index=False)
@@ -892,7 +1211,22 @@ def main() -> None:
     checkpoint_path = checkpoint.save(str(args.out_dir / f"{args.prefix}_ckpt"))
     run_metadata = {
         "tensorflow_version": tf.__version__,
+        "trainer_sha256": file_sha256(Path(__file__)),
+        "kernel_factorization_sha256": file_sha256(
+            Path(effective_factorization_mode.__code__.co_filename).resolve()
+        ),
+        "certification_summary_sha256": file_sha256(args.certification_summary),
         "seed": args.seed,
+        "evaluation_stage": args.evaluation_stage,
+        "evaluation_protocol": (
+            {
+                "protocol_version": protocol["protocol_version"],
+                "protocol_sha256": protocol["protocol_sha256"],
+            }
+            if protocol is not None
+            else {}
+        ),
+        "external_split": external_split_identity,
         "canonical_split_mode": canonical_split,
         "requested_factorization_mode": args.factorization_mode,
         "effective_factorization_mode": effective_mode,
@@ -901,6 +1235,7 @@ def main() -> None:
         "include_genotype_main": not args.no_genotype_main,
         "include_environment_main": not args.no_environment_main,
         "model_label": args.model_label,
+        "hyperparameter_label": args.hyperparameter_label,
         "learn_kernel_gates": not args.fixed_kernel_gates,
         "parameter_initialization": {
             "distribution": "RandomNormal",
@@ -909,8 +1244,42 @@ def main() -> None:
             "run_seed": args.seed,
         },
         "traits": retained_trait_names,
+        "requested_traits": requested_trait_names,
+        "support_filtered_traits": sorted(
+            set(requested_trait_names) - set(retained_trait_names)
+        ),
+        "trait_support_thresholds": {
+            "min_train_rows_per_trait": args.min_train_rows_per_trait,
+            "min_eval_rows_per_trait": args.min_eval_rows_per_trait,
+        },
         "rows": {"train": len(train), "val": len(val), "test": len(test)},
         "active_kernels": registry["kernel"].tolist(),
+        "fold_dropped_kernels": fold_expert_support.loc[
+            fold_expert_support["fold_status"].eq("DROPPED"), "kernel"
+        ].tolist(),
+        "fold_expert_support": file_identity(fold_expert_support_path),
+        "training_input_identities": training_input_identities(
+            certification, registry["kernel"].tolist()
+        ),
+        "phenotype_preprocessing": {
+            "stage1_policy": stage1_policy_applied,
+            "fold_local_weights": args.fold_local_weights,
+            "weight_transform_fit_partition": "train" if args.fold_local_weights else "ledger_precomputed",
+            "weight_power": args.weight_power if args.fold_local_weights else None,
+            "final_holdout_removed_before_phenotype_statistics": bool(args.split_manifest),
+        },
+        "training_configuration": {
+            "max_rank_genotype": args.max_rank_genotype,
+            "max_rank_environment": args.max_rank_environment,
+            "latent_dim": args.latent_dim,
+            "epochs": args.epochs,
+            "batch_size": args.batch_size,
+            "learning_rate": args.learning_rate,
+            "weight_decay": args.weight_decay,
+            "patience": args.patience,
+            "intra_op_threads": args.intra_op_threads,
+            "inter_op_threads": args.inter_op_threads,
+        },
         "factorizations": factor_metadata,
         "best_val_macro_standardized_rmse": best_score,
         "checkpoint": checkpoint_path,

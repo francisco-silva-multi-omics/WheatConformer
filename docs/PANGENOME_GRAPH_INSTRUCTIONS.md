@@ -87,6 +87,26 @@ The multi-omics `.bed` and `.bw` tracks were processed against IWGSC RefSeq v1.0
 3. Extract path/genotype sequence windows only where the genotype-path assignment is defensible.
 4. Build graph-derived regulatory embeddings and `K_z`.
 
+Retain every certified marker panel for this projection step even when its
+standalone quantitative `K_G` expert does not improve inner validation. The
+quantitative kernel ablation and regulatory sequence eligibility answer
+different questions: a panel can add little relationship-kernel signal while
+still adding genotypes with defensible variant coordinates and graph-aware
+sequence windows.
+
+Regulatory embeddings require an explicit observation class:
+
+- `observed_marker_supported_sequence`: derived from that genotype's certified
+  marker or path evidence;
+- `imputed_pedigree`: propagated through `K_A` for an ungenotyped relative,
+  with recorded donor support, uncertainty and a confidence gate;
+- `unavailable`: neither direct sequence support nor an accepted pedigree
+  propagation.
+
+Only the first class is observed genotype-specific sequence. The second is a
+model-derived estimate and must not be used to invent marker calls, variant
+coordinates or graph paths.
+
 Do not directly lift a BigWig and assume signal equivalence across graph paths. The signal is reference-measured; graph-specific modeling should substitute genotype/path sequence with explicit provenance.
 
 A v1-to-v2 coordinate bridge is not required for the default Zenodo graph workflow. It is only relevant for custom graph builds whose reference coordinate system differs from the RefSeq v1 multi-omics coordinate system.

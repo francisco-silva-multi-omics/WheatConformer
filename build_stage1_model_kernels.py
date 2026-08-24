@@ -8,6 +8,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from server_training_pipeline.observation_index_bundle import write_observation_index_bundle
+
 
 BASE = Path(__file__).resolve().parent
 
@@ -251,14 +253,9 @@ def main() -> None:
 
     geno_obs_index = model_table["geno_kernel_index"].to_numpy(dtype=np.int32)
     env_obs_index = model_table["env_kernel_index"].to_numpy(dtype=np.int32)
-    np.savez_compressed(
+    write_observation_index_bundle(
+        model_table,
         args.out_dir / f"{args.prefix}_observation_kernel_indices.npz",
-        geno_kernel_index=geno_obs_index,
-        env_kernel_index=env_obs_index,
-        y=model_table["phenotype_value"].to_numpy(dtype=np.float32),
-        weight=model_table["weight_g_e"].to_numpy(dtype=np.float32),
-        var=model_table["var_g_e"].to_numpy(dtype=np.float32),
-        se=model_table["SE_g_e"].to_numpy(dtype=np.float32),
     )
 
     unique_geno_idx = np.array(sorted(np.unique(geno_obs_index)), dtype=np.int32)
@@ -284,20 +281,34 @@ def main() -> None:
         np.save(args.out_dir / f"{args.prefix}_K_G_RBF_unique.npy", K_g_rbf_unique)
     if K_g_epi2_unique is not None:
         np.save(args.out_dir / f"{args.prefix}_K_G_EPI2_unique.npy", K_g_epi2_unique)
-    pd.DataFrame(
+    compact_genotype_order = pd.DataFrame(
         {
             args.geno_order_col: unique_geno_ids,
             "source_kernel_index": unique_geno_idx,
             "compact_kernel_index": np.arange(len(unique_geno_idx), dtype=np.int32),
         }
-    ).to_csv(args.out_dir / f"{args.prefix}_K_G_unique_order.tsv", sep="\t", index=False)
-    pd.DataFrame(
+    )
+    compact_genotype_order.to_csv(args.out_dir / f"{args.prefix}_K_G_unique_order.tsv", sep="\t", index=False)
+    compact_genotype_order.rename(columns={"compact_kernel_index": "row_index"}).to_csv(
+        args.out_dir / f"{args.prefix}_K_G_unique_row_order.tsv", sep="\t", index=False
+    )
+    compact_genotype_order.rename(columns={"compact_kernel_index": "column_index"}).to_csv(
+        args.out_dir / f"{args.prefix}_K_G_unique_column_order.tsv", sep="\t", index=False
+    )
+    compact_environment_order = pd.DataFrame(
         {
             args.env_order_col: unique_env_ids,
             "source_kernel_index": unique_env_idx,
             "compact_kernel_index": np.arange(len(unique_env_idx), dtype=np.int32),
         }
-    ).to_csv(args.out_dir / f"{args.prefix}_K_E_unique_order.tsv", sep="\t", index=False)
+    )
+    compact_environment_order.to_csv(args.out_dir / f"{args.prefix}_K_E_unique_order.tsv", sep="\t", index=False)
+    compact_environment_order.rename(columns={"compact_kernel_index": "row_index"}).to_csv(
+        args.out_dir / f"{args.prefix}_K_E_unique_row_order.tsv", sep="\t", index=False
+    )
+    compact_environment_order.rename(columns={"compact_kernel_index": "column_index"}).to_csv(
+        args.out_dir / f"{args.prefix}_K_E_unique_column_order.tsv", sep="\t", index=False
+    )
 
     dense_written = False
     dense_reason = ""
