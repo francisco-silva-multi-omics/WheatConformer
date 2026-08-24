@@ -3,7 +3,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from build_requested_outputs import vanraden_kernel
+from build_baseline import vanraden_kernel
 
 
 def test_vanraden_kernel_is_symmetric_and_psd() -> None:

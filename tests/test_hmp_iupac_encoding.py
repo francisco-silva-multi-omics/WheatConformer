@@ -1,4 +1,4 @@
-from build_requested_outputs import hmp_genotype_to_dosage
+from build_baseline import hmp_genotype_to_dosage
 
 
 def test_hmp_iupac_and_missing_encoding() -> None:
