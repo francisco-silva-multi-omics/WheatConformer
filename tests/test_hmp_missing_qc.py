@@ -3,7 +3,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from build_requested_outputs import compute_hmp_qc
+from build_baseline import compute_hmp_qc
 
 
 def test_missing_calls_are_excluded_from_qc_and_imputed_after_filtering() -> None:

@@ -123,12 +123,12 @@ The exact machine-readable maps are `pipeline_dependency_map.tsv` and
 
 The audit located 13 material transformations/joins. The highest-risk findings are:
 
-1. `build_requested_outputs.py` discovers source tables by scanning the repository
+1. `build_baseline.py` discovers source tables by scanning the repository
    recursively, rather than using an explicit hash-bound raw-root allowlist. This
    workspace also contains duplicate-looking top-level trial directories.
 2. `phenotypes/model_input_phenotypes.tsv` is produced by
    `build_next_integration_layer.py::build_collapsed_modeling_phenotypes`, not by
-   `build_requested_outputs.py` as stated in the older lineage note.
+   `build_baseline.py` as stated in the older lineage note.
 3. The identity lookup sorts then uses `drop_duplicates(..., keep="first")` for
    trial/CID/SID keys. It does not emit an ambiguity queue.
 4. Summary identity, panel, raw-support, Stage-1 identity, and trait-map joins omit

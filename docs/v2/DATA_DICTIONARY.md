@@ -25,7 +25,7 @@ Handling: immutable; all files remain in denominators, including unsupported one
 
 ### `phenotypes/all_meanval.tsv`, `phenotypes/all_grnyld.tsv`
 
-Grain: parsed summary observation. Produced by `build_requested_outputs.py` using
+Grain: parsed summary observation. Produced by `build_baseline.py` using
 recursive repository discovery. They retain source file/trial tags but not complete
 sheet/member/row provenance.
 

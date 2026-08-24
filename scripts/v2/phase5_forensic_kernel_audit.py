@@ -757,7 +757,7 @@ def split_and_leakage_audit(root: Path, out: Path) -> None:
     }])
 
     env_source = (root / "build_environment_component_kernels.py").read_text(encoding="utf-8")
-    geno_source = (root / "build_requested_outputs.py").read_text(encoding="utf-8")
+    geno_source = (root / "build_baseline.py").read_text(encoding="utf-8")
     fold_local = [
         {
             "component": "environment_feature_imputation_scaling_diagonal_normalization",
