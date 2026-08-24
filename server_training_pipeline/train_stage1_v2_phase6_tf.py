@@ -1047,6 +1047,7 @@ class Stage1V2ReactionNorm(tf.keras.Model):
         residual_floor: float,
         weight_decay: float,
         seed: int,
+        reaction_enabled: bool = True,
     ) -> None:
         super().__init__()
         self.genotype_blocks = tuple(genotype)
@@ -1056,6 +1057,7 @@ class Stage1V2ReactionNorm(tf.keras.Model):
         self.reaction_rank = reaction_rank
         self.residual_floor = residual_floor
         self.weight_decay = weight_decay
+        self.reaction_enabled = reaction_enabled
         self.genotype_factors = [tf.constant(block.values) for block in genotype]
         self.environment_factors = [tf.constant(block.values) for block in environment]
         self.reaction_design = tf.constant(reaction_design, dtype=tf.float32)
@@ -1104,25 +1106,33 @@ class Stage1V2ReactionNorm(tf.keras.Model):
             self.environment_eligibility.append(tf.constant(eligibility))
         self.genotype_reaction_projection = []
         self.genotype_reaction_coefficients = []
-        for index, block in enumerate(genotype):
-            rng = np.random.default_rng(stable_seed(seed, block.name, "reaction"))
-            projection = rng.choice(
-                [-1.0 / math.sqrt(block.values.shape[1]), 1.0 / math.sqrt(block.values.shape[1])],
-                size=(block.values.shape[1], reaction_rank),
-            ).astype(np.float32)
-            self.genotype_reaction_projection.append(tf.constant(block.values @ projection))
-            self.genotype_reaction_coefficients.append(
-                self.add_weight(
-                    name=f"g_reaction_{index}",
-                    shape=(reaction_rank, latent_dim),
-                    initializer=initializer(f"g_reaction_{index}_{block.name}"),
+        if reaction_enabled:
+            for index, block in enumerate(genotype):
+                rng = np.random.default_rng(stable_seed(seed, block.name, "reaction"))
+                projection = rng.choice(
+                    [
+                        -1.0 / math.sqrt(block.values.shape[1]),
+                        1.0 / math.sqrt(block.values.shape[1]),
+                    ],
+                    size=(block.values.shape[1], reaction_rank),
+                ).astype(np.float32)
+                self.genotype_reaction_projection.append(
+                    tf.constant(block.values @ projection)
                 )
+                self.genotype_reaction_coefficients.append(
+                    self.add_weight(
+                        name=f"g_reaction_{index}",
+                        shape=(reaction_rank, latent_dim),
+                        initializer=initializer(f"g_reaction_{index}_{block.name}"),
+                    )
+                )
+            self.environment_reaction_coefficients = self.add_weight(
+                name="environment_reaction",
+                shape=(reaction_design.shape[1], latent_dim),
+                initializer=initializer("environment_reaction"),
             )
-        self.environment_reaction_coefficients = self.add_weight(
-            name="environment_reaction",
-            shape=(reaction_design.shape[1], latent_dim),
-            initializer=initializer("environment_reaction"),
-        )
+        else:
+            self.environment_reaction_coefficients = None
 
     def residual_scales(self) -> tf.Tensor:
         return tf.nn.softplus(self.raw_residual) + self.residual_floor
@@ -1150,25 +1160,28 @@ class Stage1V2ReactionNorm(tf.keras.Model):
             effect = tf.reduce_sum(latent * trait_loading, axis=1)
             eligible = tf.gather(self.environment_eligibility[index], trait_index)
             prediction += effect * tf.cast(available & eligible, tf.float32)
-        reaction_available = reaction_index >= 0
-        environment_design = tf.gather(self.reaction_design, tf.maximum(reaction_index, 0))
-        environment_latent = tf.matmul(
-            environment_design, self.environment_reaction_coefficients
-        )
-        for index, (features, coefficients) in enumerate(
-            zip(
-                self.genotype_reaction_projection,
-                self.genotype_reaction_coefficients,
+        if self.reaction_enabled:
+            reaction_available = reaction_index >= 0
+            environment_design = tf.gather(
+                self.reaction_design, tf.maximum(reaction_index, 0)
             )
-        ):
-            local_index = genotype_indices[:, index]
-            available = (local_index >= 0) & reaction_available
-            gathered = tf.gather(features, tf.maximum(local_index, 0))
-            genotype_latent = tf.matmul(gathered, coefficients)
-            effect = tf.reduce_sum(
-                genotype_latent * environment_latent * trait_loading, axis=1
-            ) / math.sqrt(self.latent_dim)
-            prediction += effect * tf.cast(available, tf.float32)
+            environment_latent = tf.matmul(
+                environment_design, self.environment_reaction_coefficients
+            )
+            for index, (features, coefficients) in enumerate(
+                zip(
+                    self.genotype_reaction_projection,
+                    self.genotype_reaction_coefficients,
+                )
+            ):
+                local_index = genotype_indices[:, index]
+                available = (local_index >= 0) & reaction_available
+                gathered = tf.gather(features, tf.maximum(local_index, 0))
+                genotype_latent = tf.matmul(gathered, coefficients)
+                effect = tf.reduce_sum(
+                    genotype_latent * environment_latent * trait_loading, axis=1
+                ) / math.sqrt(self.latent_dim)
+                prediction += effect * tf.cast(available, tf.float32)
         return prediction
 
     def regularization_loss(self) -> tf.Tensor:
