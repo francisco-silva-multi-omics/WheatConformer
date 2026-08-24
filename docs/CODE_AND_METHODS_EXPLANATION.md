@@ -68,7 +68,7 @@ Without this resolution, genotype kernels and phenotype observations cannot be j
 Main scripts:
 
 ```text
-build_requested_outputs.py
+build_baseline.py
 build_next_integration_layer.py
 build_canonical_integrated_database.py
 ```
@@ -96,7 +96,7 @@ integrated_database/canonical_trial_genotype_environment_plot_table.parquet
 Main script:
 
 ```text
-build_requested_outputs.py
+build_baseline.py
 ```
 
 The HMP-like genotype calls are converted to numeric dosage:
