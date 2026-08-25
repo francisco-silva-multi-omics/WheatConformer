@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pandas as pd
@@ -14,6 +15,7 @@ from server_training_pipeline.stage1_v2_trainer_interface import (
 
 
 ROOT = Path(__file__).resolve().parents[1]
+DATA_ROOT = Path(os.environ.get("STAGE1_V2_DATA_ROOT", ROOT)).resolve()
 
 
 def test_cycle_year_normalization_matches_phase5_contract() -> None:
@@ -114,7 +116,7 @@ def test_phase6_selection_protocol_freezes_metrics_guards_and_subsets() -> None:
 
 def test_v2_interface_preflights_one_inner_projection_state_without_outcomes() -> None:
     spec = load_state_spec(
-        ROOT,
+        DATA_ROOT,
         "GNEW_EOBS__OUTER1__INNER1",
         "ka_projection_core",
     )
@@ -134,7 +136,7 @@ def test_v2_interface_preflights_one_inner_projection_state_without_outcomes() -
 
 def test_h_seeds_interface_preserves_ka_when_temporal_support_is_masked() -> None:
     spec = load_state_spec(
-        ROOT,
+        DATA_ROOT,
         "TEMPORAL_YEAR__OUTER1__INNER1",
         "h_seeds_projection_core",
     )
