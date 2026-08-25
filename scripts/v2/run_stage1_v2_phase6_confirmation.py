@@ -16,7 +16,12 @@ import numpy as np
 import pandas as pd
 
 from scripts.v2.run_stage1_v2_phase6_phase1 import validate_runtime
-from server_training_pipeline.stage1_v2_trainer_interface import PARITY
+from server_training_pipeline.stage1_v2_trainer_interface import (
+    PARITY,
+    PHASE5,
+    bool_series,
+    normalized_cycle_years,
+)
 
 
 LOCK = Path(
@@ -34,6 +39,11 @@ EXECUTION_PROTOCOL = Path(
 PROTOCOL = Path(
     "server_training_pipeline/stage1_v2_phase6_confirmation_protocol_v1.json"
 )
+EXECUTION_CORRECTION = Path(
+    "server_training_pipeline/"
+    "stage1_v2_phase6_confirmation_execution_correction_v2.json"
+)
+RUN_PROTOCOL = "stage1_v2_phase6_confirmation_tf_v2_split_corrected"
 
 
 def sha256_file(path: Path, block_size: int = 1024 * 1024) -> str:
@@ -74,6 +84,14 @@ def _mean(values: Iterable[object]) -> float:
     array = pd.to_numeric(pd.Series(list(values)), errors="coerce").to_numpy(dtype=float)
     finite = array[np.isfinite(array)]
     return float(np.mean(finite)) if len(finite) else float("nan")
+
+
+def _factor_membership(
+    codes: np.ndarray, level_count: int, selected_codes: Iterable[int]
+) -> np.ndarray:
+    selected = np.zeros(level_count, dtype=bool)
+    selected[np.fromiter(selected_codes, dtype=np.int64)] = True
+    return selected[codes]
 
 
 def confirmation_grid(root: Path, protocol: dict[str, Any]) -> pd.DataFrame:
@@ -127,12 +145,232 @@ def run_dir(root: Path, row: pd.Series) -> Path:
     return root / RUNS / str(row["state_id"]) / str(row["candidate"])
 
 
+def confirmation_state_role_inventory(
+    root: Path,
+    grid: pd.DataFrame,
+    protocol: dict[str, Any],
+) -> pd.DataFrame:
+    registry = pd.read_csv(root / PARITY / "splits/state_registry.tsv", sep="\t", dtype=str)
+    states = registry.loc[registry["state_id"].isin(grid["state_id"].unique())].copy()
+    if len(states) != int(protocol["confirmation_grid"]["state_count"]):
+        raise ValueError("Confirmation role preflight does not cover all frozen states")
+
+    existing_scenarios = ("GNEW_EOBS", "GOBS_ENEW", "GNEW_ENEW")
+    base_columns = [
+        "phase4_adjusted_row_id",
+        "canonical_gid",
+        "environment_id",
+        "year",
+        "country",
+        "trait",
+        "primary_weighted_training_eligible",
+    ]
+    existing_role_columns = [
+        f"{scenario.lower()}_outer{outer}_role"
+        for scenario in existing_scenarios
+        for outer in range(1, 6)
+    ]
+    observations = pd.read_parquet(
+        root / PHASE5 / "splits/observation_split_assignment.parquet",
+        columns=[*base_columns, *existing_role_columns],
+    )
+    transfer_role_columns = [
+        f"{scenario.lower()}_outer{outer}_role"
+        for scenario in ("TEMPORAL_YEAR", "COUNTRY_HOLDOUT")
+        for outer in range(1, 6)
+    ]
+    transfer_roles = pd.read_parquet(
+        root / PARITY / "splits/scenario_observation_roles.parquet",
+        columns=["phase4_adjusted_row_id", *transfer_role_columns],
+    )
+    observations = observations.merge(
+        transfer_roles,
+        on="phase4_adjusted_row_id",
+        how="left",
+        validate="one_to_one",
+    )
+    observations = observations.loc[
+        bool_series(observations["primary_weighted_training_eligible"])
+    ].copy()
+    assignments = pd.read_csv(
+        root / PARITY / "splits/inner_entity_assignment.tsv", sep="\t", dtype=str
+    )
+    primary_traits = set(protocol["primary_traits"])
+    all_traits = primary_traits.union(protocol["exploratory_traits"])
+    gid_codes, gid_levels = pd.factorize(
+        observations["canonical_gid"].astype(str), sort=False
+    )
+    environment_codes, environment_levels = pd.factorize(
+        observations["environment_id"].astype(str), sort=False
+    )
+    gid_lookup = {value: index for index, value in enumerate(gid_levels.astype(str))}
+    environment_lookup = {
+        value: index for index, value in enumerate(environment_levels.astype(str))
+    }
+    trait_codes, trait_levels = pd.factorize(
+        observations["trait"].astype(str), sort=False
+    )
+    normalized_year_codes, normalized_year_levels = pd.factorize(
+        normalized_cycle_years(observations["year"]), sort=False
+    )
+    country_codes, country_levels = pd.factorize(
+        observations["country"].astype("string").fillna(""), sort=False
+    )
+    year_lookup = {
+        value: index for index, value in enumerate(normalized_year_levels.astype(str))
+    }
+    country_lookup = {
+        value: index for index, value in enumerate(country_levels.astype(str))
+    }
+    role_columns = [*existing_role_columns, *transfer_role_columns]
+    outer_training_masks = {
+        column: observations[column].astype("string").fillna("").eq("TRAIN").to_numpy()
+        for column in role_columns
+    }
+    outer_test_masks = {
+        column: observations[column]
+        .astype("string")
+        .fillna("")
+        .isin({"TEST", "OUTER_TEST_ID_ONLY"})
+        .to_numpy()
+        for column in role_columns
+    }
+    rows: list[dict[str, object]] = []
+    for state in states.itertuples(index=False):
+        scenario = str(state.scenario)
+        role_column = f"{scenario.lower()}_outer{int(state.outer_fold)}_role"
+        outer_training = outer_training_masks[role_column]
+        outer_test = outer_test_masks[role_column]
+        if scenario in {"GNEW_EOBS", "GOBS_ENEW", "GNEW_ENEW"}:
+            training_gid_values = pd.read_csv(
+                root / PARITY / str(state.training_gid_path), sep="\t", dtype=str
+            )["canonical_gid"].astype(str)
+            training_environment_values = pd.read_csv(
+                root / PARITY / str(state.training_environment_path),
+                sep="\t",
+                dtype=str,
+            )["environment_id"].astype(str)
+            training_gid_codes = [
+                gid_lookup[value]
+                for value in training_gid_values
+                if value in gid_lookup
+            ]
+            training_environment_codes = [
+                environment_lookup[value]
+                for value in training_environment_values
+                if value in environment_lookup
+            ]
+            gid_training = _factor_membership(
+                gid_codes, len(gid_levels), training_gid_codes
+            )
+            environment_training = _factor_membership(
+                environment_codes,
+                len(environment_levels),
+                training_environment_codes,
+            )
+            training = outer_training & gid_training & environment_training
+            if scenario == "GNEW_EOBS":
+                validation = outer_training & ~gid_training & environment_training
+            elif scenario == "GOBS_ENEW":
+                validation = outer_training & gid_training & ~environment_training
+            else:
+                validation = outer_training & ~gid_training & ~environment_training
+        else:
+            entity_type = (
+                "NORMALIZED_YEAR" if scenario == "TEMPORAL_YEAR" else "COUNTRY"
+            )
+            local = assignments.loc[
+                assignments["scenario"].eq(scenario)
+                & assignments["outer_fold"].eq(str(state.outer_fold))
+                & assignments["inner_fold"].eq(str(state.inner_fold))
+                & assignments["entity_type"].eq(entity_type)
+            ]
+            lookup = year_lookup if scenario == "TEMPORAL_YEAR" else country_lookup
+            entity_codes = (
+                normalized_year_codes
+                if scenario == "TEMPORAL_YEAR"
+                else country_codes
+            )
+            training_entity_codes = [
+                lookup[value]
+                for value in local.loc[local["assignment"].eq("TRAIN"), "entity_id"]
+                if value in lookup
+            ]
+            validation_entity_codes = [
+                lookup[value]
+                for value in local.loc[
+                    local["assignment"].eq("INNER_VALIDATION_ID_ONLY"), "entity_id"
+                ]
+                if value in lookup
+            ]
+            level_count = len(
+                normalized_year_levels
+                if scenario == "TEMPORAL_YEAR"
+                else country_levels
+            )
+            training = outer_training & _factor_membership(
+                entity_codes, level_count, training_entity_codes
+            )
+            validation = outer_training & _factor_membership(
+                entity_codes, level_count, validation_entity_codes
+            )
+        embargo = ~(training | validation | outer_test)
+        if bool((training & validation).any()) or bool((training & outer_test).any()):
+            raise ValueError(f"Confirmation role overlap: {state.state_id}")
+        training_traits = set(
+            trait_levels[
+                np.bincount(
+                    trait_codes[training], minlength=len(trait_levels)
+                ).astype(bool)
+            ].astype(str)
+        )
+        validation_traits = set(
+            trait_levels[
+                np.bincount(
+                    trait_codes[validation], minlength=len(trait_levels)
+                ).astype(bool)
+            ].astype(str)
+        )
+        rows.append(
+            {
+                "state_id": str(state.state_id),
+                "scenario": str(state.scenario),
+                "outer_fold": int(state.outer_fold),
+                "inner_fold": int(state.inner_fold),
+                "training_rows": int(training.sum()),
+                "validation_rows": int(validation.sum()),
+                "embargo_rows": int(embargo.sum()),
+                "training_trait_count": len(training_traits.intersection(all_traits)),
+                "validation_trait_count": len(validation_traits.intersection(all_traits)),
+                "validation_primary_trait_count": len(
+                    validation_traits.intersection(primary_traits)
+                ),
+                "missing_training_traits": ";".join(sorted(all_traits - training_traits)),
+                "missing_validation_primary_traits": ";".join(
+                    sorted(primary_traits - validation_traits)
+                ),
+            }
+        )
+    inventory = pd.DataFrame(rows).sort_values(
+        ["scenario", "outer_fold", "inner_fold"], kind="stable"
+    )
+    valid = (
+        inventory["training_rows"].gt(0)
+        & inventory["validation_rows"].gt(0)
+        & inventory["training_trait_count"].eq(len(all_traits))
+        & inventory["validation_primary_trait_count"].eq(len(primary_traits))
+    )
+    inventory["status"] = np.where(valid, "PASS", "FAIL")
+    return inventory
+
+
 def metadata_matches(
     path: Path,
     row: pd.Series,
     *,
     commit: str,
     protocol_sha: str,
+    correction_sha: str,
     trainer_sha: str,
 ) -> bool:
     if not path.is_file():
@@ -143,13 +381,14 @@ def metadata_matches(
         return False
     return (
         value.get("status") == "PASS"
-        and value.get("protocol_version") == "stage1_v2_phase6_confirmation_tf_v1"
+        and value.get("protocol_version") == RUN_PROTOCOL
         and value.get("state_id") == row["state_id"]
         and value.get("candidate") == row["candidate"]
         and value.get("configuration_label") == row["configuration_label"]
         and int(value.get("seed", -1)) == int(row["seed"])
         and value.get("code_commit") == commit
         and value.get("selection_protocol_sha256") == protocol_sha
+        and value.get("execution_correction_sha256") == correction_sha
         and value.get("trainer_sha256") == trainer_sha
         and value.get("guard_mask_observation_signatures_written") is True
         and value.get("outer_test_outcomes_read") is False
@@ -217,9 +456,19 @@ def execute_run(
             log.write(line)
         return_code = process.wait()
     if return_code != 0:
+        log_path = destination / "run.log"
+        try:
+            log_tail = "".join(
+                log_path.read_text(encoding="utf-8", errors="replace").splitlines(
+                    keepends=True
+                )[-40:]
+            ).rstrip()
+        except OSError:
+            log_tail = "<run log unavailable>"
         raise RuntimeError(
             f"Confirmation run failed with exit code {return_code}: "
-            f"{row['state_id']} {row['candidate']}"
+            f"{row['state_id']} {row['candidate']}\n"
+            f"run_log={log_path}\n{log_tail}"
         )
 
 
@@ -567,6 +816,7 @@ def summarize(
     routes.to_csv(output / "confirmation_scenario_routes.tsv", sep="\t", index=False)
     result_artifacts = [
         output / "confirmation_run_grid.tsv",
+        output / "confirmation_state_role_preflight.tsv",
         output / "confirmation_runs.tsv",
         output / "confirmation_paired_metrics.tsv",
         output / "confirmation_trait_metrics.tsv",
@@ -582,7 +832,9 @@ def summarize(
     }
     route_lock = {
         "status": "PASS_STAGE1_V2_PHASE6_SCENARIO_ROUTES_FROZEN",
-        "protocol_version": "stage1_v2_phase6_confirmation_route_lock_v1",
+        "protocol_version": (
+            "stage1_v2_phase6_confirmation_route_lock_v2_split_corrected"
+        ),
         "selection_data": "inner_validation_only",
         "stable_reference_candidate": reference,
         "selected_scenario_routes": dict(
@@ -591,6 +843,9 @@ def summarize(
         "result_artifact_sha256": artifact_hashes,
         "code_commit": git_commit(code_root),
         "selection_protocol_sha256": sha256_file(code_root / PROTOCOL),
+        "execution_correction_sha256": sha256_file(
+            code_root / EXECUTION_CORRECTION
+        ),
         "outer_test_outcomes_read": False,
         "outer_test_metrics_read": False,
         "final_holdout_outcomes_read": False,
@@ -603,7 +858,9 @@ def summarize(
     )
     provenance = {
         "status": "PASS_STAGE1_V2_PHASE6_CONFIRMATION_COMPLETE",
-        "protocol_version": "stage1_v2_phase6_confirmation_summary_v1",
+        "protocol_version": (
+            "stage1_v2_phase6_confirmation_summary_v2_split_corrected"
+        ),
         "selection_data": "inner_validation_only",
         "stage1_version": "Stage-1 v2",
         "state_count": int(grid["state_id"].nunique()),
@@ -621,6 +878,9 @@ def summarize(
         "runtime": runtime,
         "code_commit": git_commit(code_root),
         "selection_protocol_sha256": sha256_file(code_root / PROTOCOL),
+        "execution_correction_sha256": sha256_file(
+            code_root / EXECUTION_CORRECTION
+        ),
         "trainer_sha256": sha256_file(code_root / TRAINER),
         "orchestrator_sha256": sha256_file(code_root / ORCHESTRATOR),
         "outer_test_outcomes_read": False,
@@ -671,7 +931,18 @@ def main() -> None:
     output = root / OUTPUT
     output.mkdir(parents=True, exist_ok=True)
     grid.to_csv(output / "confirmation_run_grid.tsv", sep="\t", index=False)
+    role_inventory = confirmation_state_role_inventory(root, grid, protocol)
+    role_inventory.to_csv(
+        output / "confirmation_state_role_preflight.tsv", sep="\t", index=False
+    )
+    failed_roles = role_inventory.loc[role_inventory["status"].ne("PASS")]
+    if not failed_roles.empty:
+        raise ValueError(
+            "Confirmation state-role preflight failed: "
+            + ", ".join(failed_roles["state_id"].astype(str))
+        )
     protocol_sha = sha256_file(code_root / PROTOCOL)
+    correction_sha = sha256_file(code_root / EXECUTION_CORRECTION)
     trainer_sha = sha256_file(code_root / TRAINER)
     workers = args.workers or min(4, int(runtime["physical_cpu_count"]))
     threads = args.threads_per_worker or max(
@@ -692,6 +963,7 @@ def main() -> None:
             row,
             commit=commit,
             protocol_sha=protocol_sha,
+            correction_sha=correction_sha,
             trainer_sha=trainer_sha,
         ):
             continue
@@ -715,20 +987,30 @@ def main() -> None:
             for row in pending
         }
         completed = len(grid) - len(pending)
-        for future in as_completed(futures):
-            row = futures[future]
-            future.result()
-            completed += 1
+        try:
+            for future in as_completed(futures):
+                row = futures[future]
+                future.result()
+                completed += 1
+                print(
+                    f"[{completed}/{len(grid)}] DONE "
+                    f"{row['state_id']} {row['candidate']}",
+                    flush=True,
+                )
+        except BaseException:
+            cancelled = sum(future.cancel() for future in futures)
             print(
-                f"[{completed}/{len(grid)}] DONE {row['state_id']} {row['candidate']}",
+                f"FAIL confirmation worker; cancelled_queued_runs={cancelled}",
                 flush=True,
             )
+            raise
     for _, row in grid.iterrows():
         if not metadata_matches(
             run_dir(root, row) / "run_metadata.json",
             row,
             commit=commit,
             protocol_sha=protocol_sha,
+            correction_sha=correction_sha,
             trainer_sha=trainer_sha,
         ):
             raise ValueError(

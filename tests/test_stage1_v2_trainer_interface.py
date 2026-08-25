@@ -3,13 +3,95 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pandas as pd
+
 from server_training_pipeline.stage1_v2_trainer_interface import (
     load_selection_protocol,
     load_state_spec,
+    normalize_cycle_year,
+    state_role_masks,
 )
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_cycle_year_normalization_matches_phase5_contract() -> None:
+    assert normalize_cycle_year("79-80") == "1980"
+    assert normalize_cycle_year("00-01") == "2001"
+    assert normalize_cycle_year("2022") == "2022"
+
+
+def test_temporal_state_roles_match_normalized_year_assignments() -> None:
+    observations = pd.DataFrame(
+        {
+            "canonical_gid": ["g1", "g2", "g3"],
+            "environment_id": ["e1", "e2", "e3"],
+            "year": ["79-80", "80-81", "81-82"],
+            "temporal_year_outer1_role": ["TRAIN"] * 3,
+        }
+    )
+    assignments = pd.DataFrame(
+        {
+            "scenario": ["TEMPORAL_YEAR"] * 3,
+            "outer_fold": ["1"] * 3,
+            "inner_fold": ["1"] * 3,
+            "entity_type": ["NORMALIZED_YEAR"] * 3,
+            "entity_id": ["1980", "1981", "1982"],
+            "assignment": [
+                "TRAIN",
+                "EMBARGO_ONE_YEAR",
+                "INNER_VALIDATION_ID_ONLY",
+            ],
+        }
+    )
+    training, validation, embargo = state_role_masks(
+        observations,
+        scenario="TEMPORAL_YEAR",
+        outer_fold=1,
+        inner_fold=1,
+        training_gids={"g1"},
+        training_environments={"e1"},
+        assignments=assignments,
+    )
+    assert training.tolist() == [True, False, False]
+    assert validation.tolist() == [False, False, True]
+    assert embargo.tolist() == [False, True, False]
+
+
+def test_gobs_enew_validation_excludes_unseen_genotypes() -> None:
+    observations = pd.DataFrame(
+        {
+            "canonical_gid": ["g1", "g1", "g2"],
+            "environment_id": ["e1", "e2", "e2"],
+            "gobs_enew_outer1_role": ["TRAIN"] * 3,
+        }
+    )
+    training, validation, embargo = state_role_masks(
+        observations,
+        scenario="GOBS_ENEW",
+        outer_fold=1,
+        inner_fold=1,
+        training_gids={"g1"},
+        training_environments={"e1"},
+    )
+    assert training.tolist() == [True, False, False]
+    assert validation.tolist() == [False, True, False]
+    assert embargo.tolist() == [False, False, True]
+
+
+def test_confirmation_execution_correction_forces_clean_recompute() -> None:
+    correction = json.loads(
+        (
+            ROOT
+            / "server_training_pipeline/"
+            "stage1_v2_phase6_confirmation_execution_correction_v2.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert correction["scientific_candidate_protocol_unchanged"] is True
+    assert correction["frozen_split_artifacts_unchanged"] is True
+    assert correction["execution_requirements"]["recompute_all_375_runs"] is True
+    assert correction["outer_test_outcomes_read"] is False
 
 
 def test_phase6_selection_protocol_freezes_metrics_guards_and_subsets() -> None:

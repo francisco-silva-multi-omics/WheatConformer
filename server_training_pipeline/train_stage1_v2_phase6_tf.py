@@ -28,6 +28,7 @@ from .stage1_v2_trainer_interface import (
     PROJECTION,
     load_selection_protocol,
     load_state_spec,
+    state_role_masks,
 )
 
 
@@ -111,57 +112,6 @@ def state_row(root: Path, state_id: str) -> pd.Series:
     if len(selected) != 1:
         raise ValueError(f"Expected one state row for {state_id}; observed={len(selected)}")
     return selected.iloc[0]
-
-
-def state_role_masks(
-    observations: pd.DataFrame,
-    *,
-    scenario: str,
-    outer_fold: int,
-    inner_fold: int,
-    training_gids: set[str],
-    training_environments: set[str],
-    assignments: pd.DataFrame | None = None,
-) -> tuple[pd.Series, pd.Series, pd.Series]:
-    role_column = f"{scenario.lower()}_outer{outer_fold}_role"
-    outer_role = observations[role_column].astype("string").fillna("")
-    outer_training = outer_role.eq("TRAIN")
-    outer_test = outer_role.isin({"TEST", "OUTER_TEST_ID_ONLY"})
-    gid_training = observations["canonical_gid"].astype(str).isin(training_gids)
-    env_training = observations["environment_id"].astype(str).isin(training_environments)
-    training = outer_training & gid_training & env_training
-    if scenario == "GNEW_EOBS":
-        validation = outer_training & ~gid_training & env_training
-    elif scenario == "GOBS_ENEW":
-        validation = outer_training & ~env_training
-    elif scenario == "GNEW_ENEW":
-        validation = outer_training & ~gid_training & ~env_training
-    else:
-        if assignments is None:
-            raise ValueError(f"{scenario} requires frozen inner entity assignments")
-        local = assignments.loc[
-            assignments["scenario"].eq(scenario)
-            & assignments["outer_fold"].eq(str(outer_fold))
-            & assignments["inner_fold"].eq(str(inner_fold))
-        ]
-        if scenario == "TEMPORAL_YEAR":
-            values = observations["year"].astype("string").fillna("")
-            entity_type = "NORMALIZED_YEAR"
-        elif scenario == "COUNTRY_HOLDOUT":
-            values = observations["country"].astype("string").fillna("")
-            entity_type = "COUNTRY"
-        else:
-            raise ValueError(f"Unsupported scenario: {scenario}")
-        mapping = local.loc[local["entity_type"].eq(entity_type)].set_index("entity_id")[
-            "assignment"
-        ]
-        validation = outer_training & values.map(mapping).fillna("").eq(
-            "INNER_VALIDATION_ID_ONLY"
-        )
-    embargo = ~(training | validation | outer_test)
-    if bool((training & validation).any()) or bool((training & outer_test).any()):
-        raise ValueError("Stage-1 v2 role masks overlap")
-    return training, validation, embargo
 
 
 def load_state_observations(root: Path, state_id: str) -> tuple[pd.DataFrame, dict[str, object]]:

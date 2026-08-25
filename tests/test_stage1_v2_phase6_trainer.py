@@ -98,6 +98,65 @@ def test_gnew_eobs_roles_are_disjoint_and_environment_observed() -> None:
     assert embargo.tolist() == [False, False, False, True]
 
 
+def test_gobs_enew_roles_require_an_observed_genotype() -> None:
+    observations = pd.DataFrame(
+        {
+            "canonical_gid": ["g1", "g1", "g2"],
+            "environment_id": ["e1", "e2", "e2"],
+            "gobs_enew_outer1_role": ["TRAIN"] * 3,
+        }
+    )
+    training, validation, embargo = state_role_masks(
+        observations,
+        scenario="GOBS_ENEW",
+        outer_fold=1,
+        inner_fold=1,
+        training_gids={"g1"},
+        training_environments={"e1"},
+    )
+    assert training.tolist() == [True, False, False]
+    assert validation.tolist() == [False, True, False]
+    assert embargo.tolist() == [False, False, True]
+
+
+def test_temporal_roles_use_phase5_normalized_cycle_years() -> None:
+    observations = pd.DataFrame(
+        {
+            "canonical_gid": ["g1", "g2", "g3", "g4"],
+            "environment_id": ["e1", "e2", "e3", "e4"],
+            "year": ["79-80", "80-81", "81-82", "1983"],
+            "temporal_year_outer1_role": ["TRAIN"] * 4,
+        }
+    )
+    assignments = pd.DataFrame(
+        {
+            "scenario": ["TEMPORAL_YEAR"] * 4,
+            "outer_fold": ["1"] * 4,
+            "inner_fold": ["1"] * 4,
+            "entity_type": ["NORMALIZED_YEAR"] * 4,
+            "entity_id": ["1980", "1981", "1982", "1983"],
+            "assignment": [
+                "TRAIN",
+                "EMBARGO_ONE_YEAR",
+                "INNER_VALIDATION_ID_ONLY",
+                "NOT_AVAILABLE",
+            ],
+        }
+    )
+    training, validation, embargo = state_role_masks(
+        observations,
+        scenario="TEMPORAL_YEAR",
+        outer_fold=1,
+        inner_fold=1,
+        training_gids={"g1"},
+        training_environments={"e1"},
+        assignments=assignments,
+    )
+    assert training.tolist() == [True, False, False, False]
+    assert validation.tolist() == [False, False, True, False]
+    assert embargo.tolist() == [False, True, False, True]
+
+
 def test_marker_random_features_are_deterministic_and_impute_training_mean() -> None:
     dosage = np.array([[0, 1, 255], [2, 255, 0]], dtype=np.uint8)
     kwargs = {

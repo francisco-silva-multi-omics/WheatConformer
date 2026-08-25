@@ -46,14 +46,29 @@ from .train_stage1_v2_phase6_tf import (
 PROTOCOL = Path(
     "server_training_pipeline/stage1_v2_phase6_confirmation_protocol_v1.json"
 )
-RUN_PROTOCOL = "stage1_v2_phase6_confirmation_tf_v1"
+EXECUTION_CORRECTION = Path(
+    "server_training_pipeline/"
+    "stage1_v2_phase6_confirmation_execution_correction_v2.json"
+)
+RUN_PROTOCOL = "stage1_v2_phase6_confirmation_tf_v2_split_corrected"
 
 
 def load_confirmation_protocol(root: Path) -> dict[str, Any]:
     code_root = Path(os.environ.get("WHEATCONFORMER_CODE_ROOT", root)).resolve()
     protocol = json.loads((code_root / PROTOCOL).read_text(encoding="utf-8"))
+    correction = json.loads(
+        (code_root / EXECUTION_CORRECTION).read_text(encoding="utf-8")
+    )
     if protocol.get("protocol_version") != "stage1_v2_phase6_confirmation_v1":
         raise ValueError("Unexpected Stage-1 v2 confirmation protocol")
+    if correction.get("protocol_version") != (
+        "stage1_v2_phase6_confirmation_execution_correction_v2"
+    ):
+        raise ValueError("Unexpected Stage-1 v2 confirmation execution correction")
+    if correction.get("execution_requirements", {}).get(
+        "recompute_all_375_runs"
+    ) is not True:
+        raise ValueError("Confirmation execution correction permits old run reuse")
     if protocol.get("outer_test_outcomes_read") is not False:
         raise ValueError("Confirmation protocol does not preserve sealed outer outcomes")
     return protocol
@@ -417,6 +432,9 @@ def train_confirmation_run(
         "best_validation_macro_nrmse": best_metric,
         "epochs_completed": int(epoch_rows[-1]["epoch"]),
         "selection_protocol_sha256": sha256_file(code_root / PROTOCOL),
+        "execution_correction_sha256": sha256_file(
+            code_root / EXECUTION_CORRECTION
+        ),
         "execution_protocol_sha256": sha256_file(code_root / EXECUTION_PROTOCOL),
         "trainer_sha256": sha256_file(Path(__file__)),
         "code_commit": git_commit(root),

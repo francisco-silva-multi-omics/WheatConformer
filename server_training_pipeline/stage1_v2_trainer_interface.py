@@ -40,6 +40,83 @@ def bool_series(values: pd.Series) -> pd.Series:
     )
 
 
+def normalize_cycle_year(value: object) -> str:
+    """Return the Phase-5 normalized season-end year as a string identifier."""
+    text = str(value).strip()
+    if len(text) == 4 and text.isdigit():
+        return text
+    if (
+        len(text) == 5
+        and text[2] == "-"
+        and text[:2].isdigit()
+        and text[3:].isdigit()
+    ):
+        end = int(text[3:])
+        return str(1900 + end if int(text[:2]) >= 70 else 2000 + end)
+    raise ValueError(f"Unsupported cycle/year label: {value!r}")
+
+
+def normalized_cycle_years(values: pd.Series) -> pd.Series:
+    return values.map(normalize_cycle_year).astype("string")
+
+
+def state_role_masks(
+    observations: pd.DataFrame,
+    *,
+    scenario: str,
+    outer_fold: int,
+    inner_fold: int,
+    training_gids: set[str],
+    training_environments: set[str],
+    assignments: pd.DataFrame | None = None,
+) -> tuple[pd.Series, pd.Series, pd.Series]:
+    role_column = f"{scenario.lower()}_outer{outer_fold}_role"
+    outer_role = observations[role_column].astype("string").fillna("")
+    outer_training = outer_role.eq("TRAIN")
+    outer_test = outer_role.isin({"TEST", "OUTER_TEST_ID_ONLY"})
+    gid_training = observations["canonical_gid"].astype(str).isin(training_gids)
+    env_training = observations["environment_id"].astype(str).isin(
+        training_environments
+    )
+
+    if scenario == "GNEW_EOBS":
+        training = outer_training & gid_training & env_training
+        validation = outer_training & ~gid_training & env_training
+    elif scenario == "GOBS_ENEW":
+        training = outer_training & gid_training & env_training
+        validation = outer_training & gid_training & ~env_training
+    elif scenario == "GNEW_ENEW":
+        training = outer_training & gid_training & env_training
+        validation = outer_training & ~gid_training & ~env_training
+    else:
+        if assignments is None:
+            raise ValueError(f"{scenario} requires frozen inner entity assignments")
+        local = assignments.loc[
+            assignments["scenario"].eq(scenario)
+            & assignments["outer_fold"].eq(str(outer_fold))
+            & assignments["inner_fold"].eq(str(inner_fold))
+        ]
+        if scenario == "TEMPORAL_YEAR":
+            values = normalized_cycle_years(observations["year"])
+            entity_type = "NORMALIZED_YEAR"
+        elif scenario == "COUNTRY_HOLDOUT":
+            values = observations["country"].astype("string").fillna("")
+            entity_type = "COUNTRY"
+        else:
+            raise ValueError(f"Unsupported scenario: {scenario}")
+        mapping = local.loc[local["entity_type"].eq(entity_type)].set_index(
+            "entity_id"
+        )["assignment"]
+        assigned = values.map(mapping).fillna("")
+        training = outer_training & assigned.eq("TRAIN")
+        validation = outer_training & assigned.eq("INNER_VALIDATION_ID_ONLY")
+
+    embargo = ~(training | validation | outer_test)
+    if bool((training & validation).any()) or bool((training & outer_test).any()):
+        raise ValueError("Stage-1 v2 role masks overlap")
+    return training, validation, embargo
+
+
 @dataclass(frozen=True)
 class SparsePedigreeSpec:
     factor_path: str
@@ -201,38 +278,20 @@ def identifier_role_counts(root: Path, state: pd.Series) -> dict[str, int]:
             root / PARITY / str(state["training_environment_path"]), sep="\t", dtype=str
         )["environment_id"].astype(str)
     )
-    gid_training = observations["canonical_gid"].astype(str).isin(training_gids)
-    env_training = observations["environment_id"].astype(str).isin(training_envs)
-    training = outer_training & gid_training & env_training
-    if scenario == "GNEW_EOBS":
-        validation = outer_training & ~gid_training
-    elif scenario == "GOBS_ENEW":
-        validation = outer_training & ~env_training
-    elif scenario == "GNEW_ENEW":
-        validation = outer_training & ~gid_training & ~env_training
-    else:
+    assignments = None
+    if scenario in {"TEMPORAL_YEAR", "COUNTRY_HOLDOUT"}:
         assignments = pd.read_csv(
             root / PARITY / "splits/inner_entity_assignment.tsv", sep="\t", dtype=str
         )
-        assignments = assignments.loc[
-            assignments["scenario"].eq(scenario)
-            & assignments["outer_fold"].eq(str(outer_fold))
-            & assignments["inner_fold"].eq(str(inner_fold))
-        ]
-        if scenario == "TEMPORAL_YEAR":
-            values = observations["year"].astype("string").fillna("")
-            entity_type = "NORMALIZED_YEAR"
-        else:
-            values = observations["country"].astype("string").fillna("")
-            entity_type = "COUNTRY"
-        assignment_map = assignments.loc[
-            assignments["entity_type"].eq(entity_type)
-        ].set_index("entity_id")["assignment"]
-        assigned = values.map(assignment_map).fillna("")
-        validation = outer_training & assigned.eq("INNER_VALIDATION_ID_ONLY")
-    embargo = ~(training | validation | outer_test)
-    if int((training & validation).sum()) != 0:
-        raise ValueError(f"Training and validation roles overlap for {state['state_id']}")
+    training, validation, embargo = state_role_masks(
+        observations,
+        scenario=scenario,
+        outer_fold=outer_fold,
+        inner_fold=inner_fold,
+        training_gids=training_gids,
+        training_environments=training_envs,
+        assignments=assignments,
+    )
     return {
         "training": int(training.sum()),
         "validation": int(validation.sum()),

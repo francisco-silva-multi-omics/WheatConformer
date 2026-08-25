@@ -34,7 +34,8 @@ for path in pathlib.Path(sys.argv[1]).rglob("run_metadata.json"):
         continue
     if (
         value.get("status") == "PASS"
-        and value.get("protocol_version") == "stage1_v2_phase6_confirmation_tf_v1"
+        and value.get("protocol_version")
+        == "stage1_v2_phase6_confirmation_tf_v2_split_corrected"
     ):
         count += 1
 print(count)

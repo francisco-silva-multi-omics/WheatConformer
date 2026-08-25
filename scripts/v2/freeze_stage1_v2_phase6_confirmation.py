@@ -18,6 +18,11 @@ PROTOCOL = Path(
     "server_training_pipeline/stage1_v2_phase6_confirmation_protocol_v1.json"
 )
 IMPLEMENTATION = (
+    Path(
+        "server_training_pipeline/"
+        "stage1_v2_phase6_confirmation_execution_correction_v2.json"
+    ),
+    Path("server_training_pipeline/stage1_v2_trainer_interface.py"),
     Path("server_training_pipeline/train_stage1_v2_phase6_tf.py"),
     Path("server_training_pipeline/train_stage1_v2_phase6_confirmation_tf.py"),
     Path("scripts/v2/freeze_stage1_v2_phase6_confirmation.py"),
