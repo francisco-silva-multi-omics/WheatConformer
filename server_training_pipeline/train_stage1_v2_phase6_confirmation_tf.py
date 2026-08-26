@@ -48,9 +48,11 @@ PROTOCOL = Path(
 )
 EXECUTION_CORRECTION = Path(
     "server_training_pipeline/"
-    "stage1_v2_phase6_confirmation_execution_correction_v2.json"
+    "stage1_v2_phase6_confirmation_execution_correction_v3.json"
 )
-RUN_PROTOCOL = "stage1_v2_phase6_confirmation_tf_v2_split_corrected"
+FACTOR_BUILDER = Path("server_training_pipeline/train_stage1_v2_phase6_tf.py")
+TRAINER_INTERFACE = Path("server_training_pipeline/stage1_v2_trainer_interface.py")
+RUN_PROTOCOL = "stage1_v2_phase6_confirmation_tf_v3_parity_axis_corrected"
 
 
 def load_confirmation_protocol(root: Path) -> dict[str, Any]:
@@ -62,13 +64,13 @@ def load_confirmation_protocol(root: Path) -> dict[str, Any]:
     if protocol.get("protocol_version") != "stage1_v2_phase6_confirmation_v1":
         raise ValueError("Unexpected Stage-1 v2 confirmation protocol")
     if correction.get("protocol_version") != (
-        "stage1_v2_phase6_confirmation_execution_correction_v2"
+        "stage1_v2_phase6_confirmation_execution_correction_v3"
     ):
         raise ValueError("Unexpected Stage-1 v2 confirmation execution correction")
     if correction.get("execution_requirements", {}).get(
-        "recompute_all_375_runs"
+        "prewarm_all_375_candidate_factor_bindings_before_tensorflow"
     ) is not True:
-        raise ValueError("Confirmation execution correction permits old run reuse")
+        raise ValueError("Confirmation execution correction lacks full factor preflight")
     if protocol.get("outer_test_outcomes_read") is not False:
         raise ValueError("Confirmation protocol does not preserve sealed outer outcomes")
     return protocol
@@ -437,6 +439,8 @@ def train_confirmation_run(
         ),
         "execution_protocol_sha256": sha256_file(code_root / EXECUTION_PROTOCOL),
         "trainer_sha256": sha256_file(Path(__file__)),
+        "factor_builder_sha256": sha256_file(code_root / FACTOR_BUILDER),
+        "trainer_interface_sha256": sha256_file(code_root / TRAINER_INTERFACE),
         "code_commit": git_commit(root),
         "validation_observation_signature": identifier_signature(
             validation["phase4_adjusted_row_id"].tolist()

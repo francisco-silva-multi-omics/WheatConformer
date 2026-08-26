@@ -41,9 +41,11 @@ PROTOCOL = Path(
 )
 EXECUTION_CORRECTION = Path(
     "server_training_pipeline/"
-    "stage1_v2_phase6_confirmation_execution_correction_v2.json"
+    "stage1_v2_phase6_confirmation_execution_correction_v3.json"
 )
-RUN_PROTOCOL = "stage1_v2_phase6_confirmation_tf_v2_split_corrected"
+FACTOR_BUILDER = Path("server_training_pipeline/train_stage1_v2_phase6_tf.py")
+TRAINER_INTERFACE = Path("server_training_pipeline/stage1_v2_trainer_interface.py")
+RUN_PROTOCOL = "stage1_v2_phase6_confirmation_tf_v3_parity_axis_corrected"
 
 
 def sha256_file(path: Path, block_size: int = 1024 * 1024) -> str:
@@ -372,6 +374,9 @@ def metadata_matches(
     protocol_sha: str,
     correction_sha: str,
     trainer_sha: str,
+    factor_builder_sha: str,
+    trainer_interface_sha: str,
+    correction: dict[str, Any],
 ) -> bool:
     if not path.is_file():
         return False
@@ -379,21 +384,41 @@ def metadata_matches(
         value = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return False
-    return (
+    common = (
         value.get("status") == "PASS"
-        and value.get("protocol_version") == RUN_PROTOCOL
         and value.get("state_id") == row["state_id"]
         and value.get("candidate") == row["candidate"]
         and value.get("configuration_label") == row["configuration_label"]
         and int(value.get("seed", -1)) == int(row["seed"])
-        and value.get("code_commit") == commit
         and value.get("selection_protocol_sha256") == protocol_sha
-        and value.get("execution_correction_sha256") == correction_sha
-        and value.get("trainer_sha256") == trainer_sha
         and value.get("guard_mask_observation_signatures_written") is True
         and value.get("outer_test_outcomes_read") is False
         and value.get("outer_test_metrics_read") is False
         and value.get("final_holdout_outcomes_read") is False
+    )
+    if not common:
+        return False
+    current = (
+        value.get("protocol_version") == RUN_PROTOCOL
+        and value.get("code_commit") == commit
+        and value.get("execution_correction_sha256") == correction_sha
+        and value.get("trainer_sha256") == trainer_sha
+        and value.get("factor_builder_sha256") == factor_builder_sha
+        and value.get("trainer_interface_sha256") == trainer_interface_sha
+    )
+    if current:
+        return True
+
+    legacy = correction.get("legacy_run_compatibility", {})
+    return (
+        legacy.get("allowed") is True
+        and str(row["scenario"]) in set(legacy.get("allowed_scenarios", []))
+        and value.get("protocol_version") == legacy.get("legacy_protocol_version")
+        and value.get("code_commit") == legacy.get("legacy_code_commit")
+        and value.get("execution_correction_sha256")
+        == legacy.get("legacy_execution_correction_sha256")
+        and value.get("trainer_sha256")
+        == legacy.get("legacy_confirmation_trainer_sha256")
     )
 
 
@@ -570,6 +595,41 @@ def summarize(
         factors["candidate"] = row.candidate
         factor_frames.append(factors)
     runs = pd.DataFrame(metadata_rows)
+    correction = json.loads(
+        (code_root / EXECUTION_CORRECTION).read_text(encoding="utf-8")
+    )
+    if correction.get("protocol_version") != (
+        "stage1_v2_phase6_confirmation_execution_correction_v3"
+    ):
+        raise ValueError("Unexpected confirmation execution correction")
+    legacy = correction["legacy_run_compatibility"]
+    legacy_mask = runs["protocol_version"].eq(legacy["legacy_protocol_version"])
+    if "factor_builder_sha256" not in runs:
+        runs["factor_builder_sha256"] = ""
+    if "trainer_interface_sha256" not in runs:
+        runs["trainer_interface_sha256"] = ""
+    runs.loc[legacy_mask, "factor_builder_sha256"] = legacy[
+        "legacy_factor_builder_sha256"
+    ]
+    runs.loc[legacy_mask, "trainer_interface_sha256"] = legacy[
+        "legacy_trainer_interface_sha256"
+    ]
+    implementation_inventory = (
+        runs.groupby(
+            [
+                "protocol_version",
+                "code_commit",
+                "trainer_sha256",
+                "factor_builder_sha256",
+                "trainer_interface_sha256",
+                "execution_correction_sha256",
+            ],
+            dropna=False,
+        )
+        .size()
+        .rename("run_count")
+        .reset_index()
+    )
     traits = pd.concat(trait_frames, ignore_index=True)
     guards = pd.concat(guard_frames, ignore_index=True)
     factors = pd.concat(factor_frames, ignore_index=True)
@@ -810,6 +870,11 @@ def summarize(
         output / "confirmation_paired_guard_metrics.tsv", sep="\t", index=False
     )
     factors.to_csv(output / "confirmation_factor_inventory.tsv", sep="\t", index=False)
+    implementation_inventory.to_csv(
+        output / "confirmation_run_implementation_inventory.tsv",
+        sep="\t",
+        index=False,
+    )
     scenario_summary.to_csv(
         output / "confirmation_scenario_summary.tsv", sep="\t", index=False
     )
@@ -824,6 +889,7 @@ def summarize(
         output / "confirmation_guard_metrics.tsv",
         output / "confirmation_paired_guard_metrics.tsv",
         output / "confirmation_factor_inventory.tsv",
+        output / "confirmation_run_implementation_inventory.tsv",
         output / "confirmation_scenario_summary.tsv",
         output / "confirmation_scenario_routes.tsv",
     ]
@@ -870,6 +936,8 @@ def summarize(
         "matched_seed_status": "pass",
         "matched_validation_observation_status": "pass",
         "matched_component_mask_status": "pass",
+        "run_implementation_count": len(implementation_inventory),
+        "legacy_compatible_run_count": int(legacy_mask.sum()),
         "stable_reference_candidate": reference,
         "selected_scenario_routes": dict(
             zip(routes["scenario"], routes["selected_candidate"])
@@ -944,6 +1012,15 @@ def main() -> None:
     protocol_sha = sha256_file(code_root / PROTOCOL)
     correction_sha = sha256_file(code_root / EXECUTION_CORRECTION)
     trainer_sha = sha256_file(code_root / TRAINER)
+    factor_builder_sha = sha256_file(code_root / FACTOR_BUILDER)
+    trainer_interface_sha = sha256_file(code_root / TRAINER_INTERFACE)
+    correction = json.loads(
+        (code_root / EXECUTION_CORRECTION).read_text(encoding="utf-8")
+    )
+    if correction.get("protocol_version") != (
+        "stage1_v2_phase6_confirmation_execution_correction_v3"
+    ):
+        raise ValueError("Unexpected confirmation execution correction")
     workers = args.workers or min(4, int(runtime["physical_cpu_count"]))
     threads = args.threads_per_worker or max(
         1, int(runtime["physical_cpu_count"]) // workers
@@ -965,6 +1042,9 @@ def main() -> None:
             protocol_sha=protocol_sha,
             correction_sha=correction_sha,
             trainer_sha=trainer_sha,
+            factor_builder_sha=factor_builder_sha,
+            trainer_interface_sha=trainer_interface_sha,
+            correction=correction,
         ):
             continue
         pending.append(row)
@@ -1012,6 +1092,9 @@ def main() -> None:
             protocol_sha=protocol_sha,
             correction_sha=correction_sha,
             trainer_sha=trainer_sha,
+            factor_builder_sha=factor_builder_sha,
+            trainer_interface_sha=trainer_interface_sha,
+            correction=correction,
         ):
             raise ValueError(
                 f"Incomplete confirmation run: {row['state_id']} {row['candidate']}"

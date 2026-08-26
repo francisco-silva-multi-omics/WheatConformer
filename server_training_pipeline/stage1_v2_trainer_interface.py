@@ -224,6 +224,85 @@ def _root_path(root: Path, relative: object) -> Path:
     return path
 
 
+def load_environment_identity_axis(root: Path, state_id: str) -> pd.DataFrame:
+    """Load the certified environment axis, extending partitions via parity."""
+    root = root.resolve()
+    registry = pd.read_csv(
+        root / PHASE5 / "environment/ke_registry.tsv", sep="\t", dtype=str
+    )
+    identity = registry.loc[registry["component"].eq("K_E_identity")].copy()
+    exact = identity.loc[identity["state_id"].eq(state_id)]
+    if len(exact) == 1:
+        return pd.read_csv(
+            root / PHASE5 / str(exact.iloc[0]["entity_order_path"]),
+            sep="\t",
+            dtype=str,
+        )
+    if len(exact) > 1:
+        raise ValueError(f"Multiple K_E identity axes for {state_id}")
+
+    state_registry = pd.read_csv(
+        root / PARITY / "splits/state_registry.tsv", sep="\t", dtype=str
+    )
+    state = state_registry.loc[state_registry["state_id"].eq(state_id)]
+    if len(state) != 1:
+        raise ValueError(f"Missing parity state for K_E identity axis: {state_id}")
+    state_row = state.iloc[0]
+    if str(state_row["scenario"]) not in {"TEMPORAL_YEAR", "COUNTRY_HOLDOUT"}:
+        raise ValueError(
+            f"K_E identity fallback is not authorized for {state_row['scenario']}: "
+            f"{state_id}"
+        )
+
+    signatures = identity["entity_order_signature"].dropna().astype(str).unique()
+    if len(identity) == 0 or len(signatures) != 1:
+        raise ValueError("Phase-5 K_E identity axes do not define one canonical universe")
+    canonical_row = identity.sort_values("state_id", kind="stable").iloc[0]
+    axis = pd.read_csv(
+        root / PHASE5 / str(canonical_row["entity_order_path"]),
+        sep="\t",
+        dtype=str,
+    )
+    required = {"environment_index", "environment_id", "location_key"}
+    missing_columns = sorted(required - set(axis.columns))
+    if missing_columns:
+        raise ValueError(f"Canonical K_E identity axis lacks columns: {missing_columns}")
+    if axis["environment_id"].duplicated().any():
+        raise ValueError("Canonical K_E identity axis contains duplicate environments")
+
+    training_frame = pd.read_csv(
+        root / PARITY / str(state_row["training_environment_path"]),
+        sep="\t",
+        dtype=str,
+    )
+    training_ids = set(training_frame["environment_id"].astype(str))
+    missing_training = sorted(training_ids - set(axis["environment_id"].astype(str)))
+    if missing_training:
+        raise ValueError(
+            "Parity K_E identity training environments are outside the canonical "
+            f"axis: {missing_training[:10]}"
+        )
+
+    extended = axis[["environment_index", "environment_id", "location_key"]].copy()
+    extended["partition"] = np.where(
+        extended["environment_id"].astype(str).isin(training_ids),
+        "TRAINING",
+        "APPLICATION",
+    )
+    training_levels = sorted(
+        extended.loc[
+            extended["partition"].eq("TRAINING"), "location_key"
+        ].astype(str).unique()
+    )
+    level_index = {value: index for index, value in enumerate(training_levels)}
+    extended["geo_level_index"] = (
+        extended["location_key"].astype(str).map(level_index).fillna(-1).astype(int)
+    )
+    if int(extended["partition"].eq("TRAINING").sum()) != len(training_ids):
+        raise ValueError(f"Parity K_E identity partition count disagrees for {state_id}")
+    return extended
+
+
 def _outer_role_column(scenario: str, outer_fold: int) -> str:
     return f"{scenario.lower()}_outer{outer_fold}_role"
 

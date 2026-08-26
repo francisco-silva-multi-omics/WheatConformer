@@ -54,6 +54,7 @@ nohup setsid "$PYTHON" -m scripts.v2.run_stage1_v2_phase6_confirmation \
   --workers "$WORKERS" \
   --threads-per-worker "$THREADS" \
   --inter-op-threads "$INTER_THREADS" \
+  --warm-factor-cache \
   --resume \
   > "$LOG" 2>&1 < /dev/null &
 PID=$!

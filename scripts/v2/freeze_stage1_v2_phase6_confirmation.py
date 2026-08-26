@@ -12,6 +12,8 @@ import pandas as pd
 
 
 REPLAY = Path("model_kernels/stage1_v2_phase6_phase1_guard_replay_v1")
+PHASE5 = Path("audit/v2/phase5_split_bound_kernel_validation_v2")
+PARITY = Path("audit/v2/phase5_panel_environment_scenario_parity_extension_v2")
 OUTPUT = Path("audit/v2/stage1_v2_phase6_confirmation_v1")
 LOCK = OUTPUT / "PHASE6_CONFIRMATION_LOCK.json"
 PROTOCOL = Path(
@@ -20,7 +22,7 @@ PROTOCOL = Path(
 IMPLEMENTATION = (
     Path(
         "server_training_pipeline/"
-        "stage1_v2_phase6_confirmation_execution_correction_v2.json"
+        "stage1_v2_phase6_confirmation_execution_correction_v3.json"
     ),
     Path("server_training_pipeline/stage1_v2_trainer_interface.py"),
     Path("server_training_pipeline/train_stage1_v2_phase6_tf.py"),
@@ -62,6 +64,21 @@ def git_commit(root: Path) -> str:
     return process.stdout.strip()
 
 
+def git_file_sha256(root: Path, commit: str, path: str) -> str:
+    process = subprocess.run(
+        ["git", "show", f"{commit}:{path}"],
+        cwd=root,
+        capture_output=True,
+        check=False,
+    )
+    if process.returncode != 0:
+        raise RuntimeError(
+            process.stderr.decode(errors="replace").strip()
+            or f"Unable to read {path} at {commit}"
+        )
+    return hashlib.sha256(process.stdout).hexdigest()
+
+
 def write_json(path: Path, value: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -95,12 +112,109 @@ def main() -> None:
         raise FileExistsError(f"Confirmation lock already exists: {lock_path}")
 
     protocol = json.loads((code_root / PROTOCOL).read_text(encoding="utf-8"))
+    correction_path = IMPLEMENTATION[0]
+    correction = json.loads(
+        (code_root / correction_path).read_text(encoding="utf-8")
+    )
     provenance = json.loads(
         (root / REPLAY / "phase1_provenance.json").read_text(encoding="utf-8")
     )
     runs = pd.read_csv(root / REPLAY / "phase1_runs.tsv", sep="\t")
     decision = pd.read_csv(root / REPLAY / "phase1_decision.tsv", sep="\t")
     checks: list[dict[str, object]] = []
+    record(
+        checks,
+        "execution_correction_version",
+        correction.get("protocol_version")
+        == "stage1_v2_phase6_confirmation_execution_correction_v3",
+        str(correction.get("protocol_version")),
+    )
+    record(
+        checks,
+        "full_factor_prewarm_required",
+        correction.get("execution_requirements", {}).get(
+            "prewarm_all_375_candidate_factor_bindings_before_tensorflow"
+        )
+        is True,
+        "all candidate factors must build before training resumes",
+    )
+    legacy = correction.get("legacy_run_compatibility", {})
+    legacy_commit = str(legacy.get("legacy_code_commit", ""))
+    legacy_files = {
+        "legacy_confirmation_trainer_sha256": (
+            "server_training_pipeline/train_stage1_v2_phase6_confirmation_tf.py"
+        ),
+        "legacy_factor_builder_sha256": (
+            "server_training_pipeline/train_stage1_v2_phase6_tf.py"
+        ),
+        "legacy_trainer_interface_sha256": (
+            "server_training_pipeline/stage1_v2_trainer_interface.py"
+        ),
+        "legacy_execution_correction_sha256": (
+            "server_training_pipeline/"
+            "stage1_v2_phase6_confirmation_execution_correction_v2.json"
+        ),
+    }
+    for key, path in legacy_files.items():
+        observed = git_file_sha256(code_root, legacy_commit, path)
+        record(
+            checks,
+            f"legacy_binding::{key}",
+            observed == legacy.get(key),
+            observed,
+        )
+    record(
+        checks,
+        "legacy_scenario_scope",
+        set(legacy.get("allowed_scenarios", []))
+        == {"GNEW_EOBS", "GOBS_ENEW", "GNEW_ENEW"}
+        and legacy.get("temporal_or_country_legacy_reuse_allowed") is False,
+        ",".join(legacy.get("allowed_scenarios", [])),
+    )
+
+    identity_registry = pd.read_csv(
+        root / PHASE5 / "environment/ke_registry.tsv", sep="\t", dtype=str
+    )
+    identity_registry = identity_registry.loc[
+        identity_registry["component"].eq("K_E_identity")
+    ]
+    record(
+        checks,
+        "canonical_identity_universe",
+        len(identity_registry) == 90
+        and identity_registry["entity_order_signature"].nunique() == 1,
+        f"rows={len(identity_registry)}; "
+        f"signatures={identity_registry['entity_order_signature'].nunique()}",
+    )
+    canonical_axis = pd.read_csv(
+        root
+        / PHASE5
+        / str(identity_registry.sort_values("state_id").iloc[0]["entity_order_path"]),
+        sep="\t",
+        dtype=str,
+    )
+    canonical_ids = set(canonical_axis["environment_id"].astype(str))
+    parity_states = pd.read_csv(
+        root / PARITY / "splits/state_registry.tsv", sep="\t", dtype=str
+    )
+    extension_states = parity_states.loc[
+        parity_states["scenario"].isin({"TEMPORAL_YEAR", "COUNTRY_HOLDOUT"})
+    ]
+    missing_ids: set[str] = set()
+    for state in extension_states.itertuples(index=False):
+        values = pd.read_csv(
+            root / PARITY / str(state.training_environment_path),
+            sep="\t",
+            dtype=str,
+        )["environment_id"].astype(str)
+        missing_ids.update(set(values) - canonical_ids)
+    record(
+        checks,
+        "parity_identity_axis_extension_complete",
+        len(extension_states) == 60 and not missing_ids,
+        f"states={len(extension_states)}; missing_ids={len(missing_ids)}; "
+        f"canonical_environments={len(canonical_ids)}",
+    )
     record(
         checks,
         "protocol_version",

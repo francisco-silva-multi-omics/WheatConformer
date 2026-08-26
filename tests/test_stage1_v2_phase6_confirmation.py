@@ -4,11 +4,13 @@ import json
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 import pytest
 
 from scripts.v2.run_stage1_v2_phase6_confirmation import (
     confirmation_grid,
     load_confirmation_protocol,
+    metadata_matches,
     pair_guard_metrics,
 )
 
@@ -85,6 +87,7 @@ def test_confirmation_server_launcher_is_detached_and_resumable() -> None:
     assert "nohup setsid" in launcher
     assert "--resume" in launcher
     assert "--workers \"$WORKERS\"" in launcher
+    assert "--warm-factor-cache" in launcher
     assert "certified_runs=$COMPLETE/375" in status
 
 
@@ -125,3 +128,59 @@ def test_confirmation_protocol_does_not_authorize_outer_or_final_reads() -> None
     assert protocol["outer_test_metrics_read"] is False
     assert protocol["final_holdout_outcomes_read"] is False
     assert protocol["outer_test_policy"]["open_once_after_scenario_routes_are_frozen"]
+
+
+def test_legacy_reuse_is_limited_to_exact_unaffected_scenarios(tmp_path: Path) -> None:
+    correction = json.loads(
+        (
+            ROOT
+            / "server_training_pipeline/"
+            "stage1_v2_phase6_confirmation_execution_correction_v3.json"
+        ).read_text(encoding="utf-8")
+    )
+    legacy = correction["legacy_run_compatibility"]
+    row = pd.Series(
+        {
+            "state_id": "GNEW_EOBS__OUTER1__INNER1",
+            "scenario": "GNEW_EOBS",
+            "candidate": "historical_reaction_reference",
+            "configuration_label": "historical_capacity_16",
+            "seed": 63111,
+        }
+    )
+    metadata = {
+        "status": "PASS",
+        "protocol_version": legacy["legacy_protocol_version"],
+        "state_id": row["state_id"],
+        "candidate": row["candidate"],
+        "configuration_label": row["configuration_label"],
+        "seed": int(row["seed"]),
+        "code_commit": legacy["legacy_code_commit"],
+        "selection_protocol_sha256": "selection",
+        "execution_correction_sha256": legacy[
+            "legacy_execution_correction_sha256"
+        ],
+        "trainer_sha256": legacy["legacy_confirmation_trainer_sha256"],
+        "guard_mask_observation_signatures_written": True,
+        "outer_test_outcomes_read": False,
+        "outer_test_metrics_read": False,
+        "final_holdout_outcomes_read": False,
+    }
+    path = tmp_path / "run_metadata.json"
+    path.write_text(json.dumps(metadata), encoding="utf-8")
+    kwargs = {
+        "commit": "current",
+        "protocol_sha": "selection",
+        "correction_sha": "current-correction",
+        "trainer_sha": "current-trainer",
+        "factor_builder_sha": "current-builder",
+        "trainer_interface_sha": "current-interface",
+        "correction": correction,
+    }
+    assert metadata_matches(path, row, **kwargs)
+    temporal = row.copy()
+    temporal["state_id"] = "TEMPORAL_YEAR__OUTER1__INNER1"
+    temporal["scenario"] = "TEMPORAL_YEAR"
+    metadata["state_id"] = temporal["state_id"]
+    path.write_text(json.dumps(metadata), encoding="utf-8")
+    assert not metadata_matches(path, temporal, **kwargs)

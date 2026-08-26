@@ -8,6 +8,7 @@ import pandas as pd
 
 from server_training_pipeline.stage1_v2_trainer_interface import (
     load_selection_protocol,
+    load_environment_identity_axis,
     load_state_spec,
     normalize_cycle_year,
     state_role_masks,
@@ -82,18 +83,62 @@ def test_gobs_enew_validation_excludes_unseen_genotypes() -> None:
     assert embargo.tolist() == [False, False, True]
 
 
-def test_confirmation_execution_correction_forces_clean_recompute() -> None:
+def test_confirmation_execution_correction_freezes_parity_axis_and_legacy_scope() -> None:
     correction = json.loads(
         (
             ROOT
             / "server_training_pipeline/"
-            "stage1_v2_phase6_confirmation_execution_correction_v2.json"
+            "stage1_v2_phase6_confirmation_execution_correction_v3.json"
         ).read_text(encoding="utf-8")
     )
     assert correction["scientific_candidate_protocol_unchanged"] is True
     assert correction["frozen_split_artifacts_unchanged"] is True
-    assert correction["execution_requirements"]["recompute_all_375_runs"] is True
+    assert correction["execution_requirements"][
+        "prewarm_all_375_candidate_factor_bindings_before_tensorflow"
+    ] is True
+    assert set(correction["legacy_run_compatibility"]["allowed_scenarios"]) == {
+        "GNEW_EOBS",
+        "GOBS_ENEW",
+        "GNEW_ENEW",
+    }
+    assert correction["legacy_run_compatibility"][
+        "temporal_or_country_legacy_reuse_allowed"
+    ] is False
     assert correction["outer_test_outcomes_read"] is False
+
+
+def test_temporal_identity_axis_uses_parity_training_partition() -> None:
+    axis = load_environment_identity_axis(
+        DATA_ROOT, "TEMPORAL_YEAR__OUTER1__INNER1"
+    )
+    assert len(axis) == 11161
+    assert axis["environment_id"].is_unique
+    assert int(axis["partition"].eq("TRAINING").sum()) == 338
+    assert int(axis["geo_level_index"].ge(0).sum()) >= 338
+
+
+def test_original_identity_axis_remains_exactly_bound_to_phase5() -> None:
+    state_id = "GNEW_EOBS__OUTER1__INNER1"
+    registry = pd.read_csv(
+        DATA_ROOT
+        / "audit/v2/phase5_split_bound_kernel_validation_v2/"
+        "environment/ke_registry.tsv",
+        sep="\t",
+        dtype=str,
+    )
+    row = registry.loc[
+        registry["state_id"].eq(state_id)
+        & registry["component"].eq("K_E_identity")
+    ].iloc[0]
+    expected = pd.read_csv(
+        DATA_ROOT
+        / "audit/v2/phase5_split_bound_kernel_validation_v2"
+        / str(row["entity_order_path"]),
+        sep="\t",
+        dtype=str,
+    )
+    observed = load_environment_identity_axis(DATA_ROOT, state_id)
+    pd.testing.assert_frame_equal(observed, expected)
 
 
 def test_phase6_selection_protocol_freezes_metrics_guards_and_subsets() -> None:

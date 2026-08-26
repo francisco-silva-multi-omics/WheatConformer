@@ -26,6 +26,7 @@ from .stage1_v2_trainer_interface import (
     PARITY,
     PHASE5,
     PROJECTION,
+    load_environment_identity_axis,
     load_selection_protocol,
     load_state_spec,
     state_role_masks,
@@ -551,13 +552,7 @@ def build_h_seeds_factor(root: Path, state_id: str, rank: int) -> FactorBlock:
 
 
 def _environment_axis(root: Path, state_id: str) -> pd.DataFrame:
-    registry = pd.read_csv(root / PHASE5 / "environment/ke_registry.tsv", sep="\t", dtype=str)
-    row = registry.loc[
-        registry["state_id"].eq(state_id) & registry["component"].eq("K_E_identity")
-    ]
-    if len(row) != 1:
-        raise ValueError(f"Missing K_E identity axis for {state_id}")
-    return pd.read_csv(root / PHASE5 / str(row.iloc[0]["entity_order_path"]), sep="\t")
+    return load_environment_identity_axis(root, state_id)
 
 
 def build_identity_geo_factors(root: Path, state_id: str, rank: int) -> tuple[FactorBlock, ...]:
