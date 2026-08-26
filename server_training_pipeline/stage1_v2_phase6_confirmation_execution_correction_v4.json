@@ -1,0 +1,59 @@
+{
+  "protocol_version": "stage1_v2_phase6_confirmation_execution_correction_v4",
+  "stage1_version": "Stage-1 v2",
+  "scientific_candidate_protocol_unchanged": true,
+  "frozen_split_artifacts_unchanged": true,
+  "failure_incidents": [
+    {
+      "failed_state": "TEMPORAL_YEAR__OUTER1__INNER1",
+      "observed_failure": "missing_K_E_identity_axis",
+      "correction": "construct the state partition over the certified Phase-5 identity/location universe using the parity training-environment manifest"
+    },
+    {
+      "failed_state": "TEMPORAL_YEAR__OUTER1__INNER1",
+      "observed_failure": "historical_stage_reaction_components_absent",
+      "correction": "retain certified historical main effects and explicitly deactivate the reaction term when the frozen state has no eligible stage block"
+    }
+  ],
+  "axis_extension": {
+    "canonical_environment_universe": "the single certified 11161-environment Phase-5 K_E identity axis",
+    "location_identity_source": "the certified Phase-5 environment_id-to-location_key mapping",
+    "training_partition_source": "the exact parity-extension training_environment_path for each temporal or country state",
+    "phenotype_or_metric_values_used": false
+  },
+  "masked_reaction_policy": {
+    "states_without_stage_components": 22,
+    "scope": "TEMPORAL_YEAR inner states only",
+    "retained_main_effect_components": ["K_E_MANAGEMENT", "K_E_STRESS", "K_E_WEATHER"],
+    "reaction_design": "zero-column matrix on the canonical environment axis",
+    "reaction_availability": "false for every environment",
+    "model_behavior": "reaction weights are not instantiated; certified main effects remain active",
+    "stage_covariate_imputation_or_invention_allowed": false
+  },
+  "execution_requirements": {
+    "preflight_all_125_inner_state_roles_before_tensorflow": true,
+    "prewarm_all_375_candidate_factor_bindings_before_tensorflow": true,
+    "surface_failed_child_log_tail": true,
+    "cancel_queued_runs_after_worker_failure": true,
+    "current_run_metadata_must_bind_factor_builder_and_interface_hashes": true,
+    "reuse_prior_confirmation_runs": true,
+    "recompute_all_375_runs": false
+  },
+  "legacy_run_compatibility": {
+    "allowed": true,
+    "allowed_scenarios": ["GNEW_EOBS", "GOBS_ENEW", "GNEW_ENEW"],
+    "legacy_protocol_version": "stage1_v2_phase6_confirmation_tf_v2_split_corrected",
+    "legacy_code_commit": "f31466084c1a977edc521a85a57ad7dee63fe654",
+    "legacy_confirmation_trainer_sha256": "ca56796e968c794ccd4b0c4b382335be71add95f1ab3732d860bea84c8d56fa2",
+    "legacy_factor_builder_sha256": "d7e8c3fb8b245347a919dcadbefa1f4f4a90723f539aea68dc7a2121cd928945",
+    "legacy_trainer_interface_sha256": "bd8c81be2f2f881f937d6020e4d5f6869a20a5770eefe85e1b9948acb7c7cf69",
+    "legacy_execution_correction_sha256": "7030b55702499d2b8766a5dea739cb8ac55a718ff338ecbfe9e2ad3bd408d725",
+    "compatibility_basis": "both new correction branches are unreachable for the three legacy scenarios, whose exact Phase-5 axes and nonempty stage components remain unchanged",
+    "temporal_or_country_legacy_reuse_allowed": false
+  },
+  "selection_data": "frozen_identifiers_component_masks_split_metadata_and_implementation_identity_only",
+  "inner_validation_metrics_read_for_correction": false,
+  "outer_test_outcomes_read": false,
+  "outer_test_metrics_read": false,
+  "final_holdout_outcomes_read": false
+}

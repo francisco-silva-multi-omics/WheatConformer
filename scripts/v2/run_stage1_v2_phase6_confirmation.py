@@ -41,11 +41,11 @@ PROTOCOL = Path(
 )
 EXECUTION_CORRECTION = Path(
     "server_training_pipeline/"
-    "stage1_v2_phase6_confirmation_execution_correction_v3.json"
+    "stage1_v2_phase6_confirmation_execution_correction_v4.json"
 )
 FACTOR_BUILDER = Path("server_training_pipeline/train_stage1_v2_phase6_tf.py")
 TRAINER_INTERFACE = Path("server_training_pipeline/stage1_v2_trainer_interface.py")
-RUN_PROTOCOL = "stage1_v2_phase6_confirmation_tf_v3_parity_axis_corrected"
+RUN_PROTOCOL = "stage1_v2_phase6_confirmation_tf_v4_masked_reaction_corrected"
 
 
 def sha256_file(path: Path, block_size: int = 1024 * 1024) -> str:
@@ -599,7 +599,7 @@ def summarize(
         (code_root / EXECUTION_CORRECTION).read_text(encoding="utf-8")
     )
     if correction.get("protocol_version") != (
-        "stage1_v2_phase6_confirmation_execution_correction_v3"
+        "stage1_v2_phase6_confirmation_execution_correction_v4"
     ):
         raise ValueError("Unexpected confirmation execution correction")
     legacy = correction["legacy_run_compatibility"]
@@ -1018,7 +1018,7 @@ def main() -> None:
         (code_root / EXECUTION_CORRECTION).read_text(encoding="utf-8")
     )
     if correction.get("protocol_version") != (
-        "stage1_v2_phase6_confirmation_execution_correction_v3"
+        "stage1_v2_phase6_confirmation_execution_correction_v4"
     ):
         raise ValueError("Unexpected confirmation execution correction")
     workers = args.workers or min(4, int(runtime["physical_cpu_count"]))

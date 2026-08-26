@@ -38,6 +38,7 @@ for path in pathlib.Path(sys.argv[1]).rglob("run_metadata.json"):
         in {
             "stage1_v2_phase6_confirmation_tf_v2_split_corrected",
             "stage1_v2_phase6_confirmation_tf_v3_parity_axis_corrected",
+            "stage1_v2_phase6_confirmation_tf_v4_masked_reaction_corrected",
         }
     ):
         count += 1

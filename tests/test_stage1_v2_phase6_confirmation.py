@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import numpy as np
@@ -16,6 +17,7 @@ from scripts.v2.run_stage1_v2_phase6_confirmation import (
 
 
 ROOT = Path(__file__).resolve().parents[1]
+DATA_ROOT = Path(os.environ.get("STAGE1_V2_DATA_ROOT", ROOT)).resolve()
 
 
 def test_confirmation_protocol_freezes_three_candidates_and_prior_capacities() -> None:
@@ -77,6 +79,24 @@ def test_routed_fallback_is_active_only_for_projection_inactive_identifiers() ->
     assert not bool((routed.available & active).any())
 
 
+def test_temporal_historical_main_effects_survive_without_stage_reaction() -> None:
+    pytest.importorskip("tensorflow")
+    from server_training_pipeline.train_stage1_v2_phase6_tf import (
+        build_historical_environment,
+    )
+
+    blocks, design, available, environment_ids = build_historical_environment(
+        DATA_ROOT, "TEMPORAL_YEAR__OUTER1__INNER1", 64
+    )
+    assert {block.name for block in blocks} == {
+        "K_E_MANAGEMENT",
+        "K_E_STRESS",
+        "K_E_WEATHER",
+    }
+    assert design.shape == (len(environment_ids), 0)
+    assert not bool(available.any())
+
+
 def test_confirmation_server_launcher_is_detached_and_resumable() -> None:
     launcher = (
         ROOT / "scripts/v2/run_stage1_v2_phase6_confirmation_server_cpu.sh"
@@ -135,7 +155,7 @@ def test_legacy_reuse_is_limited_to_exact_unaffected_scenarios(tmp_path: Path) -
         (
             ROOT
             / "server_training_pipeline/"
-            "stage1_v2_phase6_confirmation_execution_correction_v3.json"
+            "stage1_v2_phase6_confirmation_execution_correction_v4.json"
         ).read_text(encoding="utf-8")
     )
     legacy = correction["legacy_run_compatibility"]

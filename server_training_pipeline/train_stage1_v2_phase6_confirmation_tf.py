@@ -48,11 +48,11 @@ PROTOCOL = Path(
 )
 EXECUTION_CORRECTION = Path(
     "server_training_pipeline/"
-    "stage1_v2_phase6_confirmation_execution_correction_v3.json"
+    "stage1_v2_phase6_confirmation_execution_correction_v4.json"
 )
 FACTOR_BUILDER = Path("server_training_pipeline/train_stage1_v2_phase6_tf.py")
 TRAINER_INTERFACE = Path("server_training_pipeline/stage1_v2_trainer_interface.py")
-RUN_PROTOCOL = "stage1_v2_phase6_confirmation_tf_v3_parity_axis_corrected"
+RUN_PROTOCOL = "stage1_v2_phase6_confirmation_tf_v4_masked_reaction_corrected"
 
 
 def load_confirmation_protocol(root: Path) -> dict[str, Any]:
@@ -64,7 +64,7 @@ def load_confirmation_protocol(root: Path) -> dict[str, Any]:
     if protocol.get("protocol_version") != "stage1_v2_phase6_confirmation_v1":
         raise ValueError("Unexpected Stage-1 v2 confirmation protocol")
     if correction.get("protocol_version") != (
-        "stage1_v2_phase6_confirmation_execution_correction_v3"
+        "stage1_v2_phase6_confirmation_execution_correction_v4"
     ):
         raise ValueError("Unexpected Stage-1 v2 confirmation execution correction")
     if correction.get("execution_requirements", {}).get(
@@ -155,7 +155,11 @@ def build_confirmation_factors(
             build_historical_environment(root, state_id, environment_rank)
         )
         environment = (*base, *historical)
-        reaction_enabled = candidate == "historical_reaction_reference"
+        reaction_enabled = (
+            candidate == "historical_reaction_reference"
+            and reaction_design.shape[1] > 0
+            and bool(reaction_available.any())
+        )
     elif candidate == "projection_reaction_routed_fallback":
         projection, reaction_design, reaction_available, environment_ids = (
             build_projection_environment(root, state_id)
@@ -175,7 +179,9 @@ def build_confirmation_factors(
             for block in (*base, *historical)
         )
         environment = (*projection, *fallback)
-        reaction_enabled = True
+        reaction_enabled = reaction_design.shape[1] > 0 and bool(
+            reaction_available.any()
+        )
         for block in fallback:
             if bool((block.available & reaction_available).any()):
                 raise ValueError(f"Routed fallback leaks onto projection-active rows: {block.name}")
@@ -424,6 +430,12 @@ def train_confirmation_run(
         "configuration": configuration,
         "seed": seed,
         "reaction_enabled": reaction_enabled,
+        "reaction_design_feature_count": int(reaction_design.shape[1]),
+        "reaction_available_environment_count": int(reaction_available.sum()),
+        "reaction_disabled_by_component_mask": bool(
+            candidate != "historical_v2_native_multikernel"
+            and not reaction_enabled
+        ),
         "execution_backend": os.environ.get(
             "STAGE1_V2_EXECUTION_BACKEND", "wsl_gpu"
         ),

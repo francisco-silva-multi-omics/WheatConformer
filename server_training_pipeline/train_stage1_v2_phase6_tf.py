@@ -764,11 +764,15 @@ def build_historical_environment(
         if component.startswith("K_E_STAGE_"):
             stage_values.append(values)
             stage_available.append(available)
-    if not blocks or not stage_values:
+    if not blocks:
         raise ValueError(f"Historical parity components are incomplete: {state_id}")
-    reaction_design = np.concatenate(stage_values, axis=1).astype(np.float32)
-    reaction_available = np.logical_and.reduce(stage_available)
-    reaction_design[~reaction_available] = 0.0
+    if stage_values:
+        reaction_design = np.concatenate(stage_values, axis=1).astype(np.float32)
+        reaction_available = np.logical_and.reduce(stage_available)
+        reaction_design[~reaction_available] = 0.0
+    else:
+        reaction_design = np.zeros((len(environment_ids), 0), dtype=np.float32)
+        reaction_available = np.zeros(len(environment_ids), dtype=bool)
     factor_starts = np.cumsum([0, *[block.values.shape[1] for block in blocks[:-1]]])
     factor_stops = factor_starts + np.asarray(
         [block.values.shape[1] for block in blocks]

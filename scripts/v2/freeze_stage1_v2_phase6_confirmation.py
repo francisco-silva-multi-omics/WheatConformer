@@ -22,7 +22,7 @@ PROTOCOL = Path(
 IMPLEMENTATION = (
     Path(
         "server_training_pipeline/"
-        "stage1_v2_phase6_confirmation_execution_correction_v3.json"
+        "stage1_v2_phase6_confirmation_execution_correction_v4.json"
     ),
     Path("server_training_pipeline/stage1_v2_trainer_interface.py"),
     Path("server_training_pipeline/train_stage1_v2_phase6_tf.py"),
@@ -126,7 +126,7 @@ def main() -> None:
         checks,
         "execution_correction_version",
         correction.get("protocol_version")
-        == "stage1_v2_phase6_confirmation_execution_correction_v3",
+        == "stage1_v2_phase6_confirmation_execution_correction_v4",
         str(correction.get("protocol_version")),
     )
     record(
@@ -214,6 +214,41 @@ def main() -> None:
         len(extension_states) == 60 and not missing_ids,
         f"states={len(extension_states)}; missing_ids={len(missing_ids)}; "
         f"canonical_environments={len(canonical_ids)}",
+    )
+    environment_registry = pd.read_csv(
+        root / PARITY / "environment/environment_component_registry.tsv",
+        sep="\t",
+        dtype=str,
+    )
+    temporal_inner_ids = set(
+        extension_states.loc[
+            extension_states["scenario"].eq("TEMPORAL_YEAR")
+            & extension_states["state_level"].eq("INNER"),
+            "state_id",
+        ].astype(str)
+    )
+    stage_available = environment_registry.loc[
+        environment_registry["state_id"].isin(temporal_inner_ids)
+        & environment_registry["component"].str.startswith("K_E_STAGE_")
+        & environment_registry["component_available"].str.lower().eq("true")
+    ]
+    zero_stage_states = temporal_inner_ids - set(stage_available["state_id"].astype(str))
+    main_effects = environment_registry.loc[
+        environment_registry["state_id"].isin(zero_stage_states)
+        & environment_registry["component"].isin(
+            {"K_E_MANAGEMENT", "K_E_STRESS", "K_E_WEATHER"}
+        )
+        & environment_registry["component_available"].str.lower().eq("true")
+    ]
+    main_effect_counts = main_effects.groupby("state_id")["component"].nunique()
+    record(
+        checks,
+        "masked_temporal_reaction_scope",
+        len(zero_stage_states) == 22
+        and len(main_effect_counts) == 22
+        and main_effect_counts.eq(3).all(),
+        f"zero_stage_states={len(zero_stage_states)}; "
+        f"main_effect_complete_states={int(main_effect_counts.eq(3).sum())}",
     )
     record(
         checks,

@@ -88,7 +88,7 @@ def test_confirmation_execution_correction_freezes_parity_axis_and_legacy_scope(
         (
             ROOT
             / "server_training_pipeline/"
-            "stage1_v2_phase6_confirmation_execution_correction_v3.json"
+            "stage1_v2_phase6_confirmation_execution_correction_v4.json"
         ).read_text(encoding="utf-8")
     )
     assert correction["scientific_candidate_protocol_unchanged"] is True
@@ -139,6 +139,43 @@ def test_original_identity_axis_remains_exactly_bound_to_phase5() -> None:
     )
     observed = load_environment_identity_axis(DATA_ROOT, state_id)
     pd.testing.assert_frame_equal(observed, expected)
+
+
+def test_temporal_stage_absence_is_an_explicit_22_state_mask() -> None:
+    parity = DATA_ROOT / (
+        "audit/v2/phase5_panel_environment_scenario_parity_extension_v2"
+    )
+    states = pd.read_csv(parity / "splits/state_registry.tsv", sep="\t", dtype=str)
+    registry = pd.read_csv(
+        parity / "environment/environment_component_registry.tsv",
+        sep="\t",
+        dtype=str,
+    )
+    temporal_inner = set(
+        states.loc[
+            states["scenario"].eq("TEMPORAL_YEAR")
+            & states["state_level"].eq("INNER"),
+            "state_id",
+        ]
+    )
+    stage_available = set(
+        registry.loc[
+            registry["state_id"].isin(temporal_inner)
+            & registry["component"].str.startswith("K_E_STAGE_")
+            & registry["component_available"].str.lower().eq("true"),
+            "state_id",
+        ]
+    )
+    zero_stage = temporal_inner - stage_available
+    assert len(zero_stage) == 22
+    main = registry.loc[
+        registry["state_id"].isin(zero_stage)
+        & registry["component"].isin(
+            {"K_E_MANAGEMENT", "K_E_STRESS", "K_E_WEATHER"}
+        )
+        & registry["component_available"].str.lower().eq("true")
+    ]
+    assert main.groupby("state_id")["component"].nunique().eq(3).all()
 
 
 def test_phase6_selection_protocol_freezes_metrics_guards_and_subsets() -> None:
