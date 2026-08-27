@@ -50,3 +50,23 @@ tail -f "$(cat "$DATA/audit/v2/stage1_v2_phase6_remediation_server_cpu_v1/latest
 
 The runner is resumable. A run is reused only when all required artifacts and a
 passing metadata record are present.
+
+## Reporting export
+
+After all 70 runs certify, build the metrics-only evaluation package:
+
+```bash
+bash "$CODE/scripts/v2/package_stage1_v2_phase6_remediation_results.sh" "$DATA"
+```
+
+This produces:
+
+```text
+audit/v2/stage1_v2_phase6_remediation_export_v1/stage1_v2_phase6_remediation_results.tar.gz
+audit/v2/stage1_v2_phase6_remediation_export_v1/stage1_v2_phase6_remediation_results.tar.gz.sha256
+```
+
+The exporter validates the complete run grid, frozen hashes, paired observation
+signatures, route support, calibration lineage, and sealed outcomes before
+creating the archive. It excludes phenotype tables, row-level predictions,
+checkpoints, factor caches, outer outcomes, and final-holdout material.
