@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from typing import Any, Sequence
 
 import numpy as np
@@ -145,4 +146,216 @@ def apply_calibration(
             continue
         row = lookup.loc[trait]
         result[index] = float(row["intercept"]) + float(row["slope"]) * result[index]
+    return result
+
+
+def _weighted_calibration_coefficients(
+    prediction: np.ndarray,
+    target: np.ndarray,
+    weight: np.ndarray,
+    contract: dict[str, Any],
+) -> tuple[float, float]:
+    weight_sum = float(weight.sum())
+    if weight_sum <= 0:
+        return 0.0, 1.0
+    x_mean = float(np.sum(weight * prediction) / weight_sum)
+    y_mean = float(np.sum(weight * target) / weight_sum)
+    covariance = float(
+        np.sum(weight * (prediction - x_mean) * (target - y_mean)) / weight_sum
+    )
+    variance = float(
+        np.sum(weight * np.square(prediction - x_mean)) / weight_sum
+    )
+    raw_slope = covariance / (variance + float(contract["weighted_ridge"]))
+    slope = float(
+        np.clip(
+            raw_slope,
+            float(contract["minimum_slope"]),
+            float(contract["maximum_slope"]),
+        )
+    )
+    return y_mean - slope * x_mean, slope
+
+
+def _group_fold(value: str, fold_count: int) -> int:
+    digest = hashlib.sha256(value.encode("utf-8")).digest()
+    return int.from_bytes(digest[:8], byteorder="big", signed=False) % fold_count
+
+
+def fit_group_crossfitted_trait_calibration(
+    training: pd.DataFrame,
+    prediction: np.ndarray,
+    active: np.ndarray,
+    trait_names: Sequence[str],
+    protocol: dict[str, Any],
+    *,
+    target_trait: str,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Fit a robust training-only calibrator across held-out identifier groups.
+
+    The predictive model is unchanged. Calibration coefficients are fitted on
+    four grouped partitions at a time, audited on the fifth, and aggregated by
+    the preregistered componentwise median. Inner-validation values never enter
+    this procedure.
+    """
+
+    evidence_columns = [
+        "trait_name_canonical",
+        "crossfit_fold",
+        "fit_rows",
+        "heldout_rows",
+        "fit_group_count",
+        "heldout_group_count",
+        "intercept",
+        "slope",
+        "heldout_calibration_slope",
+        "heldout_scaled_rmse",
+        "status",
+        "validation_values_used",
+    ]
+    calibration = fit_positive_calibration(
+        training, prediction, active, trait_names, protocol
+    )
+    calibration["method"] = "standard_full_training"
+    calibration["crossfit_valid_folds"] = 0
+    contract = protocol["test_weight_group_crossfit"]
+    if target_trait not in trait_names:
+        raise ValueError(f"Cross-fit target trait is absent: {target_trait}")
+    trait_index = list(trait_names).index(target_trait)
+    trait_values = training["trait_index"].to_numpy(dtype=int)
+    weights = training["loss_weight"].to_numpy(dtype=float)
+    target_mask = active & (trait_values == trait_index) & (weights > 0)
+    local = training.loc[target_mask].copy()
+    local_prediction = np.asarray(prediction, dtype=float)[target_mask]
+    if len(local) < int(contract["minimum_fit_rows_per_fold"]):
+        calibration.loc[
+            calibration["trait_name_canonical"].eq(target_trait),
+            ["intercept", "slope", "status", "method"],
+        ] = [0.0, 1.0, "IDENTITY_CROSSFIT_INSUFFICIENT_SUPPORT", "identity"]
+        return calibration, pd.DataFrame(columns=evidence_columns)
+
+    trial = clean_identifier(local["trial_id"])
+    environment = clean_identifier(local["environment_id"])
+    row_id = clean_identifier(local["phase4_adjusted_row_id"])
+    group = pd.Series(index=local.index, dtype="string")
+    group.loc[trial.ne("")] = "TRIAL:" + trial.loc[trial.ne("")]
+    missing = group.isna()
+    group.loc[missing & environment.ne("")] = (
+        "ENV:" + environment.loc[missing & environment.ne("")]
+    )
+    missing = group.isna()
+    group.loc[missing] = "ROW:" + row_id.loc[missing]
+    fold_count = int(contract["fold_count"])
+    folds = group.map(lambda value: _group_fold(str(value), fold_count)).to_numpy()
+    target = local["y_scaled"].to_numpy(dtype=float)
+    local_weight = local["loss_weight"].to_numpy(dtype=float)
+    evidence: list[dict[str, object]] = []
+    coefficients: list[tuple[float, float]] = []
+    positive = protocol["positive_training_calibration"]
+    for fold in range(fold_count):
+        heldout = folds == fold
+        fit = ~heldout
+        fit_rows = int(fit.sum())
+        heldout_rows = int(heldout.sum())
+        valid = (
+            fit_rows >= int(contract["minimum_fit_rows_per_fold"])
+            and heldout_rows >= int(contract["minimum_heldout_rows_per_fold"])
+        )
+        intercept = 0.0
+        slope = 1.0
+        heldout_slope = np.nan
+        heldout_rmse = np.nan
+        if valid:
+            intercept, slope = _weighted_calibration_coefficients(
+                local_prediction[fit], target[fit], local_weight[fit], positive
+            )
+            calibrated = intercept + slope * local_prediction[heldout]
+            _, heldout_slope = _weighted_calibration_coefficients(
+                calibrated,
+                target[heldout],
+                local_weight[heldout],
+                {**positive, "weighted_ridge": 0.0},
+            )
+            heldout_rmse = float(
+                np.sqrt(
+                    np.average(
+                        np.square(target[heldout] - calibrated),
+                        weights=local_weight[heldout],
+                    )
+                )
+            )
+            coefficients.append((intercept, slope))
+        evidence.append(
+            {
+                "trait_name_canonical": target_trait,
+                "crossfit_fold": fold,
+                "fit_rows": fit_rows,
+                "heldout_rows": heldout_rows,
+                "fit_group_count": int(pd.Series(group.to_numpy()[fit]).nunique()),
+                "heldout_group_count": int(
+                    pd.Series(group.to_numpy()[heldout]).nunique()
+                ),
+                "intercept": intercept,
+                "slope": slope,
+                "heldout_calibration_slope": heldout_slope,
+                "heldout_scaled_rmse": heldout_rmse,
+                "status": "PASS" if valid else "INSUFFICIENT_FOLD_SUPPORT",
+                "validation_values_used": False,
+            }
+        )
+    target_row = calibration["trait_name_canonical"].eq(target_trait)
+    if len(coefficients) == fold_count:
+        intercept = float(np.median([value[0] for value in coefficients]))
+        slope = float(np.median([value[1] for value in coefficients]))
+        calibration.loc[
+            target_row,
+            [
+                "intercept",
+                "slope",
+                "status",
+                "method",
+                "crossfit_valid_folds",
+            ],
+        ] = [
+            intercept,
+            slope,
+            "FITTED_GROUP_CROSSFIT_MEDIAN",
+            "group_crossfit_median",
+            fold_count,
+        ]
+    else:
+        calibration.loc[
+            target_row,
+            [
+                "intercept",
+                "slope",
+                "status",
+                "method",
+                "crossfit_valid_folds",
+            ],
+        ] = [
+            0.0,
+            1.0,
+            "IDENTITY_CROSSFIT_INCOMPLETE",
+            "identity",
+            len(coefficients),
+        ]
+    return calibration, pd.DataFrame(evidence, columns=evidence_columns)
+
+
+def set_trait_identity_calibration(
+    calibration: pd.DataFrame, trait_name: str
+) -> pd.DataFrame:
+    result = calibration.copy()
+    if "method" not in result:
+        result["method"] = "standard_full_training"
+    if "crossfit_valid_folds" not in result:
+        result["crossfit_valid_folds"] = 0
+    target = result["trait_name_canonical"].eq(trait_name)
+    if int(target.sum()) != 1:
+        raise ValueError(f"Identity calibration target is not unique: {trait_name}")
+    result.loc[
+        target,
+        ["intercept", "slope", "status", "method", "crossfit_valid_folds"],
+    ] = [0.0, 1.0, "IDENTITY_PREREGISTERED", "identity", 0]
     return result
