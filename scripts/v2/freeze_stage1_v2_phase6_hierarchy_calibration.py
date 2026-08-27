@@ -23,6 +23,12 @@ TRAINER = Path(
 HELPER = Path("server_training_pipeline/stage1_v2_phase6_remediation.py")
 RUNNER = Path("scripts/v2/run_stage1_v2_phase6_hierarchy_calibration.py")
 REPLAY = Path("scripts/v2/certify_stage1_v2_phase6_information_guard_replay.py")
+SERVER_RUNNER = Path(
+    "scripts/v2/run_stage1_v2_phase6_hierarchy_calibration_server_cpu.sh"
+)
+SERVER_TEST_REQUIREMENTS = Path(
+    "requirements/stage1_v2_server_cpu_test_addons.txt"
+)
 SOURCE_SUMMARY = Path("model_kernels/stage1_v2_phase6_remediation_v1/phase_1")
 SOURCE_RUNS = Path("trained_models/stage1_v2_phase6_remediation_v1_runs/phase_1")
 REPLAY_OUTPUT = Path("audit/v2/stage1_v2_phase6_information_guard_replay_v1")
@@ -95,6 +101,8 @@ def main() -> None:
         code_root / HELPER,
         code_root / RUNNER,
         code_root / REPLAY,
+        code_root / SERVER_RUNNER,
+        code_root / SERVER_TEST_REQUIREMENTS,
         *(code_root / path for path in TESTS),
     ]
     required = [*code_files, source_decision_path, source_grid_path, replay_path]

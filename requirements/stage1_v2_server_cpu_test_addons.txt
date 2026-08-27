@@ -1,0 +1,14 @@
+# Audit/test-only additions for the certified Stage-1 v2 server CPU runtime.
+# Install into tf_wheat_cpu after its TensorFlow/Numpy/Pandas core is frozen.
+-r audit.txt
+
+scikit-learn==1.9.0
+pytest==8.4.2
+xarray==2026.7.0
+lxml==6.0.2
+cftime==1.6.5
+affine==2.4.0
+rasterio==1.4.3
+netCDF4==1.7.4
+h5netcdf==1.8.1
+dask==2026.7.1

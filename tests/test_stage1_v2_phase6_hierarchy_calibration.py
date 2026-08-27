@@ -25,6 +25,12 @@ PROTOCOL_PATH = (
 SOURCE_PROTOCOL_PATH = (
     ROOT / "server_training_pipeline/stage1_v2_phase6_remediation_protocol_v1.json"
 )
+SERVER_RUNNER_PATH = (
+    ROOT / "scripts/v2/run_stage1_v2_phase6_hierarchy_calibration_server_cpu.sh"
+)
+SERVER_TEST_REQUIREMENTS_PATH = (
+    ROOT / "requirements/stage1_v2_server_cpu_test_addons.txt"
+)
 
 
 def protocol() -> dict:
@@ -46,6 +52,23 @@ def test_protocol_keeps_architecture_optimizer_and_acceptance_fixed() -> None:
     assert value["outer_test_metrics_read"] is False
     assert value["final_holdout_outcomes_read"] is False
     assert value["full_confirmation_policy"]["automatic_launch"] is False
+
+
+def test_server_full_suite_runs_from_code_root_with_pinned_addons() -> None:
+    runner = SERVER_RUNNER_PATH.read_text(encoding="utf-8")
+    requirements = SERVER_TEST_REQUIREMENTS_PATH.read_text(encoding="utf-8")
+    assert 'cd "$CODE_ROOT"' in runner
+    assert '"$PYTHON_BIN" -m pytest -q "$CODE_ROOT/tests"' in runner
+    assert "validate_runtime(Path.cwd(), \"server_cpu\")" in runner
+    for requirement in (
+        "xarray==2026.7.0",
+        "lxml==6.0.2",
+        "cftime==1.6.5",
+        "affine==2.4.0",
+        "rasterio==1.4.3",
+        "netCDF4==1.7.4",
+    ):
+        assert requirement in requirements
 
 
 def calibration_frame() -> tuple[pd.DataFrame, np.ndarray, np.ndarray]:
