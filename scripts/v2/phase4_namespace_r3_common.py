@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 from pathlib import Path
 from typing import Any, Iterable
@@ -13,17 +14,18 @@ import pandas as pd
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
-TRIAL_ROOT = REPOSITORY_ROOT / "TRIALS_AND_NURSERIES_DATA"
-GENOTYPE_ROOT = REPOSITORY_ROOT / "GENOTYPIC_DATA"
-STAGE1_ROOT = REPOSITORY_ROOT / "audit/v2/phase3_stage1_v2_reconstruction_v1"
-PHASE3G_R2_ROOT = REPOSITORY_ROOT / "audit/v2/phase3g_all_panel_genotype_linkage_audit_v2"
-PHASE4_ROOT = REPOSITORY_ROOT / "audit/v2/phase4_integrated_spatial_promotion_release_v1"
-PHASE5_ROOT = REPOSITORY_ROOT / "audit/v2/phase5_kernel_validation_v1"
+DATA_ROOT = Path(os.environ.get("STAGE1_V2_DATA_ROOT", REPOSITORY_ROOT)).resolve()
+TRIAL_ROOT = DATA_ROOT / "TRIALS_AND_NURSERIES_DATA"
+GENOTYPE_ROOT = DATA_ROOT / "GENOTYPIC_DATA"
+STAGE1_ROOT = DATA_ROOT / "audit/v2/phase3_stage1_v2_reconstruction_v1"
+PHASE3G_R2_ROOT = DATA_ROOT / "audit/v2/phase3g_all_panel_genotype_linkage_audit_v2"
+PHASE4_ROOT = DATA_ROOT / "audit/v2/phase4_integrated_spatial_promotion_release_v1"
+PHASE5_ROOT = DATA_ROOT / "audit/v2/phase5_kernel_validation_v1"
 
-PHASE4_NS_ROOT = REPOSITORY_ROOT / "audit/v2/phase4_namespace_corrected_release_v1"
-PHASE3G_R3_ROOT = REPOSITORY_ROOT / "audit/v2/phase3g_r3_identity_recovery_v1"
-STAGE1_R3_ROOT = REPOSITORY_ROOT / "audit/v2/stage1_r3_recovery_reconstruction_v1"
-PHASE4_R3_ROOT = REPOSITORY_ROOT / "audit/v2/phase4_r3_recovery_promotion_v1"
+PHASE4_NS_ROOT = DATA_ROOT / "audit/v2/phase4_namespace_corrected_release_v1"
+PHASE3G_R3_ROOT = DATA_ROOT / "audit/v2/phase3g_r3_identity_recovery_v1"
+STAGE1_R3_ROOT = DATA_ROOT / "audit/v2/stage1_r3_recovery_reconstruction_v1"
+PHASE4_R3_ROOT = DATA_ROOT / "audit/v2/phase4_r3_recovery_promotion_v1"
 
 PHASE4_NS_RELEASE_ID = "P4NSC_20260808_V1_274E41DF"
 PHASE3G_R3_RELEASE_ID = "P3GR3_20260808_V1_274E41DF"

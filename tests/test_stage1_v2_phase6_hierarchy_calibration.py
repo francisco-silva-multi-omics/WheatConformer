@@ -58,6 +58,7 @@ def test_server_full_suite_runs_from_code_root_with_pinned_addons() -> None:
     runner = SERVER_RUNNER_PATH.read_text(encoding="utf-8")
     requirements = SERVER_TEST_REQUIREMENTS_PATH.read_text(encoding="utf-8")
     assert 'cd "$CODE_ROOT"' in runner
+    assert 'export STAGE1_V2_DATA_ROOT="$DATA_ROOT"' in runner
     assert '"$PYTHON_BIN" -m pytest -q "$CODE_ROOT/tests"' in runner
     assert "validate_runtime(Path.cwd(), \"server_cpu\")" in runner
     for requirement in (

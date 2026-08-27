@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from pathlib import Path
 
 import pandas as pd
@@ -11,8 +12,9 @@ from scripts.v2.phase4_coordinate_recovery import semantic
 from scripts.v2.phase4_integrated_build_promotion import stable_id
 
 
-ROOT = Path(__file__).resolve().parents[1]
-RELEASE = ROOT / "audit/v2/phase4_integrated_spatial_promotion_release_v1"
+CODE_ROOT = Path(__file__).resolve().parents[1]
+DATA_ROOT = Path(os.environ.get("STAGE1_V2_DATA_ROOT", CODE_ROOT)).resolve()
+RELEASE = DATA_ROOT / "audit/v2/phase4_integrated_spatial_promotion_release_v1"
 TRAIN = "P4ISP_20260802_V1_274E41DF"
 
 
@@ -58,7 +60,9 @@ def test_06_conditional_authoritative_candidate_selection():
 
 
 def test_07_no_v1_fallback_when_valid_coordinate_requires_correction():
-    source = (ROOT / "scripts/v2/phase4_integrated_build_promotion.py").read_text(encoding="utf-8")
+    source = (
+        CODE_ROOT / "scripts/v2/phase4_integrated_build_promotion.py"
+    ).read_text(encoding="utf-8")
     assert "Valid coordinates require a complete corrected Phase-4 candidate" in source
 
 

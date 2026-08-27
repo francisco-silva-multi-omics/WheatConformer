@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import numpy as np
@@ -14,7 +15,8 @@ from server_genotype_recovery.ka_state_bindings_v2 import (
 )
 
 
-ROOT = Path(__file__).resolve().parents[1]
+CODE_ROOT = Path(__file__).resolve().parents[1]
+DATA_ROOT = Path(os.environ.get("STAGE1_V2_DATA_ROOT", CODE_ROOT)).resolve()
 
 
 def synthetic_registry() -> pd.DataFrame:
@@ -83,8 +85,10 @@ def test_combined_registry_requires_exact_90_60_source_split() -> None:
 
 
 def test_real_existing_binding_constructor_replays_one_phase5_state() -> None:
-    phase5 = ROOT / "audit/v2/phase5_split_bound_kernel_validation_v2"
-    parity = ROOT / "audit/v2/phase5_panel_environment_scenario_parity_extension_v2"
+    phase5 = DATA_ROOT / "audit/v2/phase5_split_bound_kernel_validation_v2"
+    parity = (
+        DATA_ROOT / "audit/v2/phase5_panel_environment_scenario_parity_extension_v2"
+    )
     node_registry = pd.read_csv(phase5 / "pedigree/pedigree_node_registry.tsv", sep="\t", dtype=str)
     observed = observed_pedigree_registry(node_registry)
     states = pd.read_csv(parity / "splits/state_registry.tsv", sep="\t", dtype=str)

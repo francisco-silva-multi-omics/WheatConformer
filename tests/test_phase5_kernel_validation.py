@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import duckdb
@@ -19,9 +20,16 @@ from scripts.v2.phase5_independent_reconstruction import (
 )
 
 
-ROOT = Path(__file__).resolve().parents[1]
-RELEASE = ROOT / "audit" / "v2" / "phase5_kernel_validation_v1"
-PROMOTED = ROOT / "audit" / "v2" / "phase4_integrated_spatial_promotion_release_v1" / "promoted_phenotypes.parquet"
+CODE_ROOT = Path(__file__).resolve().parents[1]
+DATA_ROOT = Path(os.environ.get("STAGE1_V2_DATA_ROOT", CODE_ROOT)).resolve()
+RELEASE = DATA_ROOT / "audit" / "v2" / "phase5_kernel_validation_v1"
+PROMOTED = (
+    DATA_ROOT
+    / "audit"
+    / "v2"
+    / "phase4_integrated_spatial_promotion_release_v1"
+    / "promoted_phenotypes.parquet"
+)
 
 
 def test_independent_analytical_suite_passes() -> None:
