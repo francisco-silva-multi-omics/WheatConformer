@@ -44,7 +44,7 @@ def test_confirmation_protocol_freezes_three_candidates_and_prior_capacities() -
 
 def test_confirmation_grid_has_125_states_and_matched_candidate_seeds() -> None:
     protocol = load_confirmation_protocol(ROOT)
-    grid = confirmation_grid(ROOT, protocol)
+    grid = confirmation_grid(DATA_ROOT, protocol)
     assert len(grid) == 375
     assert grid["state_id"].nunique() == 125
     assert grid["scenario"].nunique() == 5

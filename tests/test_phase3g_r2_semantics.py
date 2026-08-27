@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import os
 from pathlib import Path
 
 import pandas as pd
@@ -18,8 +19,9 @@ from scripts.v2.phase3g_r2_semantics import (
 )
 
 
-ROOT = Path(__file__).resolve().parents[1]
-GENOTYPE_ROOT = ROOT / "GENOTYPIC_DATA"
+CODE_ROOT = Path(__file__).resolve().parents[1]
+DATA_ROOT = Path(os.environ.get("STAGE1_V2_DATA_ROOT", CODE_ROOT)).resolve()
+GENOTYPE_ROOT = DATA_ROOT / "GENOTYPIC_DATA"
 
 
 def test_sample_instance_keys_are_stable_and_component_sensitive() -> None:

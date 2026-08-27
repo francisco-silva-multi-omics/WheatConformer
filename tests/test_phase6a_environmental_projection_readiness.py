@@ -30,10 +30,9 @@ def release_root() -> Path:
     configured = os.environ.get("PHASE6A_ENV_RELEASE_ROOT")
     if configured:
         return Path(configured)
-    return (
-        Path(__file__).resolve().parents[1]
-        / "audit/v2/phase6a_environmental_projection_readiness_v1"
-    )
+    code_root = Path(__file__).resolve().parents[1]
+    data_root = Path(os.environ.get("STAGE1_V2_DATA_ROOT", code_root)).resolve()
+    return data_root / "audit/v2/phase6a_environmental_projection_readiness_v1"
 
 
 @pytest.fixture(scope="module")

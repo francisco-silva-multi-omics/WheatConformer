@@ -23,7 +23,9 @@ def release_root() -> Path:
     configured = os.environ.get("PHASE5_PARITY_RELEASE_ROOT")
     if configured:
         return Path(configured)
-    return Path(__file__).resolve().parents[1] / "audit/v2/phase5_panel_environment_scenario_parity_extension_v2"
+    code_root = Path(__file__).resolve().parents[1]
+    data_root = Path(os.environ.get("STAGE1_V2_DATA_ROOT", code_root)).resolve()
+    return data_root / "audit/v2/phase5_panel_environment_scenario_parity_extension_v2"
 
 
 @pytest.fixture(scope="module")

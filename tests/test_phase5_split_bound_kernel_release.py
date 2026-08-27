@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -10,8 +11,9 @@ import pyarrow.parquet as pq
 import pytest
 
 
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "scripts" / "v2"))
+CODE_ROOT = Path(__file__).resolve().parents[1]
+DATA_ROOT = Path(os.environ.get("STAGE1_V2_DATA_ROOT", CODE_ROOT)).resolve()
+sys.path.insert(0, str(CODE_ROOT / "scripts" / "v2"))
 
 from phase5_split_bound_common import (  # noqa: E402
     PROHIBITED_SPLIT_COLUMNS,
@@ -32,7 +34,7 @@ from phase5_split_bound_build import PANEL_CLASS, portable_selection  # noqa: E4
 from phase5_split_bound_finalize import parse_pytest_log  # noqa: E402
 
 
-RELEASE = ROOT / "audit" / "v2" / "phase5_split_bound_kernel_validation_v2"
+RELEASE = DATA_ROOT / "audit" / "v2" / "phase5_split_bound_kernel_validation_v2"
 
 
 def test_split_projection_excludes_every_prohibited_column() -> None:

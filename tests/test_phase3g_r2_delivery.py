@@ -4,15 +4,17 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from pathlib import Path
 
 import pandas as pd
 import pytest
 
 
-ROOT = Path(__file__).resolve().parents[1]
-R2 = ROOT / "audit" / "v2" / "phase3g_all_panel_genotype_linkage_audit_v2"
-R1 = ROOT / "audit" / "v2" / "phase3g_all_panel_genotype_linkage_audit_v1"
+CODE_ROOT = Path(__file__).resolve().parents[1]
+DATA_ROOT = Path(os.environ.get("STAGE1_V2_DATA_ROOT", CODE_ROOT)).resolve()
+R2 = DATA_ROOT / "audit" / "v2" / "phase3g_all_panel_genotype_linkage_audit_v2"
+R1 = DATA_ROOT / "audit" / "v2" / "phase3g_all_panel_genotype_linkage_audit_v1"
 pytestmark = pytest.mark.skipif(not (R2 / "phase3g_r2_build_summary.json").exists(), reason="R2 delivery not built")
 
 

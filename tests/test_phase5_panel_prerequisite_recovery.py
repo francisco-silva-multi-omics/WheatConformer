@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pandas as pd
@@ -12,10 +13,9 @@ from scripts.v2.recover_phase5_panel_prerequisites import (
 )
 
 
-RELEASE = (
-    Path(__file__).resolve().parents[1]
-    / "audit/v2/phase5_panel_prerequisite_recovery_v1"
-)
+CODE_ROOT = Path(__file__).resolve().parents[1]
+DATA_ROOT = Path(os.environ.get("STAGE1_V2_DATA_ROOT", CODE_ROOT)).resolve()
+RELEASE = DATA_ROOT / "audit/v2/phase5_panel_prerequisite_recovery_v1"
 
 
 def test_identity_normalization_is_bounded() -> None:

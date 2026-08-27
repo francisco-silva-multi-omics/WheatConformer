@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import os
 from pathlib import Path
 
 import pytest
@@ -76,8 +77,9 @@ def test_one_gid_can_retain_multiple_panel_samples() -> None:
     assert set(records.values()) == {"GID775"}
 
 
-ROOT = Path(__file__).resolve().parents[1]
-GENOTYPE_ROOT = ROOT / "GENOTYPIC_DATA"
+CODE_ROOT = Path(__file__).resolve().parents[1]
+DATA_ROOT = Path(os.environ.get("STAGE1_V2_DATA_ROOT", CODE_ROOT)).resolve()
+GENOTYPE_ROOT = DATA_ROOT / "GENOTYPIC_DATA"
 
 
 @pytest.mark.skipif(not GENOTYPE_ROOT.exists(), reason="representative raw genotype bundle unavailable")

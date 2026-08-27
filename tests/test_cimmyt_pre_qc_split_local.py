@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import numpy as np
@@ -8,9 +9,10 @@ import pandas as pd
 import pytest
 
 
-ROOT = Path(__file__).resolve().parents[1]
-RELEASE = ROOT / "audit/v2/phase5_cimmyt_pre_qc_split_local_v1"
-PROTOCOL = ROOT / "scripts/v2/cimmyt_pre_qc_split_local_protocol_v1.json"
+CODE_ROOT = Path(__file__).resolve().parents[1]
+DATA_ROOT = Path(os.environ.get("STAGE1_V2_DATA_ROOT", CODE_ROOT)).resolve()
+RELEASE = DATA_ROOT / "audit/v2/phase5_cimmyt_pre_qc_split_local_v1"
+PROTOCOL = CODE_ROOT / "scripts/v2/cimmyt_pre_qc_split_local_protocol_v1.json"
 
 
 def test_protocol_is_frozen_before_streaming() -> None:
