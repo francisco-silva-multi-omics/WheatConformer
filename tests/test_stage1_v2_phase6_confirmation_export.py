@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pandas as pd
 import pytest
 
 from scripts.v2.package_stage1_v2_phase6_confirmation_results import (
@@ -10,6 +11,7 @@ from scripts.v2.package_stage1_v2_phase6_confirmation_results import (
     CURRENT_RUN_PROTOCOL,
     LEGACY_RUN_PROTOCOL,
     RUN_FILES,
+    build_trait_availability,
     validate_run_protocol,
 )
 
@@ -89,3 +91,87 @@ def test_confirmation_export_shell_wrapper_uses_certified_runtime() -> None:
     assert "/home/practicasciad/tools/tf_wheat_cpu/bin/python" in wrapper
     assert "sha256sum -c" in wrapper
     assert "package_stage1_v2_phase6_confirmation_results" in wrapper
+
+
+def test_trait_availability_accepts_state_level_missing_trait() -> None:
+    candidates = ["a", "b", "c"]
+    grid = pd.DataFrame(
+        [
+            {
+                "state_id": state_id,
+                "scenario": "GNEW_EOBS",
+                "outer_fold": 1,
+                "inner_fold": 1 if state_id == "S1" else 2,
+                "candidate": candidate,
+            }
+            for state_id in ["S1", "S2"]
+            for candidate in candidates
+        ]
+    )
+    frozen_traits = [
+        "1000_GRAIN_WEIGHT",
+        "ABOVE_GROUND_BIOMASS",
+        "DAYS_TO_HEADING",
+        "DAYS_TO_MATURITY",
+        "GRAIN_YIELD",
+        "PLANT_HEIGHT",
+        "TEST_WEIGHT",
+    ]
+    traits = pd.DataFrame(
+        [
+            {
+                "state_id": state_id,
+                "candidate": candidate,
+                "trait_name_canonical": trait,
+            }
+            for state_id in ["S1", "S2"]
+            for candidate in candidates
+            for trait in frozen_traits
+            if not (
+                state_id == "S1" and trait == "ABOVE_GROUND_BIOMASS"
+            )
+        ]
+    )
+    availability = build_trait_availability(grid, traits)
+    missing = availability.loc[
+        availability["availability_status"].eq("UNAVAILABLE_IN_STATE")
+    ]
+    assert missing["trait_name_canonical"].tolist() == ["ABOVE_GROUND_BIOMASS"]
+
+
+def test_trait_availability_rejects_candidate_specific_missing_trait() -> None:
+    grid = pd.DataFrame(
+        [
+            {
+                "state_id": "S1",
+                "scenario": "GNEW_EOBS",
+                "outer_fold": 1,
+                "inner_fold": 1,
+                "candidate": candidate,
+            }
+            for candidate in ["a", "b", "c"]
+        ]
+    )
+    frozen_traits = [
+        "1000_GRAIN_WEIGHT",
+        "ABOVE_GROUND_BIOMASS",
+        "DAYS_TO_HEADING",
+        "DAYS_TO_MATURITY",
+        "GRAIN_YIELD",
+        "PLANT_HEIGHT",
+        "TEST_WEIGHT",
+    ]
+    traits = pd.DataFrame(
+        [
+            {
+                "state_id": "S1",
+                "candidate": candidate,
+                "trait_name_canonical": trait,
+            }
+            for candidate in ["a", "b", "c"]
+            for trait in frozen_traits
+            if not (candidate == "c" and trait == "TEST_WEIGHT")
+        ]
+    )
+    with pytest.raises(ValueError, match="differs among matched candidates"):
+        build_trait_availability(grid, traits)

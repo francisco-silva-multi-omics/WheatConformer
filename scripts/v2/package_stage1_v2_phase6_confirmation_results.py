@@ -60,6 +60,15 @@ EXPECTED_SCENARIOS = (
 LEGACY_SCENARIOS = frozenset(EXPECTED_SCENARIOS[:3])
 TRANSFER_SCENARIOS = frozenset(EXPECTED_SCENARIOS[3:])
 TRAITS_PER_RUN = 7
+EXPECTED_TRAITS = (
+    "1000_GRAIN_WEIGHT",
+    "ABOVE_GROUND_BIOMASS",
+    "DAYS_TO_HEADING",
+    "DAYS_TO_MATURITY",
+    "GRAIN_YIELD",
+    "PLANT_HEIGHT",
+    "TEST_WEIGHT",
+)
 
 SUMMARY_FILES = (
     "confirmation_run_grid.tsv",
@@ -225,7 +234,63 @@ def validate_run_protocol(
     )
 
 
-def validate_summary(root: Path, code_root: Path) -> tuple[dict[str, Any], pd.DataFrame]:
+def build_trait_availability(
+    grid: pd.DataFrame, traits: pd.DataFrame
+) -> pd.DataFrame:
+    key = ["state_id", "candidate", "trait_name_canonical"]
+    require_columns(traits, key, "trait metrics")
+    if traits.duplicated(key).any():
+        raise ValueError("Trait metrics contain duplicate state/candidate/trait rows")
+    observed_traits = set(traits["trait_name_canonical"].astype(str))
+    if not observed_traits.issubset(set(EXPECTED_TRAITS)):
+        raise ValueError(
+            f"Trait metrics contain unexpected traits: "
+            f"{sorted(observed_traits - set(EXPECTED_TRAITS))}"
+        )
+    if observed_traits != set(EXPECTED_TRAITS):
+        raise ValueError("At least one frozen trait is absent from every state")
+
+    states = grid[
+        ["state_id", "scenario", "outer_fold", "inner_fold"]
+    ].drop_duplicates("state_id")
+    expected = states.assign(_join=1).merge(
+        pd.DataFrame({"trait_name_canonical": EXPECTED_TRAITS, "_join": 1}),
+        on="_join",
+    ).drop(columns="_join")
+    counts = (
+        traits.groupby(["state_id", "trait_name_canonical"])["candidate"]
+        .nunique()
+        .rename("available_candidate_count")
+        .reset_index()
+    )
+    availability = expected.merge(
+        counts,
+        on=["state_id", "trait_name_canonical"],
+        how="left",
+        validate="one_to_one",
+    )
+    availability["available_candidate_count"] = (
+        availability["available_candidate_count"].fillna(0).astype(int)
+    )
+    invalid = ~availability["available_candidate_count"].isin(
+        {0, len(EXPECTED_CANDIDATES)}
+    )
+    if bool(invalid.any()):
+        raise ValueError(
+            "Trait availability differs among matched candidates:\n"
+            + availability.loc[invalid].head(20).to_string(index=False)
+        )
+    availability["availability_status"] = np.where(
+        availability["available_candidate_count"].eq(len(EXPECTED_CANDIDATES)),
+        "AVAILABLE_ALL_CANDIDATES",
+        "UNAVAILABLE_IN_STATE",
+    )
+    return availability
+
+
+def validate_summary(
+    root: Path, code_root: Path
+) -> tuple[dict[str, Any], pd.DataFrame, pd.DataFrame]:
     summary_root = root / SUMMARY
     audit_root = root / AUDIT
     require_files(summary_root, SUMMARY_FILES)
@@ -370,12 +435,17 @@ def validate_summary(root: Path, code_root: Path) -> tuple[dict[str, Any], pd.Da
     ).all():
         raise ValueError("Paired validation observations do not match")
 
-    expected_trait_rows = EXPECTED_RUNS * TRAITS_PER_RUN
-    for label, frame in (("traits", traits), ("paired traits", paired_traits)):
-        if len(frame) != expected_trait_rows:
-            raise ValueError(
-                f"Unexpected {label} row count: {len(frame)} != {expected_trait_rows}"
-            )
+    trait_availability = build_trait_availability(grid, traits)
+    trait_key = ["state_id", "candidate", "trait_name_canonical"]
+    require_columns(paired_traits, trait_key, "paired trait metrics")
+    if paired_traits.duplicated(trait_key).any():
+        raise ValueError("Paired trait metrics contain duplicate keys")
+    observed_trait_keys = set(map(tuple, traits[trait_key].astype(str).to_numpy()))
+    paired_trait_keys = set(
+        map(tuple, paired_traits[trait_key].astype(str).to_numpy())
+    )
+    if observed_trait_keys != paired_trait_keys:
+        raise ValueError("Trait and paired-trait availability disagree")
     if guards.empty or paired_guards.empty or factors.empty:
         raise ValueError("Guard or factor reporting artifacts are empty")
     if len(scenario_summary) != len(EXPECTED_SCENARIOS) * len(EXPECTED_CANDIDATES):
@@ -455,6 +525,15 @@ def validate_summary(root: Path, code_root: Path) -> tuple[dict[str, Any], pd.Da
         "candidate_count": len(EXPECTED_CANDIDATES),
         "scenario_count": len(EXPECTED_SCENARIOS),
         "trait_metric_rows": int(len(traits)),
+        "maximum_possible_trait_metric_rows": EXPECTED_RUNS * TRAITS_PER_RUN,
+        "unavailable_candidate_trait_rows": int(
+            EXPECTED_RUNS * TRAITS_PER_RUN - len(traits)
+        ),
+        "unavailable_state_trait_pairs": int(
+            trait_availability["availability_status"]
+            .eq("UNAVAILABLE_IN_STATE")
+            .sum()
+        ),
         "guard_metric_rows": int(len(guards)),
         "paired_guard_metric_rows": int(len(paired_guards)),
         "factor_inventory_rows": int(len(factors)),
@@ -467,7 +546,7 @@ def validate_summary(root: Path, code_root: Path) -> tuple[dict[str, Any], pd.Da
         "outer_test_metrics_read": False,
         "final_holdout_outcomes_read": False,
     }
-    return overview, grid
+    return overview, grid, trait_availability
 
 
 def validate_run(
@@ -507,8 +586,16 @@ def validate_run(
     traits = read_tsv(run_root / "validation_trait_metrics.tsv")
     guards = read_tsv(run_root / "validation_guard_metrics.tsv")
     epochs = read_tsv(run_root / "epoch_history.tsv")
-    if len(traits) != TRAITS_PER_RUN:
-        raise ValueError(f"Run {relative} does not report seven traits")
+    require_columns(traits, ["trait_name_canonical"], f"traits for {relative}")
+    if (
+        traits.empty
+        or len(traits) > TRAITS_PER_RUN
+        or not traits["trait_name_canonical"].is_unique
+        or not set(traits["trait_name_canonical"].astype(str)).issubset(
+            set(EXPECTED_TRAITS)
+        )
+    ):
+        raise ValueError(f"Run {relative} has invalid trait availability")
     if guards.empty or epochs.empty:
         raise ValueError(f"Run {relative} has empty guard or epoch reporting")
     require_columns(guards, ["observation_id_signature"], f"guards for {relative}")
@@ -574,7 +661,7 @@ def add_tree_to_archive(source: Path, archive: Path) -> None:
 def build_export(
     root: Path, code_root: Path, output_dir: Path
 ) -> tuple[Path, Path, dict[str, Any]]:
-    overview, grid = validate_summary(root, code_root)
+    overview, grid, trait_availability = validate_summary(root, code_root)
     active_commit = git_commit(code_root)
     correction = read_json(
         code_root
@@ -620,6 +707,18 @@ def build_export(
                 records=records,
                 category="code_snapshot",
             )
+
+        availability_path = staging / "summary" / "confirmation_trait_availability.tsv"
+        trait_availability.to_csv(availability_path, sep="\t", index=False)
+        records.append(
+            {
+                "category": "derived_reporting",
+                "source_path": "generated/confirmation_trait_availability.tsv",
+                "package_path": availability_path.relative_to(staging).as_posix(),
+                "bytes": int(availability_path.stat().st_size),
+                "sha256": sha256_file(availability_path),
+            }
+        )
 
         for row in grid.itertuples(index=False):
             relative = Path(str(row.state_id)) / str(row.candidate)
