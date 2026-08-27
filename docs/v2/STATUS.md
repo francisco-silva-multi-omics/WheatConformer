@@ -739,3 +739,28 @@ Stage-1 v2 weighted population, sparse split-local K_A, optional Seeds/CIMMYT
 or H_SEEDS factors, and either separately gated historical environment
 components or E_PROJECTION_CORE_V1. It writes inner-validation metrics only;
 outer-test outcomes, outer metrics and the final holdout remain inaccessible.
+
+## Stage-1 v2 Phase-6 structural remediation - 2026-08-26
+
+The 375-run five-scenario inner confirmation is complete, but its stable
+historical reaction-norm reference remains the only frozen route. Outer
+evaluation is still blocked. The confirmation analysis identified structural
+issues that must be tested before any outer partition is opened: missing
+training-only hierarchy effects for observed environments, factor-level rather
+than output-level fallback, uncalibrated active routes, and genomic predictions
+outside their marker-supported population.
+
+The authorized next action is a frozen 70-run inner-only remediation screen over
+outer fold 1 and all five inner folds. It compares the stable reference with:
+
+- Training-only trial/environment intercepts for `GNEW_EOBS`.
+- Projection predictions routed only to projection-active environments.
+- Seeds/CIMMYT multikernel predictions routed only to marker-supported GIDs.
+- Positive-slope training-only calibration and stronger regularization for
+  `ABOVE_GROUND_BIOMASS` and `TEST_WEIGHT`.
+
+All routed fallback rows preserve the independent historical prediction
+exactly. Batch sizes 4,096 and 2,048 are preregistered but blocked until a
+structural candidate passes the unchanged Phase-1 guards. A passing candidate
+may advance only to full 125-state inner confirmation; it does not authorize
+outer evaluation or final-holdout access.
