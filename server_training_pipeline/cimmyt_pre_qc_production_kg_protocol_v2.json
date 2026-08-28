@@ -1,0 +1,74 @@
+{
+  "protocol_version": "cimmyt_pre_qc_production_kg_v2",
+  "stage1_version": "Stage-1_v2",
+  "selection_data": "identifiers_and_genotype_calls_only",
+  "source_release": "audit/v2/phase5_cimmyt_pre_qc_split_local_v1",
+  "source_call_matrix_sha256": "a399b07428d2ed31870a6fbe8124a6caaefc277cfbc88a946db9adb5fea5b33d",
+  "source_marker_count": 91680,
+  "source_sample_count": 53525,
+  "primary_stage1_gid_count": 5629,
+  "identity_policy": {
+    "production_mapping": "exact_unique_GID_header_match_only",
+    "suffix_labels_are_candidates_only": true,
+    "minimum_replicate_shared_nonmissing_markers": 10000,
+    "minimum_replicate_concordance": 0.995,
+    "labels_containing_wrong_are_quarantined": true
+  },
+  "sample_qc": {
+    "call_rate_denominator": "all_structurally_eligible_pre_qc_markers",
+    "minimum_call_rate_floor": 0.5,
+    "maximum_call_rate_threshold": 0.95,
+    "robust_mad_multiplier": 3.0,
+    "threshold_formula": "clip(max(floor,training_median-robust_mad_multiplier*1.4826*training_MAD),floor,ceiling)",
+    "fit_scope": "training_partition_panel_samples_only",
+    "held_out_application": "apply_frozen_training_threshold_to_each_held_out_sample_call_rate"
+  },
+  "marker_qc": {
+    "minimum_training_call_rate": 0.8,
+    "minimum_observed_training_calls": 10,
+    "minimum_training_minor_allele_frequency": 0.01,
+    "maximum_training_heterozygosity": 0.1,
+    "monomorphic_markers_excluded": true,
+    "fit_scope": "sample_QC_passing_training_GIDs_only"
+  },
+  "allele_policy": {
+    "dosage_reference": "pre_qc_source_allele_order",
+    "shared_reversed_alleles": "record_orientation_only_relationship_kernel_is_sign_invariant",
+    "incompatible_shared_markers": [
+      "S2B_510903061",
+      "S2B_793182190",
+      "S4A_709858810",
+      "S6A_39148047",
+      "S7A_65500347"
+    ],
+    "incompatible_action": "exclude_before_every_state_local_marker_fit"
+  },
+  "imputation": {
+    "method": "training_marker_mean_2p",
+    "fit_scope": "sample_QC_passing_training_GIDs_only",
+    "held_out_calls_used_for_fit": false
+  },
+  "kernel": {
+    "raw_formula": "K_raw=ZZT/(2*sum(p*(1-p)))",
+    "scaling": "divide_training_and_projection_relationships_by_mean_training_diagonal",
+    "minimum_training_GIDs": 20,
+    "psd_absolute_tolerance": 1e-5,
+    "psd_relative_tolerance": 1e-6,
+    "effective_rank_relative_tolerance": 1e-6,
+    "held_out_projection": "K_heldout_training=Z_heldout*Z_training_T/denominator/mean_training_diagonal",
+    "artifact_scope": "one_exact_kernel_artifact_per_unique_training_panel_signature"
+  },
+  "global_filter_guard": {
+    "globally_filtered_hmp_may_define_marker_availability": false,
+    "permitted_use_of_filtered_hmp": "allele_orientation_audit_and_explicit_five_marker_incompatibility_quarantine_only",
+    "all_pre_qc_markers_enter_each_state_before_structural_and_training_local_QC": true,
+    "require_retained_pre_qc_only_markers_in_every_active_state": true
+  },
+  "required_state_count": 150,
+  "current_frozen_models_modified": false,
+  "phenotype_values_read": false,
+  "inner_validation_metrics_read": false,
+  "outer_test_outcomes_read": false,
+  "outer_test_metrics_read": false,
+  "final_holdout_outcomes_read": false
+}
