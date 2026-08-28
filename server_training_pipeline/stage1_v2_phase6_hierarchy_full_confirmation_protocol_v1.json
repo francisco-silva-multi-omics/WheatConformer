@@ -1,0 +1,148 @@
+{
+  "protocol_version": "stage1_v2_phase6_hierarchy_full_confirmation_v1",
+  "stage1_version": "Stage-1 v2",
+  "selection_data": "nested_inner_validation_only",
+  "source_guard_amendment_status": "PASS_HIERARCHY_CALIBRATION_GUARD_AMENDMENT",
+  "selected_hierarchy_candidate": "hierarchy_test_weight_identity_calibration_v1",
+  "stable_reference_candidate": "historical_reaction_reference",
+  "outer_test_outcomes_read": false,
+  "outer_test_metrics_read": false,
+  "final_holdout_outcomes_read": false,
+  "routing_policy": {
+    "GNEW_EOBS": {
+      "candidate": "hierarchy_test_weight_identity_calibration_v1",
+      "reason": "trial and environment identifiers are available in inner training",
+      "new_training_runs": 25
+    },
+    "GOBS_ENEW": {
+      "candidate": "historical_reaction_reference",
+      "reason": "environment identifier is unavailable in training",
+      "exact_reference_reuse_states": 25
+    },
+    "GNEW_ENEW": {
+      "candidate": "historical_reaction_reference",
+      "reason": "environment identifier is unavailable in training",
+      "exact_reference_reuse_states": 25
+    },
+    "TEMPORAL_YEAR": {
+      "candidate": "historical_reaction_reference",
+      "reason": "future-year environment transfer cannot use fitted environment intercepts",
+      "exact_reference_reuse_states": 25
+    },
+    "COUNTRY_HOLDOUT": {
+      "candidate": "historical_reaction_reference",
+      "reason": "country and environment transfer cannot use fitted environment intercepts",
+      "exact_reference_reuse_states": 25
+    }
+  },
+  "confirmation_grid": {
+    "scenarios": [
+      "GNEW_EOBS",
+      "GOBS_ENEW",
+      "GNEW_ENEW",
+      "TEMPORAL_YEAR",
+      "COUNTRY_HOLDOUT"
+    ],
+    "outer_folds": [1, 2, 3, 4, 5],
+    "inner_folds": [1, 2, 3, 4, 5],
+    "routed_state_count": 125,
+    "active_hierarchy_state_count": 25,
+    "exact_reference_reuse_state_count": 100,
+    "matched_training_run_count": 50,
+    "matched_seed_within_state": true
+  },
+  "fixed_configuration": {
+    "label": "historical_capacity_16_batch8192",
+    "latent_dim": 16,
+    "reaction_rank": 16,
+    "max_rank_genotype": 128,
+    "max_rank_environment": 64,
+    "learning_rate": 0.001,
+    "weight_decay": 0.0001,
+    "batch_size": 8192,
+    "epochs_max": 200,
+    "early_stopping_patience": 25
+  },
+  "selected_candidate_contract": {
+    "test_weight_calibration": "identity",
+    "test_weight_residual_scale_floor": 0.1,
+    "test_weight_trait_loading_penalty_multiplier": 4.0,
+    "hierarchy_fit_partition": "inner_training_only",
+    "unknown_validation_identifier_effect": 0.0
+  },
+  "trial_environment_hierarchy": {
+    "fit_partition": "inner_training_only",
+    "minimum_positive_weight_trial_trait_rows": 20,
+    "minimum_positive_weight_environment_trait_rows": 10,
+    "trial_effect_penalty": 0.01,
+    "environment_effect_penalty": 0.05,
+    "unknown_validation_identifier_effect": 0.0,
+    "allowed_scenarios": ["GNEW_EOBS"]
+  },
+  "trait_specific_regularization": {
+    "default_residual_scale_floor": 0.05,
+    "default_trait_loading_penalty_multiplier": 1.0,
+    "overrides": {
+      "ABOVE_GROUND_BIOMASS": {
+        "residual_scale_floor": 0.1,
+        "trait_loading_penalty_multiplier": 4.0
+      },
+      "TEST_WEIGHT": {
+        "residual_scale_floor": 0.1,
+        "trait_loading_penalty_multiplier": 4.0
+      }
+    }
+  },
+  "positive_training_calibration": {
+    "fit_partition": "inner_training_only",
+    "minimum_rows_per_trait": 500,
+    "weighted_ridge": 0.01,
+    "minimum_slope": 0.05,
+    "maximum_slope": 2.0,
+    "insufficient_support_policy": "identity",
+    "validation_values_used": false
+  },
+  "information_guard_reporting": {
+    "mask_source_candidate": "marker_supported_output_routed_v2",
+    "same_frozen_mask_applied_to_reference_and_candidate": true,
+    "observation_id_signature_match_required": true
+  },
+  "phase_1_acceptance": {
+    "minimum_relative_nrmse_gain": 0.01,
+    "minimum_paired_inner_fold_win_rate": 0.6666666666666666,
+    "maximum_mean_pearson_drop": 0.005,
+    "maximum_absolute_macro_calibration_error": 0.2,
+    "maximum_primary_trait_absolute_calibration_error": 0.5,
+    "negative_trait_calibration_slope_allowed": false,
+    "within_environment_centered_spearman_maximum_drop": 0.002,
+    "within_environment_pairwise_accuracy_maximum_drop": 0.002,
+    "primary_trait_maximum_relative_nrmse_loss": 0.01,
+    "information_class_maximum_relative_nrmse_loss": 0.02,
+    "projection_inactive_environment_maximum_relative_nrmse_loss": 0.02,
+    "minimum_rows_for_guard": 500
+  },
+  "primary_traits": [
+    "1000_GRAIN_WEIGHT",
+    "DAYS_TO_HEADING",
+    "DAYS_TO_MATURITY",
+    "GRAIN_YIELD",
+    "PLANT_HEIGHT"
+  ],
+  "exploratory_traits": ["ABOVE_GROUND_BIOMASS", "TEST_WEIGHT"],
+  "mandatory_reporting_subsets": [
+    "PEDIGREE_ONLY",
+    "MARKER_SUPPORTED",
+    "PEDIGREE_AND_MARKER",
+    "NEITHER_PRODUCTION_PEDIGREE_NOR_DENSE_MARKERS",
+    "RECOVERED_IDENTITY_OR_COMPONENT",
+    "PROJECTION_CORE_ACTIVE",
+    "PROJECTION_CORE_INACTIVE_814_ENVIRONMENTS"
+  ],
+  "outer_test_policy": {
+    "outer_evaluation_allowed_before_confirmation": false,
+    "new_outer_protocol_required_after_route_lock": true
+  },
+  "final_holdout_policy": {
+    "sealed": true
+  }
+}
