@@ -368,6 +368,9 @@ def main() -> None:
     paired_guards = pair_guards(guards)
     decision = summarize(protocol, paired, paired_traits, paired_guards)
     selected_row = decision.loc[decision["candidate"].eq(SELECTED)]
+    eligible_guard_rows = paired_guards["rows"].ge(
+        int(protocol["phase_1_acceptance"]["minimum_rows_for_guard"])
+    )
     all_guards = (
         len(selected_row) == 1
         and bool(selected_row.filter(regex=r"^guard_").iloc[0].astype(bool).all())
@@ -399,6 +402,15 @@ def main() -> None:
                 paired_guards["rows"].gt(0),
                 "observation_id_signature_reference",
             ]
+        ).all(),
+        "guard_subset_schema_complete": len(paired_guards) == 25 * 2 * 7
+        and set(paired_guards["subset"])
+        == set(protocol["mandatory_reporting_subsets"]),
+        "eligible_guard_metrics_finite": np.isfinite(
+            paired_guards.loc[
+                eligible_guard_rows,
+                ["relative_nrmse_gain", "pearson_gain"],
+            ].to_numpy(dtype=float)
         ).all(),
         "selected_candidate_all_guards_pass": all_guards,
         "route_manifest_125": len(routes) == 125 and routes["state_id"].is_unique,

@@ -17,6 +17,9 @@ PROTOCOL = Path(
     "server_training_pipeline/"
     "stage1_v2_phase6_hierarchy_full_confirmation_protocol_v1.json"
 )
+SOURCE_PROTOCOL = Path(
+    "server_training_pipeline/stage1_v2_phase6_hierarchy_calibration_protocol_v1.json"
+)
 TRAINER = Path(
     "server_training_pipeline/"
     "train_stage1_v2_phase6_hierarchy_full_confirmation_tf.py"
@@ -91,12 +94,14 @@ def main() -> None:
         or Path(os.environ.get("WHEATCONFORMER_CODE_ROOT", root))
     ).resolve()
     protocol_path = code_root / PROTOCOL
+    source_protocol_path = code_root / SOURCE_PROTOCOL
     trainer_path = code_root / TRAINER
     amendment_path = root / AMENDMENT
     source_status_path = root / SOURCE_STATUS
     registry_path = root / PARITY / "splits/state_registry.tsv"
     code_files = [
         protocol_path,
+        source_protocol_path,
         trainer_path,
         code_root / AMENDMENT_CERTIFIER,
         code_root / FREEZER,
@@ -116,6 +121,7 @@ def main() -> None:
         raise FileNotFoundError(f"Full-confirmation freeze inputs are missing: {missing}")
 
     protocol = read_json(protocol_path)
+    source_protocol = read_json(source_protocol_path)
     amendment = read_json(amendment_path)
     source_status = read_json(source_status_path)
     registry = pd.read_csv(registry_path, sep="\t", dtype=str)
@@ -129,6 +135,7 @@ def main() -> None:
 
     source_metadata: list[Path] = []
     source_valid = True
+    source_seed_match = True
     for state_id in sorted(states["state_id"].astype(str)):
         path = root / SOURCE_RUNS / state_id / REFERENCE / "run_metadata.json"
         source_metadata.append(path)
@@ -136,6 +143,13 @@ def main() -> None:
             source_valid = False
             continue
         value = read_json(path)
+        expected_seed = (
+            63000
+            + int(value["outer_fold"]) * 100
+            + int(value["inner_fold"]) * 10
+            + 1
+        )
+        source_seed_match &= int(value.get("seed", -1)) == expected_seed
         source_valid &= (
             value.get("status") == "PASS"
             and value.get("candidate") == REFERENCE
@@ -159,6 +173,27 @@ def main() -> None:
             "scientific_selection_changed"
         )
         is False,
+        "acceptance_thresholds_unchanged": protocol["phase_1_acceptance"]
+        == source_protocol["phase_1_acceptance"],
+        "training_configuration_unchanged": protocol["fixed_configuration"]
+        == source_protocol["fixed_configuration"],
+        "selected_candidate_contract_unchanged": protocol[
+            "selected_candidate_contract"
+        ]
+        == {
+            key: source_protocol["candidates"][SELECTED][key]
+            for key in protocol["selected_candidate_contract"]
+            if key
+            in {
+                "test_weight_calibration",
+                "test_weight_residual_scale_floor",
+                "test_weight_trait_loading_penalty_multiplier",
+            }
+        }
+        | {
+            "hierarchy_fit_partition": "inner_training_only",
+            "unknown_validation_identifier_effect": 0.0,
+        },
         "source_confirmation_pass": source_status.get("status")
         == "PASS_STAGE1_V2_PHASE6_CONFIRMATION_COMPLETE",
         "source_confirmation_inner_only": source_status.get("selection_data")
@@ -171,6 +206,7 @@ def main() -> None:
         "gnew_grid_25": len(gnew) == 25 and gnew["state_id"].is_unique,
         "all_source_reference_runs_certified": source_valid
         and len(source_metadata) == 125,
+        "source_reference_seeds_match_frozen_formula": source_seed_match,
         "selected_route_only_gnew": routes["GNEW_EOBS"]["candidate"] == SELECTED
         and all(
             routes[scenario]["candidate"] == REFERENCE
