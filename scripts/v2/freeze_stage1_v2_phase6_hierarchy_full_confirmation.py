@@ -55,6 +55,25 @@ REFERENCE = "historical_reaction_reference"
 SELECTED = "hierarchy_test_weight_identity_calibration_v1"
 
 
+def expected_source_seed(
+    scenario: str,
+    outer_fold: int,
+    inner_fold: int,
+    scenario_order: list[str],
+) -> int:
+    try:
+        scenario_index = scenario_order.index(scenario)
+    except ValueError as error:
+        raise ValueError(f"Unknown confirmation scenario: {scenario}") from error
+    return (
+        63000
+        + scenario_index * 10000
+        + int(outer_fold) * 100
+        + int(inner_fold) * 10
+        + 1
+    )
+
+
 def sha256_file(path: Path, block_size: int = 1024 * 1024) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
@@ -136,6 +155,7 @@ def main() -> None:
     source_metadata: list[Path] = []
     source_valid = True
     source_seed_match = True
+    scenario_order = list(protocol["confirmation_grid"]["scenarios"])
     for state_id in sorted(states["state_id"].astype(str)):
         path = root / SOURCE_RUNS / state_id / REFERENCE / "run_metadata.json"
         source_metadata.append(path)
@@ -143,11 +163,11 @@ def main() -> None:
             source_valid = False
             continue
         value = read_json(path)
-        expected_seed = (
-            63000
-            + int(value["outer_fold"]) * 100
-            + int(value["inner_fold"]) * 10
-            + 1
+        expected_seed = expected_source_seed(
+            str(value["scenario"]),
+            int(value["outer_fold"]),
+            int(value["inner_fold"]),
+            scenario_order,
         )
         source_seed_match &= int(value.get("seed", -1)) == expected_seed
         source_valid &= (

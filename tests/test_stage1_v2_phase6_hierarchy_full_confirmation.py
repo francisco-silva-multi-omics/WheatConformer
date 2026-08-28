@@ -13,6 +13,9 @@ from scripts.v2.run_stage1_v2_phase6_hierarchy_full_confirmation import (
     build_grid,
     pair_guards,
 )
+from scripts.v2.freeze_stage1_v2_phase6_hierarchy_full_confirmation import (
+    expected_source_seed,
+)
 from server_training_pipeline.stage1_v2_trainer_interface import PARITY
 
 
@@ -108,3 +111,18 @@ def test_launcher_is_detached_and_resumable() -> None:
     assert "--resume" in launcher
     assert "certify_stage1_v2_phase6_hierarchy_guard_amendment" in launcher
     assert "freeze_stage1_v2_phase6_hierarchy_full_confirmation" in launcher
+
+
+def test_source_seed_formula_includes_scenario_offsets() -> None:
+    scenarios = [
+        "GNEW_EOBS",
+        "GOBS_ENEW",
+        "GNEW_ENEW",
+        "TEMPORAL_YEAR",
+        "COUNTRY_HOLDOUT",
+    ]
+    assert expected_source_seed("GNEW_EOBS", 1, 1, scenarios) == 63111
+    assert expected_source_seed("GOBS_ENEW", 1, 1, scenarios) == 73111
+    assert expected_source_seed("GNEW_ENEW", 1, 1, scenarios) == 83111
+    assert expected_source_seed("TEMPORAL_YEAR", 1, 1, scenarios) == 93111
+    assert expected_source_seed("COUNTRY_HOLDOUT", 1, 1, scenarios) == 103111
