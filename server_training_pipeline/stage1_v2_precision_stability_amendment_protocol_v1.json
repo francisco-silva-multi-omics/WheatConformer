@@ -1,0 +1,44 @@
+{
+  "protocol_version": "stage1_v2_precision_stability_amendment_v1",
+  "stage1_version": "stage1_v2_reconstruction_2026_07_30_v1",
+  "amendment_type": "additive_upstream_numerical_stability_overlay",
+  "selection_data": "stage1_values_and_identifiers_only",
+  "source_stage1": "audit/v2/phase3_stage1_v2_reconstruction_v1/stage1_v2_release_candidate_v3/stage1_adjusted_phenotypes_v2.parquet",
+  "group_columns": [
+    "canonical_environment_id",
+    "canonical_trial_name",
+    "cycle",
+    "occ",
+    "loc_no",
+    "country",
+    "loc_desc",
+    "accepted_canonical_trait",
+    "trait_name_original",
+    "standardized_unit"
+  ],
+  "numerical_zero_policy": {
+    "absolute_variance_floor": 1e-12,
+    "floating_point_epsilon": 2.220446049250313e-16,
+    "epsilon_multiplier": 1024,
+    "scale_definition": "max(max_group_squared_adjusted_value,1.0)",
+    "effective_zero_tolerance": "max(absolute_variance_floor,epsilon_multiplier*floating_point_epsilon*scale_definition)",
+    "classification": "finite_stage1_sigma2_less_than_or_equal_to_effective_zero_tolerance"
+  },
+  "terminal_precision_classes": [
+    "PRECISION_ESTIMABLE",
+    "PRECISION_PARTIALLY_NONESTIMABLE",
+    "PRECISION_NONESTIMABLE_MISSING_RESIDUAL_VARIANCE",
+    "PRECISION_NONESTIMABLE_ZERO_RESIDUAL_VARIANCE"
+  ],
+  "amendment_rule": {
+    "PRECISION_NONESTIMABLE_ZERO_RESIDUAL_VARIANCE": "source_weight_g_e_amended_is_missing_for_every_group_row",
+    "all_other_classes": "source_weight_g_e_is_preserved_exactly"
+  },
+  "authoritative_model_weight_field": "reliability_weight",
+  "phase6_bound_weight_field": "authoritative_weight",
+  "model_inputs_rebuilt": false,
+  "model_results_rebuilt": false,
+  "outer_test_outcomes_read": false,
+  "outer_test_metrics_read": false,
+  "final_holdout_outcomes_read": false
+}
