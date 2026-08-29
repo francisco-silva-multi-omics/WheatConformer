@@ -595,3 +595,19 @@ projection and split support are not yet sufficient for a production K_z
 candidate. K_z remains deferred before metric access. Introducing it later
 requires a new preregistered release rather than an amendment based on Phase-6
 results.
+
+### D-0076 - Do not advance CIMMYT pre-QC as quantitative K_G
+
+The split-local CIMMYT pre-QC release remains a valid computational QC
+certification, but its low call completeness creates an unacceptable
+signal-to-noise risk for further quantitative model advancement. It must not
+enter a new outer or final-holdout evaluation and must not be merged with other
+marker matrices.
+
+The panel is also prohibited from supplying dense or mean-imputed regulatory
+genotypes. A later phenotype-blind audit may evaluate directly observed calls
+inside certified regulatory windows, with per-GID/per-window coverage and
+explicit absence masks. `K_A` remains the fallback for unsupported GIDs; it
+must not be presented as imputed `K_z` evidence. Seeds coordinate recovery and
+targeted DArTAG/MAS regulatory mapping take priority for a future panel-specific
+`K_z` release.

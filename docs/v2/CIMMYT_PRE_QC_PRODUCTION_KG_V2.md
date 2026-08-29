@@ -73,8 +73,17 @@ final-holdout outcome was read.
 
 ## Disposition
 
-`READY_FOR_NEW_PREREGISTERED_PHASE6_CANDIDATE`
+The computational QC release remains
+`PASS_CIMMYT_PRE_QC_PRODUCTION_KG_V2`, but its prospective model disposition is
+now superseded by `cimmyt_pre_qc_model_disposition_v1`:
 
-The component may be tested only in a newly frozen model-selection protocol.
-It cannot be added retroactively to the current frozen model or used to revise
-an already opened comparison.
+`DO_NOT_ADVANCE_LOW_CALL_RATE_SIGNAL_TO_NOISE_RISK`
+
+The component must not enter a new quantitative `K_G` candidate, outer
+evaluation or final-holdout evaluation. Prior frozen inner experiments remain
+part of the historical record and are not rewritten.
+
+For regulatory work, dense or training-mean-imputed CIMMYT calls must not feed
+`K_z`. The pre-QC source may only enter a future phenotype-blind feasibility
+audit that counts directly observed calls per GID and certified regulatory
+window. Unsupported loci and GIDs must remain explicitly masked.

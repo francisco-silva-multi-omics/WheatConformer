@@ -19,6 +19,13 @@ CIMMYT pre-QC recovery and H_SEEDS to one code/runtime/selection contract.
   not a merged marker matrix.
 - K_z and unresolved EYT/80K/targeted panels are deferred before metrics.
 
+The first bullet records the original frozen preselection contract. It is
+superseded prospectively by `cimmyt_pre_qc_model_disposition_v1`: CIMMYT pre-QC
+must not advance as quantitative `K_G`. Earlier inner-only results remain
+reproducible historical evidence, but no new outer or final-holdout route may
+select the panel. Only an observed-call regulatory-window feasibility audit is
+permitted; dense or mean-imputed CIMMYT calls are prohibited for `K_z`.
+
 ## Environment components
 
 Historical candidates may use the certified parity components. Projection-

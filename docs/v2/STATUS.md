@@ -764,3 +764,18 @@ exactly. Batch sizes 4,096 and 2,048 are preregistered but blocked until a
 structural candidate passes the unchanged Phase-1 guards. A passing candidate
 may advance only to full 125-state inner confirmation; it does not authorize
 outer evaluation or final-holdout access.
+
+## CIMMYT pre-QC prospective disposition - 2026-08-28
+
+The panel retains `PASS_CIMMYT_PRE_QC_PRODUCTION_KG_V2` as a computational QC
+result, but is `DO_NOT_ADVANCE_LOW_CALL_RATE_SIGNAL_TO_NOISE_RISK` for future
+quantitative `K_G` selection. Existing frozen inner experiments are not
+rewritten; the panel cannot enter a new outer or final-holdout evaluation.
+
+CIMMYT may only be reconsidered for `K_z` through directly observed calls in
+certified regulatory windows with per-GID/per-window support masks. Dense or
+training-mean-imputed calls are prohibited. The preferred regulatory recovery
+order is Seeds coordinate recovery, targeted DArTAG/MAS mapping, EYT block
+provenance, 80K typed-identity recovery, and only then CIMMYT observed-window
+feasibility. Current `K_z` remains deferred and requires a new preregistered
+release.

@@ -1,0 +1,48 @@
+{
+  "protocol_version": "cimmyt_pre_qc_model_disposition_v1",
+  "stage1_version": "Stage-1 v2",
+  "parent_qc_release": "audit/v2/phase5_cimmyt_pre_qc_production_kg_v2",
+  "parent_qc_status": "PASS_CIMMYT_PRE_QC_PRODUCTION_KG_V2",
+  "qc_certification_preserved": true,
+  "prior_frozen_inner_experiments_preserved": true,
+  "quantitative_K_G": {
+    "advance_allowed": false,
+    "disposition": "DO_NOT_ADVANCE_LOW_CALL_RATE_SIGNAL_TO_NOISE_RISK",
+    "may_enter_new_outer_or_final_holdout_evaluation": false,
+    "may_be_merged_with_other_marker_panels": false
+  },
+  "regulatory_K_z": {
+    "dense_imputed_calls_allowed": false,
+    "training_mean_imputed_calls_allowed": false,
+    "pedigree_propagated_calls_treated_as_observed_allowed": false,
+    "observed_call_only_window_coverage_audit_allowed": true,
+    "current_candidate_class": "direct_sparse_candidate",
+    "current_production_ready": false,
+    "required_before_any_panel_specific_K_z": [
+      "reference_assembly_and_allele_orientation_certified",
+      "regulatory_window_overlap_certified",
+      "per_GID_per_window_observed_call_coverage_certified",
+      "split_local_support_masks_certified",
+      "unsupported_windows_remain_explicitly_masked",
+      "no_imputation_across_unsupported_regulatory_loci"
+    ]
+  },
+  "multi_panel_K_z_policy": {
+    "combine_at_biological_feature_or_kernel_level_only": true,
+    "concatenate_marker_matrices_across_platforms": false,
+    "retain_panel_specific_confidence_and_missingness_masks": true,
+    "K_A_is_fallback_not_K_z_imputation": true,
+    "priority_order": [
+      "seeds_of_discovery_dartseq_coordinate_recovery",
+      "dartag_panel2_targeted_regulatory_mapping",
+      "mas_45ibwsn_targeted_regulatory_mapping",
+      "eyt_haplotype_source_SNP_and_block_provenance_recovery",
+      "dartseq80k_same_dataset_typed_identity_and_call_artifact_recovery",
+      "cimmyt_pre_qc_observed_window_feasibility_only",
+      "hibap35k_and_sawyt_validation_only"
+    ]
+  },
+  "current_phase6_K_z_status": "DEFERRED_NEW_PREREGISTERED_RELEASE_REQUIRED",
+  "outer_test_outcomes_read_by_this_disposition": false,
+  "final_holdout_outcomes_read_by_this_disposition": false
+}
