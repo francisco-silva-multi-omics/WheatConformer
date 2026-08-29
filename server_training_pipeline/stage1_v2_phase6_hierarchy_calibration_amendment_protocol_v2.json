@@ -1,0 +1,178 @@
+{
+  "protocol_version": "stage1_v2_phase6_hierarchy_calibration_amendment_v2",
+  "stage1_version": "Stage-1 v2",
+  "selection_data": "nested_inner_validation_only",
+  "source_failed_confirmation_status": "FAIL_STAGE1_V2_PHASE6_HIERARCHY_FULL_INNER_CONFIRMATION",
+  "source_failed_confirmation_terminal": true,
+  "retrospective_threshold_change_allowed": false,
+  "outer_test_outcomes_read": false,
+  "outer_test_metrics_read": false,
+  "final_holdout_outcomes_read": false,
+  "architecture_policy": {
+    "fixed_source_candidate": "hierarchy_test_weight_identity_calibration_v1",
+    "fixed_components": ["K_A", "HISTORICAL_ENVIRONMENT"],
+    "fixed_scenario": "GNEW_EOBS",
+    "fixed_batch_size": 8192,
+    "fixed_optimizer": "Adam",
+    "fixed_hierarchy": true,
+    "fixed_non_test_weight_heads": true,
+    "one_shared_model_fit_per_state": true,
+    "calibration_is_only_mutable_component": true
+  },
+  "confirmation_scope": {
+    "scenarios": ["GNEW_EOBS"],
+    "outer_folds": [1, 2, 3, 4, 5],
+    "inner_folds": [1, 2, 3, 4, 5],
+    "state_count": 25,
+    "new_model_fit_count": 25,
+    "derived_calibration_result_count": 75,
+    "stable_reference_candidate": "historical_reaction_reference",
+    "candidate_order": [
+      "hierarchy_test_weight_identity_calibration_v2",
+      "hierarchy_test_weight_environment_oof_ridge_v2",
+      "hierarchy_test_weight_environment_oof_huber_v2"
+    ]
+  },
+  "fixed_configuration": {
+    "label": "historical_capacity_16_batch8192",
+    "latent_dim": 16,
+    "reaction_rank": 16,
+    "max_rank_genotype": 128,
+    "max_rank_environment": 64,
+    "learning_rate": 0.001,
+    "weight_decay": 0.0001,
+    "batch_size": 8192,
+    "epochs_max": 200,
+    "early_stopping_patience": 25
+  },
+  "calibration_candidates": {
+    "hierarchy_test_weight_identity_calibration_v2": {
+      "method": "identity",
+      "purpose": "Replay the terminal failed hierarchy without changing TEST_WEIGHT predictions"
+    },
+    "hierarchy_test_weight_environment_oof_ridge_v2": {
+      "method": "environment_oof_affine_ridge",
+      "purpose": "Environment-grouped training-only affine calibration with slope shrinkage toward one"
+    },
+    "hierarchy_test_weight_environment_oof_huber_v2": {
+      "method": "environment_oof_huber",
+      "purpose": "Environment-grouped robust training-only affine calibration with a positive slope"
+    }
+  },
+  "trial_environment_hierarchy": {
+    "fit_partition": "inner_training_only",
+    "minimum_positive_weight_trial_trait_rows": 20,
+    "minimum_positive_weight_environment_trait_rows": 10,
+    "trial_effect_penalty": 0.01,
+    "environment_effect_penalty": 0.05,
+    "unknown_validation_identifier_effect": 0.0,
+    "allowed_scenarios": ["GNEW_EOBS"]
+  },
+  "trait_specific_regularization": {
+    "default_residual_scale_floor": 0.05,
+    "default_trait_loading_penalty_multiplier": 1.0,
+    "overrides": {
+      "ABOVE_GROUND_BIOMASS": {
+        "residual_scale_floor": 0.1,
+        "trait_loading_penalty_multiplier": 4.0
+      },
+      "TEST_WEIGHT": {
+        "residual_scale_floor": 0.1,
+        "trait_loading_penalty_multiplier": 4.0
+      }
+    }
+  },
+  "positive_training_calibration": {
+    "fit_partition": "inner_training_only",
+    "minimum_rows_per_trait": 500,
+    "weighted_ridge": 0.01,
+    "minimum_slope": 0.05,
+    "maximum_slope": 2.0,
+    "insufficient_support_policy": "identity",
+    "validation_values_used": false
+  },
+  "test_weight_environment_oof_calibration": {
+    "target_trait": "TEST_WEIGHT",
+    "fit_partition": "inner_training_only",
+    "group_column": "environment_id",
+    "fold_count": 5,
+    "group_assignment": "sha256_modulo_fold_count",
+    "missing_environment_policy": "exclude_from_calibrator_fit_and_report",
+    "coefficient_aggregation": "componentwise_median",
+    "minimum_total_rows": 500,
+    "minimum_total_environments": 10,
+    "minimum_fit_rows_per_fold": 500,
+    "minimum_heldout_rows_per_fold": 50,
+    "minimum_fit_environments_per_fold": 8,
+    "minimum_heldout_environments_per_fold": 1,
+    "slope_ridge_toward_one": 0.01,
+    "minimum_slope": 0.05,
+    "maximum_slope": 2.0,
+    "huber_delta": 1.345,
+    "huber_maximum_iterations": 25,
+    "huber_convergence_tolerance": 1e-08,
+    "validation_values_used": false,
+    "fallback_policy": "identity"
+  },
+  "identity_replay": {
+    "source_candidate": "hierarchy_test_weight_identity_calibration_v1",
+    "metric_absolute_tolerance": 1e-06,
+    "required_in_every_state": true
+  },
+  "information_guard_reporting": {
+    "mask_source_candidate": "marker_supported_output_routed_v2",
+    "same_frozen_mask_applied_to_reference_and_every_calibrator": true,
+    "observation_id_signature_match_required": true
+  },
+  "phase_1_acceptance": {
+    "minimum_relative_nrmse_gain": 0.01,
+    "minimum_paired_inner_fold_win_rate": 0.6666666666666666,
+    "maximum_mean_pearson_drop": 0.005,
+    "maximum_absolute_macro_calibration_error": 0.2,
+    "maximum_primary_trait_absolute_calibration_error": 0.5,
+    "negative_trait_calibration_slope_allowed": false,
+    "within_environment_centered_spearman_maximum_drop": 0.002,
+    "within_environment_pairwise_accuracy_maximum_drop": 0.002,
+    "primary_trait_maximum_relative_nrmse_loss": 0.01,
+    "information_class_maximum_relative_nrmse_loss": 0.02,
+    "projection_inactive_environment_maximum_relative_nrmse_loss": 0.02,
+    "minimum_rows_for_guard": 500
+  },
+  "selection": {
+    "all_existing_guards_required": true,
+    "primary": "minimum_validation_normalized_rmse_mean",
+    "tiebreaker": "maximum_validation_pearson_mean",
+    "final_tiebreaker": "preregistered_candidate_order"
+  },
+  "primary_traits": [
+    "1000_GRAIN_WEIGHT",
+    "DAYS_TO_HEADING",
+    "DAYS_TO_MATURITY",
+    "GRAIN_YIELD",
+    "PLANT_HEIGHT"
+  ],
+  "exploratory_traits": ["ABOVE_GROUND_BIOMASS", "TEST_WEIGHT"],
+  "mandatory_reporting_subsets": [
+    "PEDIGREE_ONLY",
+    "MARKER_SUPPORTED",
+    "PEDIGREE_AND_MARKER",
+    "NEITHER_PRODUCTION_PEDIGREE_NOR_DENSE_MARKERS",
+    "RECOVERED_IDENTITY_OR_COMPONENT",
+    "PROJECTION_CORE_ACTIVE",
+    "PROJECTION_CORE_INACTIVE_814_ENVIRONMENTS"
+  ],
+  "route_freeze_policy": {
+    "allowed_only_after_one_candidate_passes_every_existing_guard": true,
+    "routed_state_count": 125,
+    "active_hierarchy_state_count": 25,
+    "exact_reference_reuse_state_count": 100,
+    "automatic_outer_launch": false
+  },
+  "outer_test_policy": {
+    "outer_evaluation_allowed": false,
+    "new_route_lock_required_after_calibration_confirmation": true
+  },
+  "final_holdout_policy": {
+    "sealed": true
+  }
+}
