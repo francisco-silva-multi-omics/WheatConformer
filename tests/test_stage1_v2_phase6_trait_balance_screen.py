@@ -6,6 +6,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from scripts.v2 import run_stage1_v2_phase6_trait_balance_screen as screen
 from server_training_pipeline.stage1_v2_phase6_trait_balance_v1 import (
     apply_trait_mass_policy,
 )
@@ -168,3 +169,55 @@ def test_follow_on_plan_orders_candidates_before_outer_protocol() -> None:
     assert value["outer_protocol_policy"][
         "create_only_after_all_entered_inner_gates_are_terminal"
     ] is True
+
+
+def test_grid_ignores_blank_outer_level_inner_folds(
+    tmp_path: Path, monkeypatch
+) -> None:
+    parity = Path("parity")
+    source_runs = Path("source_runs")
+    split_dir = tmp_path / parity / "splits"
+    split_dir.mkdir(parents=True)
+    rows = [
+        {
+            "state_id": "GNEW_EOBS__OUTER1",
+            "state_level": "OUTER",
+            "scenario": "GNEW_EOBS",
+            "outer_fold": "1",
+            "inner_fold": "",
+        }
+    ]
+    for outer_fold in range(1, 6):
+        state_id = f"GNEW_EOBS__OUTER{outer_fold}__INNER1"
+        rows.append(
+            {
+                "state_id": state_id,
+                "state_level": "INNER",
+                "scenario": "GNEW_EOBS",
+                "outer_fold": str(outer_fold),
+                "inner_fold": "1",
+            }
+        )
+        metadata = (
+            tmp_path
+            / source_runs
+            / state_id
+            / screen.SOURCE_REFERENCE
+            / "run_metadata.json"
+        )
+        metadata.parent.mkdir(parents=True)
+        metadata.write_text(
+            json.dumps({"status": "PASS", "seed": 100 + outer_fold}),
+            encoding="utf-8",
+        )
+    pd.DataFrame(rows).to_csv(
+        split_dir / "state_registry.tsv", sep="\t", index=False
+    )
+    monkeypatch.setattr(screen, "PARITY", parity)
+    monkeypatch.setattr(screen, "SOURCE_RUNS", source_runs)
+
+    grid = screen.build_grid(tmp_path, protocol())
+
+    assert len(grid) == 5
+    assert grid["inner_fold"].eq(1).all()
+    assert grid["outer_fold"].tolist() == [1, 2, 3, 4, 5]

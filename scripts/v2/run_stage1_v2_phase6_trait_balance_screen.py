@@ -64,14 +64,16 @@ def sha256_file(path: Path) -> str:
 def build_grid(root: Path, protocol: dict[str, Any]) -> pd.DataFrame:
     registry = pd.read_csv(root / PARITY / "splits/state_registry.tsv", sep="\t", dtype=str)
     scope = protocol["phase_1_scope"]
+    outer_fold = pd.to_numeric(registry["outer_fold"], errors="coerce")
+    inner_fold = pd.to_numeric(registry["inner_fold"], errors="coerce")
     states = registry.loc[
         registry["state_level"].eq("INNER")
         & registry["scenario"].eq("GNEW_EOBS")
-        & registry["inner_fold"].astype(int).eq(int(scope["inner_fold"]))
-        & registry["outer_fold"].astype(int).isin(scope["outer_folds"])
+        & inner_fold.eq(int(scope["inner_fold"]))
+        & outer_fold.isin(scope["outer_folds"])
     ].copy()
-    states["outer_fold"] = states["outer_fold"].astype(int)
-    states["inner_fold"] = states["inner_fold"].astype(int)
+    states["outer_fold"] = outer_fold.loc[states.index].astype(int)
+    states["inner_fold"] = inner_fold.loc[states.index].astype(int)
     states = states.sort_values(["outer_fold", "inner_fold", "state_id"])
     if len(states) != int(scope["state_count"]) or not states["state_id"].is_unique:
         raise ValueError(f"Expected five trait-balance states; observed={len(states)}")
