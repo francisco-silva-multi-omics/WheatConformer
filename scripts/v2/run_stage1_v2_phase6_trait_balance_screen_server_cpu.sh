@@ -40,6 +40,13 @@ export PYTHON="$PYTHON"
 export CUDA_VISIBLE_DEVICES=-1
 export TF_CPP_MIN_LOG_LEVEL="${TF_CPP_MIN_LOG_LEVEL:-2}"
 
+echo "VERIFY trait-balance implementation in the certified TensorFlow runtime"
+"$PYTHON" -c 'import tensorflow; import server_training_pipeline.train_stage1_v2_phase6_trait_balance_tf; print("PASS TensorFlow trait-balance import")'
+"$PYTHON" -m pytest \
+  tests/test_stage1_v2_phase6_calibration_adjudication_correction.py \
+  tests/test_stage1_v2_phase6_trait_balance_screen.py \
+  -q
+
 echo "CERTIFY reporting-only macro-calibration adjudication correction"
 "$PYTHON" -m scripts.v2.certify_stage1_v2_phase6_hierarchy_calibration_adjudication_correction \
   --root "$DATA" \
