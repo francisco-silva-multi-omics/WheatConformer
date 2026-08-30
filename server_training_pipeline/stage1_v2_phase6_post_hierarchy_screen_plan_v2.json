@@ -1,0 +1,198 @@
+{
+  "protocol_version": "stage1_v2_phase6_post_hierarchy_screen_plan_v2",
+  "stage1_version": "Stage-1 v2",
+  "operation": "methodological_preregistration_amendment",
+  "parent_plan": "server_training_pipeline/stage1_v2_phase6_post_hierarchy_screen_plan_v1.json",
+  "parent_plan_sha256": "de2ce86cac81d9096818afd055ca4dd08d9ec2872ff5dac70219396ee6a41c84",
+  "selection_data": "methodological_structure_and_phenotype_blind_metadata_policy_only",
+  "active_trait_balance_screen_changed": false,
+  "active_trait_balance_metrics_read": false,
+  "outer_test_outcomes_read": false,
+  "outer_test_metrics_read": false,
+  "final_holdout_outcomes_read": false,
+  "amendments": [
+    "locked_factorial_ablation_after_component_survivors_are_frozen",
+    "withdraw_global_DTM_quantiles_as_weather_horizon_justification"
+  ],
+  "ordered_gates": [
+    {
+      "order": 1,
+      "name": "trait_balanced_loss",
+      "status": "ACTIVE_UNCHANGED_FROM_PARENT"
+    },
+    {
+      "order": 2,
+      "name": "trait_family_private_heads",
+      "status": "DEFERRED_UNTIL_TRAIT_BALANCE_TERMINAL",
+      "only_mutable_component": "trait_decoder_sharing"
+    },
+    {
+      "order": 3,
+      "name": "covariate_linked_factor_analytic_decomposition",
+      "status": "DEFERRED_BOUNDED_COMPARATOR",
+      "projection_rule": "all_environment_factor_loadings_used for prediction must be functions of certified prospective covariates; free observed-environment residuals belong only to the later adapter"
+    },
+    {
+      "order": 4,
+      "name": "phenotype_safe_phenology_random_regression",
+      "status": "DEFERRED_REQUIRES_FOLD_LOCAL_PHENOLOGY_AND_DAILY_HORIZON_CERTIFICATION"
+    },
+    {
+      "order": 5,
+      "name": "daily_environment_encoder",
+      "status": "DEFERRED_REQUIRES_DAILY_HISTORICAL_FUTURE_PARITY",
+      "initial_architecture": "small_dilated_temporal_convolution"
+    },
+    {
+      "order": 6,
+      "name": "bounded_sinn_residual",
+      "status": "DEFERRED_UNTIL_STATISTICAL_CORE_FROZEN",
+      "initial_interaction_rank": 16,
+      "statistical_core_joint_fine_tuning_allowed": false
+    },
+    {
+      "order": 7,
+      "name": "empirical_bayes_observed_environment_adapter",
+      "status": "DEFERRED_UNTIL_PROJECTION_CORE_FROZEN",
+      "unknown_environment_effect": 0.0
+    },
+    {
+      "order": 8,
+      "name": "marker_residual",
+      "status": "DEFERRED_UNTIL_SPLIT_LOCAL_PANEL_QC_CERTIFIED"
+    },
+    {
+      "order": 9,
+      "name": "locked_pheno_sinn_factorial_ablation",
+      "status": "CONDITIONAL_PREREGISTERED",
+      "entry_condition": "FA backbone, phenology module, and SINN residual specifications have each reached terminal inner-validation decisions and their survivor hashes are frozen"
+    },
+    {
+      "order": 10,
+      "name": "nonnegative_cross_fitted_stacking",
+      "status": "DEFERRED_UNTIL_FACTORIAL_AND_ALL_BASE_MODELS_TERMINAL"
+    }
+  ],
+  "factorial_ablation": {
+    "design": "2x2_paired_factorial_with_FA_backbone_fixed",
+    "factors": [
+      "phenology_alignment",
+      "bounded_SINN_residual"
+    ],
+    "cells": [
+      {
+        "model": "FA",
+        "FA_decomposition": true,
+        "phenology_alignment": false,
+        "SINN_residual": false
+      },
+      {
+        "model": "FA_PHENO",
+        "FA_decomposition": true,
+        "phenology_alignment": true,
+        "SINN_residual": false
+      },
+      {
+        "model": "FA_SINN",
+        "FA_decomposition": true,
+        "phenology_alignment": false,
+        "SINN_residual": true
+      },
+      {
+        "model": "PHENO_FA_SINN",
+        "FA_decomposition": true,
+        "phenology_alignment": true,
+        "SINN_residual": true
+      }
+    ],
+    "fixed_across_cells": [
+      "Stage-1_v2_observation_population",
+      "FA_backbone",
+      "trait_mass",
+      "trait_heads",
+      "likelihood",
+      "calibration_policy",
+      "K_A_operator",
+      "environment_schema",
+      "reporting_masks",
+      "training_seeds",
+      "optimizer_and_batch_size",
+      "early_stopping_rule",
+      "validation_observation_identifiers"
+    ],
+    "SINN_training_rule": "train only on cross-fitted statistical residual pseudo-targets from the inner-training partition; do not jointly fine-tune the frozen statistical core in the initial factorial",
+    "phenology_training_rule": "use only fold-local or cross-fitted predicted phenology; observed validation DTH or DTM is forbidden",
+    "exact_run_reuse_allowed": true,
+    "exact_run_reuse_requirements": [
+      "matching_observation_identifier_signature",
+      "matching_training_identifier_signatures",
+      "matching_seed",
+      "matching_component_and_protocol_hashes",
+      "matching_feature_schema_and_masks"
+    ],
+    "screen_sequence": {
+      "balanced_confirmation": "25 matched states: one preregistered inner fold for each scenario x outer-fold combination",
+      "definitive_confirmation": "all 125 matched inner states before an architectural synergy claim or outer-protocol freeze",
+      "outer_evaluation_allowed": false
+    },
+    "primary_metric": "validation_macro_normalized_rmse",
+    "paired_estimands": {
+      "phenology_gain_without_SINN": "NRMSE_FA - NRMSE_FA_PHENO",
+      "phenology_gain_with_SINN": "NRMSE_FA_SINN - NRMSE_PHENO_FA_SINN",
+      "SINN_gain_without_phenology": "NRMSE_FA - NRMSE_FA_SINN",
+      "SINN_gain_with_phenology": "NRMSE_FA_PHENO - NRMSE_PHENO_FA_SINN",
+      "interaction_on_NRMSE_scale": "NRMSE_PHENO_FA_SINN - NRMSE_FA_PHENO - NRMSE_FA_SINN + NRMSE_FA"
+    },
+    "interpretation": {
+      "strict_synergy": "full model beats both single-addition cells and the scenario/outer-fold clustered 95% interval for the NRMSE interaction is entirely below zero",
+      "complementarity_without_superadditivity": "both conditional gains are positive and the full model passes all frozen guards, while the interaction interval includes zero",
+      "redundancy": "one component has no positive conditional gain after the other is present",
+      "antagonism": "adding either component conditionally worsens NRMSE or causes a frozen guard failure",
+      "no_synergy_claim": "interaction uncertainty crosses zero or definitive 125-state confirmation is incomplete"
+    },
+    "uncertainty": "cluster paired results by scenario and outer fold; inner folds within a cluster are not treated as independent replicates",
+    "model_selection_independent_of_synergy_claim": true,
+    "all_existing_performance_and_subset_guards_remain_required": true
+  },
+  "daily_weather_horizon_policy": {
+    "current_authoritative_inclusive_endpoint_day": 179,
+    "current_authoritative_contract": "server_training_pipeline/phase6a_projection_core_feature_contract_v1.json",
+    "day_240_authorized": false,
+    "withdrawn_justification": "global DTM quantiles",
+    "forbidden_horizon_evidence": [
+      "DAYS_TO_MATURITY phenotype values",
+      "DAYS_TO_HEADING phenotype values",
+      "yield or other phenotype values",
+      "inner-validation metrics",
+      "outer-test outcomes or metrics",
+      "final-holdout outcomes"
+    ],
+    "permitted_horizon_evidence": [
+      "published external agronomic wheat season bounds selected without model-performance evidence",
+      "nonphenotypic sowing and harvest management metadata",
+      "phenotype-blind historical and future daily archive coverage",
+      "calendar and location metadata"
+    ],
+    "required_release_before_extension": "E_PROJECTION_DAILY_HORIZON_V2",
+    "required_release_checks": [
+      "evidence sources and deterministic endpoint rule frozen before endpoint calculation",
+      "historical and future daily coverage through the selected endpoint",
+      "identical historical and future variable derivation",
+      "bias-adjustment compatibility",
+      "physical-range and missingness certification",
+      "150 split-bound historical states rebuilt with training-only transformations",
+      "no protected phenotype or outcome access"
+    ],
+    "feature_or_model_use_before_release_passes": false
+  },
+  "product_policy": {
+    "historical_known_environment": "may add the frozen support-shrunk empirical-Bayes adapter",
+    "projection_compatible": "must use prospective covariates, predicted phenology, K_A, soil, management scenarios, and explicit masks only",
+    "future_predictions_allowed": false
+  },
+  "outer_protocol_policy": {
+    "create_only_after_all_entered_inner_gates_and_factorial_are_terminal": true,
+    "open_each_outer_partition_once": true,
+    "final_holdout_remains_sealed": true
+  }
+}
