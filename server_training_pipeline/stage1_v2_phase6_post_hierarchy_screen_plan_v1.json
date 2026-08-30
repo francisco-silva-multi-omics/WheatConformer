@@ -1,0 +1,66 @@
+{
+  "protocol_version": "stage1_v2_phase6_post_hierarchy_screen_plan_v1",
+  "stage1_version": "Stage-1 v2",
+  "selection_data": "future_nested_inner_validation_only",
+  "outer_test_metrics_read": false,
+  "final_holdout_outcomes_read": false,
+  "ordered_gates": [
+    {
+      "order": 1,
+      "name": "trait_balanced_loss",
+      "status": "IMPLEMENTED_PHASE_1_SCREEN",
+      "mutable_components": ["training_loss_trait_mass"]
+    },
+    {
+      "order": 2,
+      "name": "trait_specific_reaction_heads",
+      "status": "DEFERRED_UNTIL_TRAIT_BALANCE_TERMINAL",
+      "entry_condition": "trait balance leaves material trait heterogeneity"
+    },
+    {
+      "order": 3,
+      "name": "empirical_bayes_reml_or_bounded_megalmm_hierarchy",
+      "status": "DEFERRED_BOUNDED_COMPARATOR",
+      "entry_condition": "fixed hierarchy remains selected after loss screen"
+    },
+    {
+      "order": 4,
+      "name": "phenotype_safe_phenology_random_regression",
+      "status": "DEFERRED_REQUIRES_FOLD_LOCAL_PHENOLOGY_CERTIFICATION"
+    },
+    {
+      "order": 5,
+      "name": "projection_residual_comparators",
+      "status": "DEFERRED",
+      "candidates": ["regularized_catboost", "small_sinn_like_residual"]
+    },
+    {
+      "order": 6,
+      "name": "nonnegative_cross_fitted_stacking",
+      "status": "DEFERRED_UNTIL_ALL_BASE_MODELS_FROZEN"
+    }
+  ],
+  "products": {
+    "historical_known_environment": {
+      "identifier_intercepts_allowed": true,
+      "current_reference": "corrected_huber_hierarchy"
+    },
+    "projection_compatible": {
+      "identifier_intercepts_allowed": false,
+      "required_inputs": [
+        "K_A",
+        "prospective_phenology",
+        "E_PROJECTION_CORE_V1",
+        "soil",
+        "management_scenarios",
+        "explicit_masks"
+      ],
+      "future_predictions_allowed": false
+    }
+  },
+  "outer_protocol_policy": {
+    "create_only_after_all_entered_inner_gates_are_terminal": true,
+    "open_each_outer_partition_once": true,
+    "final_holdout_remains_sealed": true
+  }
+}

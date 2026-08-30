@@ -1,0 +1,68 @@
+{
+  "protocol_version": "stage1_v2_phase6_hierarchy_calibration_adjudication_correction_v1",
+  "stage1_version": "Stage-1 v2",
+  "operation": "reporting_only_semantic_correction",
+  "source_protocol_version": "stage1_v2_phase6_hierarchy_calibration_amendment_v2",
+  "source_terminal_status": "PASS_STAGE1_V2_PHASE6_CALIBRATION_AMENDMENT_COMPLETE_NO_ADVANCE",
+  "source_release_preserved": true,
+  "new_model_training_allowed": false,
+  "new_prediction_generation_allowed": false,
+  "outer_test_outcomes_read": false,
+  "outer_test_metrics_read": false,
+  "final_holdout_outcomes_read": false,
+  "metric_semantics": {
+    "macro_calibration_input": "calibration_amendment_paired_metrics.tsv:validation_macro_calibration_error",
+    "macro_calibration_definition": "mean absolute trait calibration-slope error within each candidate-state",
+    "macro_calibration_aggregation": "maximum across the 25 paired inner states",
+    "worst_trait_fold_calibration": "diagnostic_only",
+    "retrospective_threshold_change": false
+  },
+  "acceptance": {
+    "minimum_relative_nrmse_gain": 0.01,
+    "minimum_paired_inner_fold_win_rate": 0.6666666666666666,
+    "maximum_mean_pearson_drop": 0.005,
+    "maximum_absolute_macro_calibration_error": 0.2,
+    "maximum_primary_trait_absolute_calibration_error": 0.5,
+    "negative_trait_calibration_slope_allowed": false,
+    "within_environment_centered_spearman_maximum_drop": 0.002,
+    "within_environment_pairwise_accuracy_maximum_drop": 0.002,
+    "primary_trait_maximum_relative_nrmse_loss": 0.01,
+    "information_class_maximum_relative_nrmse_loss": 0.02,
+    "projection_inactive_environment_maximum_relative_nrmse_loss": 0.02,
+    "minimum_rows_for_guard": 500
+  },
+  "primary_traits": [
+    "1000_GRAIN_WEIGHT",
+    "DAYS_TO_HEADING",
+    "DAYS_TO_MATURITY",
+    "GRAIN_YIELD",
+    "PLANT_HEIGHT"
+  ],
+  "candidate_order": [
+    "hierarchy_test_weight_identity_calibration_v2",
+    "hierarchy_test_weight_environment_oof_ridge_v2",
+    "hierarchy_test_weight_environment_oof_huber_v2"
+  ],
+  "stable_reference_candidate": "historical_reaction_reference",
+  "selection": {
+    "all_existing_guards_required": true,
+    "primary": "minimum_validation_normalized_rmse_mean",
+    "tiebreaker": "maximum_validation_pearson_mean",
+    "final_tiebreaker": "candidate_order"
+  },
+  "route_policy": {
+    "routed_state_count": 125,
+    "active_hierarchy_state_count": 25,
+    "exact_reference_reuse_state_count": 100,
+    "GNEW_EOBS": "selected_corrected_hierarchy_calibration",
+    "GOBS_ENEW": "historical_reaction_reference",
+    "GNEW_ENEW": "historical_reaction_reference",
+    "TEMPORAL_YEAR": "historical_reaction_reference",
+    "COUNTRY_HOLDOUT": "historical_reaction_reference"
+  },
+  "outer_policy": {
+    "outer_evaluation_allowed": false,
+    "trait_balance_screen_must_be_terminal_before_outer_protocol": true,
+    "new_outer_protocol_required": true
+  }
+}
