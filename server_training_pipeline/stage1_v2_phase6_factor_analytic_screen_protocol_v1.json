@@ -1,0 +1,243 @@
+{
+  "protocol_version": "stage1_v2_phase6_factor_analytic_screen_v1",
+  "stage1_version": "Stage-1 v2",
+  "selection_data": "nested_inner_validation_only",
+  "parent_gate": "trait_family_private_heads",
+  "parent_terminal_status": "PASS_STAGE1_V2_PHASE6_PRIVATE_HEAD_PHASE1_COMPLETE_NO_ADVANCE",
+  "reference_candidate": "current_huber_authoritative_row_mass",
+  "reference_source_candidate": "hierarchy_test_weight_environment_oof_huber_v2",
+  "architecture_policy": {
+    "only_mutable_component": "covariate_linked_factor_analytic_residual",
+    "fixed_components": [
+      "K_A_CANONICAL_V3",
+      "HISTORICAL_ENVIRONMENT",
+      "historical_reaction_norm",
+      "trial_environment_hierarchy",
+      "authoritative_row_mass",
+      "environment_oof_huber_TEST_WEIGHT_calibration"
+    ],
+    "factor_analytic_form": "sum_q genotype_score_gq * covariate_linked_environment_loading_eq * trait_loading_tq",
+    "genotype_score_source": "split_bound_K_A_factor",
+    "environment_loading_source": "split_bound_E_PROJECTION_CORE_V1_standardized_features",
+    "environment_loading_link": "linear_without_environment_identifier_parameters",
+    "factor_specific_residual_variance": "existing_trait_specific_residual_scale",
+    "joint_training_with_frozen_architecture": true,
+    "free_environment_loadings_allowed": false,
+    "free_environment_identifier_residuals_in_FA_component": false,
+    "projection_inactive_policy": "exact_zero_FA_residual",
+    "historical_backbone_changed": false,
+    "hierarchy_changed": false,
+    "calibration_changed": false,
+    "authoritative_row_mass_changed": false
+  },
+  "projection_feature_contract": {
+    "component": "E_PROJECTION_CORE_V1",
+    "expected_feature_count": 153,
+    "source_protocol": "server_training_pipeline/phase6a_split_bound_projection_inputs_protocol_v1.json",
+    "split_bound_state_binding": "ka_projection_core",
+    "training_only_imputation_scaling_and_factorization_required": true,
+    "held_out_environments_use_frozen_training_parameters": true,
+    "explicit_missing_input_masks_required": true,
+    "future_SSP_values_read": false,
+    "future_covariate_matrices_used_for_training": false,
+    "future_predictions_generated": false
+  },
+  "fixed_configuration": {
+    "label": "historical_capacity_16_batch8192",
+    "latent_dim": 16,
+    "reaction_rank": 16,
+    "max_rank_genotype": 128,
+    "max_rank_environment": 64,
+    "learning_rate": 0.001,
+    "weight_decay": 0.0001,
+    "batch_size": 8192,
+    "epochs_max": 200,
+    "early_stopping_patience": 25
+  },
+  "trial_environment_hierarchy": {
+    "fit_partition": "inner_training_only",
+    "minimum_positive_weight_trial_trait_rows": 20,
+    "minimum_positive_weight_environment_trait_rows": 10,
+    "trial_effect_penalty": 0.01,
+    "environment_effect_penalty": 0.05,
+    "unknown_validation_identifier_effect": 0.0,
+    "allowed_scenarios": [
+      "GNEW_EOBS"
+    ]
+  },
+  "trait_specific_regularization": {
+    "default_residual_scale_floor": 0.05,
+    "default_trait_loading_penalty_multiplier": 1.0,
+    "overrides": {
+      "ABOVE_GROUND_BIOMASS": {
+        "residual_scale_floor": 0.1,
+        "trait_loading_penalty_multiplier": 4.0
+      },
+      "TEST_WEIGHT": {
+        "residual_scale_floor": 0.1,
+        "trait_loading_penalty_multiplier": 4.0
+      }
+    }
+  },
+  "positive_training_calibration": {
+    "fit_partition": "inner_training_only",
+    "minimum_rows_per_trait": 500,
+    "weighted_ridge": 0.01,
+    "minimum_slope": 0.05,
+    "maximum_slope": 2.0,
+    "insufficient_support_policy": "identity",
+    "validation_values_used": false
+  },
+  "test_weight_environment_oof_calibration": {
+    "target_trait": "TEST_WEIGHT",
+    "fit_partition": "inner_training_only",
+    "group_column": "environment_id",
+    "fold_count": 5,
+    "group_assignment": "sha256_modulo_fold_count",
+    "missing_environment_policy": "exclude_from_calibrator_fit_and_report",
+    "coefficient_aggregation": "componentwise_median",
+    "minimum_total_rows": 500,
+    "minimum_total_environments": 10,
+    "minimum_fit_rows_per_fold": 500,
+    "minimum_heldout_rows_per_fold": 50,
+    "minimum_fit_environments_per_fold": 8,
+    "minimum_heldout_environments_per_fold": 1,
+    "slope_ridge_toward_one": 0.01,
+    "minimum_slope": 0.05,
+    "maximum_slope": 2.0,
+    "huber_delta": 1.345,
+    "huber_maximum_iterations": 25,
+    "huber_convergence_tolerance": 1e-08,
+    "validation_values_used": false,
+    "fallback_policy": "identity"
+  },
+  "calibration_candidates": {
+    "hierarchy_test_weight_environment_oof_huber_v2": {
+      "method": "environment_oof_huber",
+      "purpose": "Frozen training-only TEST_WEIGHT calibration inherited from the corrected hierarchy reference"
+    }
+  },
+  "phase_1_scope": {
+    "outer_folds": [
+      1,
+      2,
+      3,
+      4,
+      5
+    ],
+    "inner_fold": 1,
+    "state_count": 5,
+    "reference_reuse_count": 5,
+    "new_candidate_fit_count": 10,
+    "candidate_result_count": 15,
+    "same_seed_replay_fit_count": 2,
+    "same_seed_replay_state_id": "GNEW_EOBS__OUTER1__INNER1"
+  },
+  "integrity_hardening": {
+    "tensorflow_op_determinism_required": true,
+    "deterministic_tf_data_order_required": true,
+    "per_batch_finite_prediction_loss_gradient_assertions_required": true,
+    "factor_cache_expected_state_hash_validation_required": true,
+    "best_model_weights_persisted_and_checksummed": true,
+    "raw_training_and_validation_predictions_persisted_and_checksummed": true,
+    "calibrated_validation_predictions_persisted_and_checksummed": true,
+    "same_seed_replay": {
+      "state_id": "GNEW_EOBS__OUTER1__INNER1",
+      "candidates": [
+        "covariate_linked_FA_rank2",
+        "covariate_linked_FA_rank4"
+      ],
+      "required_exact_artifacts": [
+        "best_model_weight_manifest.tsv",
+        "component_replay_manifest.tsv",
+        "training_observation_ids.npy",
+        "validation_observation_ids.npy",
+        "training_predictions_raw.npy",
+        "validation_predictions_raw.npy",
+        "validation_predictions_calibrated.npy"
+      ],
+      "same_runtime_and_thread_configuration_required": true,
+      "cross_hardware_byte_identity_claimed": false
+    },
+    "file_access_attestation": {
+      "inner_screen_scope": "controlled_process_only",
+      "os_level_complete_file_open_audit_performed": false,
+      "outer_evaluation_requires_syscall_or_os_audit_manifest": true,
+      "unrelated_process_file_access_excluded_from_claim": true
+    }
+  },
+  "candidates": {
+    "current_huber_authoritative_row_mass": {
+      "source_reuse": true,
+      "factor_analytic_rank": 0
+    },
+    "covariate_linked_FA_rank2": {
+      "source_reuse": false,
+      "factor_analytic_rank": 2,
+      "factor_penalty_multiplier": 1.0
+    },
+    "covariate_linked_FA_rank4": {
+      "source_reuse": false,
+      "factor_analytic_rank": 4,
+      "factor_penalty_multiplier": 1.0
+    }
+  },
+  "primary_traits": [
+    "1000_GRAIN_WEIGHT",
+    "DAYS_TO_HEADING",
+    "DAYS_TO_MATURITY",
+    "GRAIN_YIELD",
+    "PLANT_HEIGHT"
+  ],
+  "exploratory_traits": [
+    "ABOVE_GROUND_BIOMASS",
+    "TEST_WEIGHT"
+  ],
+  "phase_1_acceptance": {
+    "minimum_relative_nrmse_gain": 0.01,
+    "minimum_paired_inner_fold_win_rate": 0.6666666666666666,
+    "maximum_mean_pearson_drop": 0.005,
+    "maximum_absolute_macro_calibration_error": 0.2,
+    "maximum_primary_trait_absolute_calibration_error": 0.5,
+    "negative_trait_calibration_slope_allowed": false,
+    "within_environment_centered_spearman_maximum_drop": 0.002,
+    "within_environment_pairwise_accuracy_maximum_drop": 0.002,
+    "primary_trait_maximum_mean_relative_nrmse_loss": 0.01,
+    "exploratory_trait_maximum_mean_relative_nrmse_loss": 0.0,
+    "information_class_maximum_relative_nrmse_loss": 0.02,
+    "projection_inactive_environment_maximum_relative_nrmse_loss": 0.02,
+    "minimum_rows_for_guard": 500
+  },
+  "selection": {
+    "all_guards_required": true,
+    "primary": "minimum_validation_normalized_rmse_mean",
+    "tiebreaker": "maximum_validation_pearson_mean",
+    "final_tiebreaker": [
+      "covariate_linked_FA_rank2",
+      "covariate_linked_FA_rank4"
+    ]
+  },
+  "mandatory_reporting_subsets": [
+    "PEDIGREE_ONLY",
+    "MARKER_SUPPORTED",
+    "PEDIGREE_AND_MARKER",
+    "NEITHER_PRODUCTION_PEDIGREE_NOR_DENSE_MARKERS",
+    "RECOVERED_IDENTITY_OR_COMPONENT",
+    "PROJECTION_CORE_ACTIVE",
+    "PROJECTION_CORE_INACTIVE_814_ENVIRONMENTS"
+  ],
+  "confirmation_policy": {
+    "run_25_state_confirmation_only_after_phase_1_pass": true,
+    "reference_retained_if_no_candidate_passes": true,
+    "outer_evaluation_allowed": false
+  },
+  "product_policy": {
+    "historical_known_environment_product": "fixed_hierarchy_plus_covariate_linked_FA_candidate",
+    "projection_compatible_component": "covariate_linked_FA_residual_without_identifier_intercepts",
+    "trial_or_environment_identifier_effects_forbidden_in_projection_product": true,
+    "future_predictions_allowed": false
+  },
+  "outer_test_outcomes_read": false,
+  "outer_test_metrics_read": false,
+  "final_holdout_outcomes_read": false
+}
