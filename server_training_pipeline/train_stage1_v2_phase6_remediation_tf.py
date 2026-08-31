@@ -218,6 +218,196 @@ class HierarchicalReactionNorm(TraitRegularizedReactionNorm):
         return value
 
 
+class PrivateDecoderHierarchicalReactionNorm(HierarchicalReactionNorm):
+    """Add component-specific decoder residuals without changing factor backbones."""
+
+    def __init__(
+        self,
+        *args,
+        decoder_mode: str,
+        trait_family_indices: np.ndarray,
+        trait_private_penalty_multiplier: float,
+        family_penalty_multiplier: float,
+        **kwargs,
+    ) -> None:
+        super().__init__(*args, **kwargs)
+        if decoder_mode not in {
+            "trait_private_residual",
+            "family_shared_trait_private_residual",
+        }:
+            raise ValueError(f"Unknown private decoder mode: {decoder_mode}")
+        family_indices = np.asarray(trait_family_indices, dtype=np.int32)
+        if family_indices.shape != (len(self.trait_names),):
+            raise ValueError("Trait-family indices do not match the trait axis")
+        if family_indices.size and family_indices.min() < 0:
+            raise ValueError("Trait-family indices must be nonnegative")
+        self.decoder_mode = decoder_mode
+        self.trait_family_indices = tf.constant(family_indices, tf.int32)
+        self.trait_private_penalty_multiplier = float(
+            trait_private_penalty_multiplier
+        )
+        self.family_penalty_multiplier = float(family_penalty_multiplier)
+        self.family_count = int(family_indices.max()) + 1 if family_indices.size else 0
+
+        def trait_residual(label: str) -> tf.Variable:
+            return self.add_weight(
+                name=f"private_trait_decoder_{label}",
+                shape=(self.latent_dim, len(self.trait_names)),
+                initializer="zeros",
+            )
+
+        def family_residual(label: str) -> tf.Variable:
+            return self.add_weight(
+                name=f"family_decoder_{label}",
+                shape=(self.latent_dim, self.family_count),
+                initializer="zeros",
+            )
+
+        self.private_genotype_loadings = [
+            trait_residual(f"g_{index}_{block.name}")
+            for index, block in enumerate(self.genotype_blocks)
+        ]
+        self.private_environment_loadings = [
+            trait_residual(f"e_{index}_{block.name}")
+            for index, block in enumerate(self.environment_blocks)
+        ]
+        self.private_reaction_loadings = [
+            trait_residual(f"reaction_{index}_{block.name}")
+            for index, block in enumerate(self.genotype_blocks)
+        ] if self.reaction_enabled else []
+
+        family_enabled = decoder_mode == "family_shared_trait_private_residual"
+        self.family_genotype_loadings = [
+            family_residual(f"g_{index}_{block.name}")
+            for index, block in enumerate(self.genotype_blocks)
+        ] if family_enabled else []
+        self.family_environment_loadings = [
+            family_residual(f"e_{index}_{block.name}")
+            for index, block in enumerate(self.environment_blocks)
+        ] if family_enabled else []
+        self.family_reaction_loadings = [
+            family_residual(f"reaction_{index}_{block.name}")
+            for index, block in enumerate(self.genotype_blocks)
+        ] if family_enabled and self.reaction_enabled else []
+
+    def _residual_loading(
+        self,
+        trait_loading: tf.Tensor,
+        family_loading: tf.Tensor | None,
+        trait_index: tf.Tensor,
+    ) -> tf.Tensor:
+        value = tf.gather(tf.transpose(trait_loading), trait_index)
+        if family_loading is not None:
+            family_index = tf.gather(self.trait_family_indices, trait_index)
+            value += tf.gather(tf.transpose(family_loading), family_index)
+        return value
+
+    def call(self, inputs, training: bool = False):
+        prediction = super().call(inputs, training=training)
+        genotype_indices, environment_indices, reaction_index, trait_index = inputs[:4]
+        family_enabled = self.decoder_mode == (
+            "family_shared_trait_private_residual"
+        )
+
+        for index, (factor, coefficients, trait_loading) in enumerate(
+            zip(
+                self.genotype_factors,
+                self.genotype_main,
+                self.private_genotype_loadings,
+            )
+        ):
+            local_index = genotype_indices[:, index]
+            available = local_index >= 0
+            gathered = tf.gather(factor, tf.maximum(local_index, 0))
+            latent = tf.matmul(gathered, coefficients)
+            family_loading = (
+                self.family_genotype_loadings[index] if family_enabled else None
+            )
+            loading = self._residual_loading(
+                trait_loading, family_loading, trait_index
+            )
+            prediction += tf.reduce_sum(latent * loading, axis=1) * tf.cast(
+                available, tf.float32
+            )
+
+        for index, (factor, coefficients, trait_loading) in enumerate(
+            zip(
+                self.environment_factors,
+                self.environment_main,
+                self.private_environment_loadings,
+            )
+        ):
+            local_index = environment_indices[:, index]
+            available = local_index >= 0
+            gathered = tf.gather(factor, tf.maximum(local_index, 0))
+            latent = tf.matmul(gathered, coefficients)
+            family_loading = (
+                self.family_environment_loadings[index] if family_enabled else None
+            )
+            loading = self._residual_loading(
+                trait_loading, family_loading, trait_index
+            )
+            eligible = tf.gather(self.environment_eligibility[index], trait_index)
+            prediction += tf.reduce_sum(latent * loading, axis=1) * tf.cast(
+                available & eligible, tf.float32
+            )
+
+        if self.reaction_enabled:
+            reaction_available = reaction_index >= 0
+            environment_design = tf.gather(
+                self.reaction_design, tf.maximum(reaction_index, 0)
+            )
+            environment_latent = tf.matmul(
+                environment_design, self.environment_reaction_coefficients
+            )
+            for index, (features, coefficients, trait_loading) in enumerate(
+                zip(
+                    self.genotype_reaction_projection,
+                    self.genotype_reaction_coefficients,
+                    self.private_reaction_loadings,
+                )
+            ):
+                local_index = genotype_indices[:, index]
+                available = (local_index >= 0) & reaction_available
+                gathered = tf.gather(features, tf.maximum(local_index, 0))
+                genotype_latent = tf.matmul(gathered, coefficients)
+                family_loading = (
+                    self.family_reaction_loadings[index]
+                    if family_enabled
+                    else None
+                )
+                loading = self._residual_loading(
+                    trait_loading, family_loading, trait_index
+                )
+                effect = tf.reduce_sum(
+                    genotype_latent * environment_latent * loading, axis=1
+                ) / math.sqrt(self.latent_dim)
+                prediction += effect * tf.cast(available, tf.float32)
+        return prediction
+
+    def regularization_loss(self) -> tf.Tensor:
+        value = super().regularization_loss()
+        private = [
+            *self.private_genotype_loadings,
+            *self.private_environment_loadings,
+            *self.private_reaction_loadings,
+        ]
+        if private and self.trait_private_penalty_multiplier != 1.0:
+            value += self.weight_decay * (
+                self.trait_private_penalty_multiplier - 1.0
+            ) * tf.add_n([tf.reduce_sum(tf.square(item)) for item in private])
+        family = [
+            *self.family_genotype_loadings,
+            *self.family_environment_loadings,
+            *self.family_reaction_loadings,
+        ]
+        if family and self.family_penalty_multiplier != 1.0:
+            value += self.weight_decay * (
+                self.family_penalty_multiplier - 1.0
+            ) * tf.add_n([tf.reduce_sum(tf.square(item)) for item in family])
+        return value
+
+
 def make_component_dataset(
     frame: pd.DataFrame,
     genotype_columns: Sequence[str],
@@ -291,6 +481,9 @@ class ComponentFit:
     reaction_available_environment_count: int
     fit_training_rows: int
     checkpoint_validation_rows: int
+    decoder_policy: str
+    decoder_variable_count: int
+    decoder_parameter_count: int
 
 
 def fit_component(
@@ -306,6 +499,7 @@ def fit_component(
     hierarchy: bool,
     trait_regularization: bool,
     fit_scope: str = "all",
+    decoder_policy: dict[str, Any] | None = None,
 ) -> ComponentFit:
     if component == "projection":
         genotype = (
@@ -406,13 +600,46 @@ def fit_component(
         )
         if hierarchy:
             contract = protocol["trial_environment_hierarchy"]
-            model: tf.keras.Model = HierarchicalReactionNorm(
-                **common,
-                trial_support=trial_support,
-                environment_support=environment_support,
-                trial_penalty=float(contract["trial_effect_penalty"]),
-                environment_penalty=float(contract["environment_effect_penalty"]),
-            )
+            hierarchy_common = {
+                "trial_support": trial_support,
+                "environment_support": environment_support,
+                "trial_penalty": float(contract["trial_effect_penalty"]),
+                "environment_penalty": float(contract["environment_effect_penalty"]),
+            }
+            if decoder_policy is None:
+                model: tf.keras.Model = HierarchicalReactionNorm(
+                    **common,
+                    **hierarchy_common,
+                )
+            else:
+                family_map = decoder_policy.get("trait_family_map", {})
+                family_names = sorted(set(str(value) for value in family_map.values()))
+                family_lookup = {
+                    value: index for index, value in enumerate(family_names)
+                }
+                missing_traits = [
+                    trait for trait in trait_names if trait not in family_map
+                ]
+                if missing_traits:
+                    raise ValueError(
+                        f"Private decoder family map is incomplete: {missing_traits}"
+                    )
+                family_indices = np.asarray(
+                    [family_lookup[str(family_map[trait])] for trait in trait_names],
+                    dtype=np.int32,
+                )
+                model = PrivateDecoderHierarchicalReactionNorm(
+                    **common,
+                    **hierarchy_common,
+                    decoder_mode=str(decoder_policy["mode"]),
+                    trait_family_indices=family_indices,
+                    trait_private_penalty_multiplier=float(
+                        decoder_policy["trait_private_penalty_multiplier"]
+                    ),
+                    family_penalty_multiplier=float(
+                        decoder_policy["family_penalty_multiplier"]
+                    ),
+                )
         else:
             model = TraitRegularizedReactionNorm(**common)
     else:
@@ -513,6 +740,16 @@ def fit_component(
             for block in (*genotype, *environment)
         ]
     )
+    decoder_variables = [
+        value
+        for value in model.trainable_variables
+        if "private_trait_decoder_" in value.name or "family_decoder_" in value.name
+    ]
+    decoder_policy_name = (
+        "shared_trait_loadings"
+        if decoder_policy is None
+        else str(decoder_policy["mode"])
+    )
     result = ComponentFit(
         label=component,
         training_ids=training["phase4_adjusted_row_id"].astype(str).to_numpy(),
@@ -529,6 +766,11 @@ def fit_component(
         reaction_available_environment_count=int(reaction_available.sum()),
         fit_training_rows=len(fit_training),
         checkpoint_validation_rows=len(checkpoint_validation),
+        decoder_policy=decoder_policy_name,
+        decoder_variable_count=len(decoder_variables),
+        decoder_parameter_count=int(
+            sum(np.prod(value.shape.as_list()) for value in decoder_variables)
+        ),
     )
     del model
     tf.keras.backend.clear_session()
