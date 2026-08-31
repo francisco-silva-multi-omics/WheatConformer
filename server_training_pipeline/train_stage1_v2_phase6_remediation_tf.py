@@ -15,6 +15,8 @@ import numpy as np
 import pandas as pd
 
 os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")
+os.environ.setdefault("TF_DETERMINISTIC_OPS", "1")
+os.environ.setdefault("TF_CUDNN_DETERMINISTIC", "1")
 import tensorflow as tf
 
 from .stage1_v2_phase6_remediation import (
@@ -440,7 +442,10 @@ def make_component_dataset(
         dataset = dataset.shuffle(
             min(len(frame), 100_000), seed=seed, reshuffle_each_iteration=True
         )
-    return dataset.batch(batch_size).prefetch(tf.data.AUTOTUNE)
+    options = tf.data.Options()
+    options.experimental_deterministic = True
+    dataset = dataset.with_options(options)
+    return dataset.batch(batch_size).prefetch(1)
 
 
 def predict_component(
@@ -460,8 +465,15 @@ def predict_component(
         seed=0,
         hierarchy=hierarchy,
     )
-    values = [model(inputs, training=False) for inputs, _, _ in dataset]
-    return tf.concat(values, axis=0).numpy() if values else np.empty(0, np.float32)
+    values = []
+    for inputs, _, _ in dataset:
+        prediction = model(inputs, training=False)
+        tf.debugging.assert_all_finite(prediction, "Non-finite inference prediction")
+        values.append(prediction)
+    result = tf.concat(values, axis=0).numpy() if values else np.empty(0, np.float32)
+    if not np.isfinite(result).all():
+        raise FloatingPointError("Non-finite inference prediction escaped TensorFlow checks")
+    return result
 
 
 @dataclass
@@ -484,6 +496,77 @@ class ComponentFit:
     decoder_policy: str
     decoder_variable_count: int
     decoder_parameter_count: int
+    replay_artifacts: dict[str, str]
+
+
+def persist_component_replay_artifacts(
+    output: Path,
+    model: tf.keras.Model,
+    training_ids: np.ndarray,
+    validation_ids: np.ndarray,
+    training_prediction: np.ndarray,
+    validation_prediction: np.ndarray,
+) -> dict[str, str]:
+    output.mkdir(parents=True, exist_ok=True)
+    weights_dir = output / "best_model_weights"
+    weights_dir.mkdir(parents=True, exist_ok=True)
+    rows: list[dict[str, object]] = []
+    artifacts: dict[str, str] = {}
+    for index, variable in enumerate(model.weights):
+        relative = Path("best_model_weights") / f"weight_{index:04d}.npy"
+        array = variable.numpy()
+        np.save(output / relative, array, allow_pickle=False)
+        digest = sha256_file(output / relative)
+        artifacts[relative.as_posix()] = digest
+        rows.append(
+            {
+                "weight_index": index,
+                "variable_name": variable.name,
+                "shape": json.dumps(list(array.shape), separators=(",", ":")),
+                "dtype": str(array.dtype),
+                "parameter_count": int(array.size),
+                "path": relative.as_posix(),
+                "sha256": digest,
+            }
+        )
+    manifest = output / "best_model_weight_manifest.tsv"
+    pd.DataFrame(rows).to_csv(manifest, sep="\t", index=False, lineterminator="\n")
+    artifacts[manifest.name] = sha256_file(manifest)
+    arrays = {
+        "training_observation_ids.npy": np.asarray(training_ids, dtype=str),
+        "validation_observation_ids.npy": np.asarray(validation_ids, dtype=str),
+        "training_predictions_raw.npy": np.asarray(training_prediction),
+        "validation_predictions_raw.npy": np.asarray(validation_prediction),
+    }
+    for name, array in arrays.items():
+        np.save(output / name, array, allow_pickle=False)
+        artifacts[name] = sha256_file(output / name)
+    replay_rows = [
+        {
+            "role": "training",
+            "rows": len(training_ids),
+            "observation_signature": identifier_signature(training_ids),
+            "identifier_path": "training_observation_ids.npy",
+            "identifier_sha256": artifacts["training_observation_ids.npy"],
+            "prediction_path": "training_predictions_raw.npy",
+            "prediction_sha256": artifacts["training_predictions_raw.npy"],
+        },
+        {
+            "role": "validation",
+            "rows": len(validation_ids),
+            "observation_signature": identifier_signature(validation_ids),
+            "identifier_path": "validation_observation_ids.npy",
+            "identifier_sha256": artifacts["validation_observation_ids.npy"],
+            "prediction_path": "validation_predictions_raw.npy",
+            "prediction_sha256": artifacts["validation_predictions_raw.npy"],
+        },
+    ]
+    replay_manifest = output / "component_replay_manifest.tsv"
+    pd.DataFrame(replay_rows).to_csv(
+        replay_manifest, sep="\t", index=False, lineterminator="\n"
+    )
+    artifacts[replay_manifest.name] = sha256_file(replay_manifest)
+    return artifacts
 
 
 def fit_component(
@@ -500,6 +583,7 @@ def fit_component(
     trait_regularization: bool,
     fit_scope: str = "all",
     decoder_policy: dict[str, Any] | None = None,
+    replay_artifact_dir: Path | None = None,
 ) -> ComponentFit:
     if component == "projection":
         genotype = (
@@ -663,13 +747,30 @@ def fit_component(
     def train_step(inputs, target, weight):
         with tf.GradientTape() as tape:
             prediction = model(inputs, training=True)
+            tf.debugging.assert_all_finite(prediction, "Non-finite training prediction")
+            tf.debugging.assert_all_finite(target, "Non-finite training target")
+            tf.debugging.assert_all_finite(weight, "Non-finite training weight")
             trait_index = inputs[3]
             scale = tf.gather(model.residual_scales(), trait_index)
+            tf.debugging.assert_all_finite(scale, "Non-finite residual scale")
             nll = 0.5 * tf.square((target - prediction) / scale) + tf.math.log(scale)
+            tf.debugging.assert_all_finite(nll, "Non-finite per-row Gaussian NLL")
             denominator = tf.maximum(tf.reduce_sum(weight), 1e-6)
-            loss = tf.reduce_sum(nll * weight) / denominator + model.regularization_loss()
+            regularization = model.regularization_loss()
+            tf.debugging.assert_all_finite(regularization, "Non-finite regularization loss")
+            loss = tf.reduce_sum(nll * weight) / denominator + regularization
+            tf.debugging.assert_all_finite(loss, "Non-finite scalar training loss")
         gradients = tape.gradient(loss, model.trainable_variables)
-        optimizer.apply_gradients(zip(gradients, model.trainable_variables))
+        checked_gradients = []
+        for gradient, variable in zip(gradients, model.trainable_variables):
+            if gradient is None:
+                raise RuntimeError(f"Missing gradient for {variable.name}")
+            values = gradient.values if isinstance(gradient, tf.IndexedSlices) else gradient
+            tf.debugging.assert_all_finite(
+                values, f"Non-finite gradient for {variable.name}"
+            )
+            checked_gradients.append(gradient)
+        optimizer.apply_gradients(zip(checked_gradients, model.trainable_variables))
         return loss
 
     best_metric = float("inf")
@@ -726,6 +827,16 @@ def fit_component(
         batch_size,
         hierarchy,
     )
+    replay_artifacts: dict[str, str] = {}
+    if replay_artifact_dir is not None:
+        replay_artifacts = persist_component_replay_artifacts(
+            replay_artifact_dir,
+            model,
+            training["phase4_adjusted_row_id"].astype(str).to_numpy(),
+            validation["phase4_adjusted_row_id"].astype(str).to_numpy(),
+            training_prediction,
+            validation_prediction,
+        )
     inventory = pd.DataFrame(
         [
             {
@@ -771,6 +882,7 @@ def fit_component(
         decoder_parameter_count=int(
             sum(np.prod(value.shape.as_list()) for value in decoder_variables)
         ),
+        replay_artifacts=replay_artifacts,
     )
     del model
     tf.keras.backend.clear_session()

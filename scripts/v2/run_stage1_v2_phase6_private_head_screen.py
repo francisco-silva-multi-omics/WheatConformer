@@ -30,9 +30,12 @@ SOURCE_RUNS = Path(
     "trained_models/stage1_v2_phase6_hierarchy_calibration_amendment_v2_runs"
 )
 RUNS = Path("trained_models/stage1_v2_phase6_private_head_screen_v1_runs")
+REPLAY_RUNS = Path(
+    "trained_models/stage1_v2_phase6_private_head_screen_v1_same_seed_replay_runs"
+)
 OUTPUT = Path("model_kernels/stage1_v2_phase6_private_head_screen_v1/phase_1")
 TRAINER_MODULE = "server_training_pipeline.train_stage1_v2_phase6_private_heads_tf"
-RUN_PROTOCOL = "stage1_v2_phase6_private_heads_tf_v1"
+RUN_PROTOCOL = "stage1_v2_phase6_private_heads_tf_v2_integrity_hardened"
 REFERENCE = "current_huber_authoritative_row_mass"
 SOURCE_REFERENCE = "hierarchy_test_weight_environment_oof_huber_v2"
 
@@ -110,6 +113,13 @@ def run_complete(
         "only_mutable_component": "trait_decoder_sharing",
         "authoritative_row_mass_changed": False,
         "factor_backbone_changed": False,
+        "tensorflow_op_determinism_enabled": True,
+        "deterministic_tf_data_order": True,
+        "per_batch_finite_assertions_enabled": True,
+        "factor_cache_expected_state_validation": True,
+        "checkpoint_and_prediction_replay_artifacts_persisted": True,
+        "file_access_attestation_scope": "controlled_process_only",
+        "os_level_complete_file_open_audit_performed": False,
         "outer_test_metrics_read": False,
         "outer_test_outcomes_read": False,
         "final_holdout_outcomes_read": False,
@@ -137,6 +147,8 @@ def run_complete(
         return False
     if int(metadata.get("decoder_parameter_count", 0)) <= 0:
         return False
+    if not metadata.get("runtime_thread_configuration_sha256"):
+        return False
     artifacts = metadata.get("artifacts", {})
     return bool(artifacts) and all(
         (path / name).is_file() and sha256_file(path / name) == expected
@@ -151,10 +163,11 @@ def execute_run(
     row: dict[str, object],
     candidate: str,
     lock: dict[str, Any],
+    output_override: Path | None = None,
 ) -> None:
     state_id = str(row["state_id"])
     seed = int(row["seed"])
-    output = run_dir(root, state_id, candidate)
+    output = output_override or run_dir(root, state_id, candidate)
     output.mkdir(parents=True, exist_ok=True)
     log_path = output / "run.log"
     command = [
@@ -174,6 +187,9 @@ def execute_run(
     ]
     environment = os.environ.copy()
     environment["WHEATCONFORMER_CODE_ROOT"] = str(code_root)
+    environment["PYTHONHASHSEED"] = str(seed)
+    environment["TF_DETERMINISTIC_OPS"] = "1"
+    environment["TF_CUDNN_DETERMINISTIC"] = "1"
     environment["PYTHONPATH"] = str(code_root) + (
         os.pathsep + environment["PYTHONPATH"]
         if environment.get("PYTHONPATH")
@@ -194,6 +210,106 @@ def execute_run(
         raise RuntimeError(
             f"Private-head run failed: {state_id} {candidate}; log={log_path}"
         )
+
+
+def prewarm_factor_caches(
+    root: Path, grid: pd.DataFrame, protocol: dict[str, Any]
+) -> pd.DataFrame:
+    from server_training_pipeline.train_stage1_v2_phase6_confirmation_tf import (
+        build_confirmation_factors,
+    )
+
+    configuration = dict(protocol["fixed_configuration"])
+    configuration.pop("label", None)
+    rows: list[dict[str, object]] = []
+    for state_id in grid["state_id"].astype(str):
+        genotype, environment, _, _, _, _ = build_confirmation_factors(
+            root,
+            state_id,
+            "historical_reaction_reference",
+            configuration,
+        )
+        for block in (*genotype, *environment):
+            rows.append(
+                {
+                    "state_id": state_id,
+                    "component": block.name,
+                    "axis": block.axis,
+                    "rank": block.values.shape[1],
+                    "state_hash": block.state_hash,
+                    "status": "PASS",
+                }
+            )
+    return pd.DataFrame(rows)
+
+
+def run_same_seed_replays(
+    root: Path,
+    code_root: Path,
+    python: Path,
+    grid: pd.DataFrame,
+    protocol: dict[str, Any],
+    lock: dict[str, Any],
+) -> pd.DataFrame:
+    contract = protocol["integrity_hardening"]["same_seed_replay"]
+    state_id = str(contract["state_id"])
+    matches = grid.loc[grid["state_id"].eq(state_id)]
+    if len(matches) != 1:
+        raise ValueError(f"Same-seed replay state is absent or ambiguous: {state_id}")
+    row = matches.iloc[0].to_dict()
+    seed = int(row["seed"])
+    rows: list[dict[str, object]] = []
+    for candidate in contract["candidates"]:
+        source = run_dir(root, state_id, candidate)
+        replay = root / REPLAY_RUNS / state_id / candidate
+        if not run_complete(replay, state_id, candidate, seed, lock):
+            execute_run(
+                root,
+                code_root,
+                python,
+                row,
+                candidate,
+                lock,
+                output_override=replay,
+            )
+        source_metadata = read_json(source / "run_metadata.json")
+        replay_metadata = read_json(replay / "run_metadata.json")
+        required = list(contract["required_exact_artifacts"])
+        exact = all(
+            source_metadata["artifacts"].get(name)
+            == replay_metadata["artifacts"].get(name)
+            for name in required
+        )
+        metric_keys = [
+            "validation_macro_normalized_rmse",
+            "validation_macro_pearson",
+            "validation_macro_calibration_error",
+        ]
+        metric_deltas = [
+            abs(float(source_metadata[key]) - float(replay_metadata[key]))
+            for key in metric_keys
+        ]
+        metric_delta = max(metric_deltas) if all(
+            np.isfinite(value) for value in metric_deltas
+        ) else float("inf")
+        same_runtime = source_metadata.get(
+            "runtime_thread_configuration_sha256"
+        ) == replay_metadata.get("runtime_thread_configuration_sha256")
+        rows.append(
+            {
+                "state_id": state_id,
+                "candidate": candidate,
+                "seed": seed,
+                "required_artifact_count": len(required),
+                "required_artifacts_exact": exact,
+                "maximum_metric_absolute_delta": metric_delta,
+                "same_runtime_and_thread_configuration": same_runtime,
+                "status": "PASS"
+                if exact and metric_delta == 0.0 and same_runtime
+                else "FAIL",
+            }
+        )
+    return pd.DataFrame(rows)
 
 
 def collect_tables(
@@ -318,6 +434,9 @@ def main() -> None:
             "state_count": len(grid),
             "reference_reuse_count": len(grid),
             "new_model_fit_count": len(grid) * len(new_candidates),
+            "same_seed_replay_fit_count": int(
+                protocol["phase_1_scope"]["same_seed_replay_fit_count"]
+            ),
             "parallel_workers": args.workers,
             "threads_per_worker": args.threads_per_worker,
             "runtime": runtime,
@@ -328,6 +447,14 @@ def main() -> None:
     os.environ["STAGE1_V2_EXECUTION_BACKEND"] = args.runtime_mode
     os.environ["STAGE1_V2_INTRA_OP_THREADS"] = str(args.threads_per_worker)
     os.environ["STAGE1_V2_INTER_OP_THREADS"] = str(args.inter_op_threads)
+    print("PREWARM expected-state-validated factor caches", flush=True)
+    prewarm = prewarm_factor_caches(root, grid, protocol)
+    prewarm.to_csv(
+        output / "private_head_factor_cache_prewarm.tsv",
+        sep="\t",
+        index=False,
+        lineterminator="\n",
+    )
     pending: list[tuple[dict[str, object], str]] = []
     for row in grid.to_dict(orient="records"):
         for candidate in new_candidates:
@@ -362,6 +489,14 @@ def main() -> None:
                 flush=True,
             )
             gc.collect()
+
+    replay = run_same_seed_replays(root, code_root, python, grid, protocol, lock)
+    replay.to_csv(
+        output / "private_head_same_seed_replay.tsv",
+        sep="\t",
+        index=False,
+        lineterminator="\n",
+    )
 
     runs, traits, guards = collect_tables(root, grid, protocol)
     paired = reporting.pair_runs(runs)
@@ -427,6 +562,28 @@ def main() -> None:
             "projection_compatible_product"
         ]
         == "unchanged_and_separate",
+        "tensorflow_determinism_enabled": candidate_runs[
+            "tensorflow_op_determinism_enabled"
+        ].eq(True).all(),
+        "finite_assertions_enabled": candidate_runs[
+            "per_batch_finite_assertions_enabled"
+        ].eq(True).all(),
+        "factor_cache_expected_state_validated": candidate_runs[
+            "factor_cache_expected_state_validation"
+        ].eq(True).all(),
+        "factor_cache_prewarm_complete": prewarm["status"].eq("PASS").all()
+        and prewarm["state_id"].nunique() == 5,
+        "replay_artifacts_persisted": candidate_runs[
+            "checkpoint_and_prediction_replay_artifacts_persisted"
+        ].eq(True).all(),
+        "same_seed_replay_count_2": len(replay) == 2,
+        "same_seed_replay_exact": replay["status"].eq("PASS").all(),
+        "file_access_claim_scoped": candidate_runs[
+            "file_access_attestation_scope"
+        ].eq("controlled_process_only").all()
+        and candidate_runs["os_level_complete_file_open_audit_performed"].eq(
+            False
+        ).all(),
     }
     checks = {name: bool(value) for name, value in checks.items()}
     failed = [name for name, passed in checks.items() if not passed]
@@ -438,6 +595,8 @@ def main() -> None:
         "private_head_paired_trait_metrics.tsv": paired_traits,
         "private_head_paired_guard_metrics.tsv": paired_guards,
         "private_head_decision.tsv": decision,
+        "private_head_same_seed_replay.tsv": replay,
+        "private_head_factor_cache_prewarm.tsv": prewarm,
     }
     for name, frame in artifacts.items():
         frame.to_csv(output / name, sep="\t", index=False, lineterminator="\n")
@@ -457,6 +616,8 @@ def main() -> None:
         "state_count": 5,
         "reference_reuse_count": 5,
         "new_model_fit_count": 10,
+        "same_seed_replay_fit_count": 2,
+        "same_seed_replay_exact": bool(replay["status"].eq("PASS").all()),
         "full_confirmation_allowed": selected is not None and not failed,
         "outer_evaluation_allowed": False,
         "outer_test_metrics_read": False,

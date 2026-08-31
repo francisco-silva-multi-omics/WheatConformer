@@ -11,6 +11,8 @@ import numpy as np
 import pandas as pd
 
 os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")
+os.environ.setdefault("TF_DETERMINISTIC_OPS", "1")
+os.environ.setdefault("TF_CUDNN_DETERMINISTIC", "1")
 import tensorflow as tf
 
 from .stage1_v2_phase6_hierarchy_calibration_amendment_v2 import (
@@ -55,7 +57,7 @@ TRAIT_BALANCE_DECISION = Path(
 POST_HIERARCHY_PLAN = Path(
     "server_training_pipeline/stage1_v2_phase6_post_hierarchy_screen_plan_v2.json"
 )
-RUN_PROTOCOL = "stage1_v2_phase6_private_heads_tf_v1"
+RUN_PROTOCOL = "stage1_v2_phase6_private_heads_tf_v2_integrity_hardened"
 CALIBRATION_CANDIDATE = "hierarchy_test_weight_environment_oof_huber_v2"
 
 
@@ -128,12 +130,28 @@ def train_private_head_run(
 ) -> dict[str, object]:
     root = root.resolve()
     out_dir = out_dir.resolve()
-    tf.config.threading.set_intra_op_parallelism_threads(
-        int(os.environ.get("STAGE1_V2_INTRA_OP_THREADS", "16"))
-    )
-    tf.config.threading.set_inter_op_parallelism_threads(
-        int(os.environ.get("STAGE1_V2_INTER_OP_THREADS", "2"))
-    )
+    tf.config.experimental.enable_op_determinism()
+    intra_op_threads = int(os.environ.get("STAGE1_V2_INTRA_OP_THREADS", "16"))
+    inter_op_threads = int(os.environ.get("STAGE1_V2_INTER_OP_THREADS", "2"))
+    tf.config.threading.set_intra_op_parallelism_threads(intra_op_threads)
+    tf.config.threading.set_inter_op_parallelism_threads(inter_op_threads)
+    runtime_thread_configuration_sha256 = hashlib.sha256(
+        json.dumps(
+            {
+                "intra_op_threads": intra_op_threads,
+                "inter_op_threads": inter_op_threads,
+                "tf_deterministic_ops": True,
+                "tf_data_deterministic": True,
+                "tensorflow": tf.__version__,
+                "numpy": np.__version__,
+                "execution_backend": os.environ.get(
+                    "STAGE1_V2_EXECUTION_BACKEND", "unknown"
+                ),
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
     protocol = load_protocol(root)
     if candidate == protocol["reference_candidate"]:
         raise ValueError("The private-head reference must be reused, not retrained")
@@ -160,6 +178,7 @@ def train_private_head_run(
     ].reset_index(drop=True)
     mass_diagnostics = authoritative_mass_diagnostics(training)
     masks = shared_reporting_masks(root, state_id, validation, [candidate])
+    out_dir.mkdir(parents=True, exist_ok=True)
 
     fit = fit_component(
         root=root,
@@ -174,6 +193,7 @@ def train_private_head_run(
         trait_regularization=True,
         fit_scope="all",
         decoder_policy=decoder_policy,
+        replay_artifact_dir=out_dir,
     )
     if loss_weight_signature(frame) != authoritative_weight_sha256:
         raise ValueError("Private-head fit mutated authoritative row weights")
@@ -207,6 +227,9 @@ def train_private_head_run(
         active_validation,
         calibration,
     )
+    if not np.isfinite(prediction).all():
+        raise FloatingPointError("Non-finite calibrated validation prediction")
+    np.save(out_dir / "validation_predictions_calibrated.npy", prediction, allow_pickle=False)
     trait_metrics, subset_metrics, guard_metrics, summary = validation_metrics(
         validation, prediction, scaling, masks, candidate
     )
@@ -233,7 +256,6 @@ def train_private_head_run(
         ]
     )
 
-    out_dir.mkdir(parents=True, exist_ok=True)
     scaling.to_csv(out_dir / "trait_scaling.tsv", sep="\t", index=False)
     mass_diagnostics.to_csv(
         out_dir / "authoritative_row_mass_diagnostics.tsv", sep="\t", index=False
@@ -282,7 +304,10 @@ def train_private_head_run(
         "component_epoch_history.tsv",
         "active_component_factors.tsv",
         "trial_environment_hierarchy_support.tsv",
+        "validation_predictions_calibrated.npy",
     ]
+    artifact_hashes = {name: sha256_file(out_dir / name) for name in artifacts}
+    artifact_hashes.update(fit.replay_artifacts)
     metadata: dict[str, object] = {
         "status": "PASS",
         "protocol_version": RUN_PROTOCOL,
@@ -323,6 +348,14 @@ def train_private_head_run(
         "component_epochs_completed": {"historical": fit.epochs_completed},
         **summary,
         "model_training_performed": True,
+        "tensorflow_op_determinism_enabled": True,
+        "deterministic_tf_data_order": True,
+        "per_batch_finite_assertions_enabled": True,
+        "factor_cache_expected_state_validation": True,
+        "checkpoint_and_prediction_replay_artifacts_persisted": True,
+        "runtime_thread_configuration_sha256": runtime_thread_configuration_sha256,
+        "file_access_attestation_scope": "controlled_process_only",
+        "os_level_complete_file_open_audit_performed": False,
         "phenotype_values_read": True,
         "inner_validation_metrics_read": True,
         "outer_test_metrics_read": False,
@@ -340,7 +373,7 @@ def train_private_head_run(
         "protocol_sha256": sha256_file(code_root / PROTOCOL),
         "post_hierarchy_plan_sha256": sha256_file(code_root / POST_HIERARCHY_PLAN),
         "trait_balance_decision_sha256": sha256_file(root / TRAIT_BALANCE_DECISION),
-        "artifacts": {name: sha256_file(out_dir / name) for name in artifacts},
+        "artifacts": artifact_hashes,
     }
     write_json(out_dir / "run_metadata.json", metadata)
     print(json.dumps(metadata, indent=2, sort_keys=True), flush=True)

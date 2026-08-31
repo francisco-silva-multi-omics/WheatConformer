@@ -39,6 +39,8 @@ export PYTHONPATH="$CODE${PYTHONPATH:+:$PYTHONPATH}"
 export PYTHON="$PYTHON"
 export CUDA_VISIBLE_DEVICES=-1
 export TF_CPP_MIN_LOG_LEVEL="${TF_CPP_MIN_LOG_LEVEL:-2}"
+export TF_DETERMINISTIC_OPS=1
+export TF_CUDNN_DETERMINISTIC=1
 
 echo "VERIFY private-head implementation in the certified TensorFlow runtime"
 "$PYTHON" -c 'import tensorflow; import server_training_pipeline.train_stage1_v2_phase6_private_heads_tf; print("PASS TensorFlow private-head import")'
@@ -70,6 +72,6 @@ printf '%s\n' "$LOG" > "$LATEST"
 echo "Started Stage-1 v2 private-head phase_1 screen"
 echo "pid=$PID"
 echo "log=$LOG"
-echo "reference_reuses=5 new_model_fits=10 total_results=15"
+echo "reference_reuses=5 new_model_fits=10 same_seed_replay_fits=2 total_results=15"
 echo "workers=$WORKERS threads_per_worker=$THREADS"
 echo "Monitor with: bash $CODE/scripts/v2/show_stage1_v2_phase6_private_head_screen_server_cpu_status.sh $DATA"

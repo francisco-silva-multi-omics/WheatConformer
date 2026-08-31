@@ -13,6 +13,9 @@ import pandas as pd
 
 SUMMARY = Path("model_kernels/stage1_v2_phase6_private_head_screen_v1/phase_1")
 RUNS = Path("trained_models/stage1_v2_phase6_private_head_screen_v1_runs")
+REPLAY_RUNS = Path(
+    "trained_models/stage1_v2_phase6_private_head_screen_v1_same_seed_replay_runs"
+)
 SOURCE_RUNS = Path(
     "trained_models/stage1_v2_phase6_hierarchy_calibration_amendment_v2_runs"
 )
@@ -37,6 +40,8 @@ SUMMARY_FILES = (
     "private_head_paired_trait_metrics.tsv",
     "private_head_paired_guard_metrics.tsv",
     "private_head_decision.tsv",
+    "private_head_same_seed_replay.tsv",
+    "private_head_factor_cache_prewarm.tsv",
     "PRIVATE_HEAD_PHASE1_DECISION.json",
     "private_head_status.json",
 )
@@ -53,6 +58,13 @@ RUN_FILES = (
     "component_epoch_history.tsv",
     "active_component_factors.tsv",
     "trial_environment_hierarchy_support.tsv",
+    "best_model_weight_manifest.tsv",
+    "component_replay_manifest.tsv",
+    "training_observation_ids.npy",
+    "validation_observation_ids.npy",
+    "training_predictions_raw.npy",
+    "validation_predictions_raw.npy",
+    "validation_predictions_calibrated.npy",
 )
 SOURCE_RUN_FILES = (
     "run_metadata.json",
@@ -63,6 +75,7 @@ CODE_FILES = (
     "server_training_pipeline/stage1_v2_phase6_private_head_screen_protocol_v1.json",
     "server_training_pipeline/train_stage1_v2_phase6_private_heads_tf.py",
     "server_training_pipeline/train_stage1_v2_phase6_remediation_tf.py",
+    "server_training_pipeline/train_stage1_v2_phase6_tf.py",
     "server_training_pipeline/stage1_v2_phase6_post_hierarchy_screen_plan_v2.json",
     "scripts/v2/freeze_stage1_v2_phase6_private_head_screen.py",
     "scripts/v2/run_stage1_v2_phase6_private_head_screen.py",
@@ -91,6 +104,18 @@ def require_files(root: Path, names: tuple[str, ...]) -> None:
     missing = [name for name in names if not (root / name).is_file()]
     if missing:
         raise FileNotFoundError(f"Private-head export inputs are missing: {missing}")
+
+
+def certified_run_files(directory: Path) -> list[Path]:
+    require_files(directory, RUN_FILES)
+    metadata = read_json(directory / "run_metadata.json")
+    names = {Path(name) for name in RUN_FILES}
+    names.update(Path(name) for name in metadata.get("artifacts", {}))
+    for name, expected in metadata.get("artifacts", {}).items():
+        path = directory / name
+        if not path.is_file() or sha256_file(path) != expected:
+            raise ValueError(f"Run artifact checksum mismatch: {path}")
+    return sorted(names, key=lambda value: value.as_posix())
 
 
 def git_commit(code_root: Path) -> str:
@@ -149,13 +174,19 @@ def validate(root: Path, code_root: Path) -> tuple[dict[str, Any], pd.DataFrame]
 
     for row in candidate_runs.itertuples(index=False):
         directory = root / RUNS / str(row.state_id) / str(row.candidate)
-        require_files(directory, RUN_FILES)
+        run_files = certified_run_files(directory)
         metadata = read_json(directory / "run_metadata.json")
-        if metadata.get("protocol_version") != "stage1_v2_phase6_private_heads_tf_v1":
+        if metadata.get("protocol_version") != (
+            "stage1_v2_phase6_private_heads_tf_v2_integrity_hardened"
+        ):
             raise ValueError(f"Unexpected run protocol: {directory}")
-        for name, expected in metadata["artifacts"].items():
-            if sha256_file(directory / name) != expected:
-                raise ValueError(f"Run artifact checksum mismatch: {directory / name}")
+        if not run_files:
+            raise ValueError(f"Private-head run has no certified artifacts: {directory}")
+    replay = pd.read_csv(root / SUMMARY / "private_head_same_seed_replay.tsv", sep="\t")
+    if len(replay) != 2 or not replay["status"].eq("PASS").all():
+        raise ValueError("Private-head same-seed replay is incomplete")
+    for row in replay.itertuples(index=False):
+        certified_run_files(root / REPLAY_RUNS / str(row.state_id) / str(row.candidate))
     for state_id in sorted(runs["state_id"].astype(str).unique()):
         require_files(root / SOURCE_RUNS / state_id / SOURCE_REFERENCE, SOURCE_RUN_FILES)
 
@@ -200,7 +231,17 @@ def main() -> None:
     candidate_runs = runs.loc[runs["candidate"].isin(NEW_CANDIDATES)]
     for row in candidate_runs.itertuples(index=False):
         relative = RUNS / str(row.state_id) / str(row.candidate)
-        files.extend((root / relative / name, relative / name) for name in RUN_FILES)
+        files.extend(
+            (root / relative / name, relative / name)
+            for name in certified_run_files(root / relative)
+        )
+    replay = pd.read_csv(root / SUMMARY / "private_head_same_seed_replay.tsv", sep="\t")
+    for row in replay.itertuples(index=False):
+        relative = REPLAY_RUNS / str(row.state_id) / str(row.candidate)
+        files.extend(
+            (root / relative / name, relative / name)
+            for name in certified_run_files(root / relative)
+        )
     for state_id in sorted(runs["state_id"].astype(str).unique()):
         relative = SOURCE_RUNS / state_id / SOURCE_REFERENCE
         files.extend(

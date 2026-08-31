@@ -34,6 +34,9 @@ MODEL_BUILDER = (
     / "server_training_pipeline"
     / "train_stage1_v2_phase6_remediation_tf.py"
 )
+FACTOR_BUILDER = (
+    ROOT / "server_training_pipeline" / "train_stage1_v2_phase6_tf.py"
+)
 RUNNER = ROOT / "scripts" / "v2" / "run_stage1_v2_phase6_private_head_screen.py"
 FREEZE = ROOT / "scripts" / "v2" / "freeze_stage1_v2_phase6_private_head_screen.py"
 PACKAGER = (
@@ -76,6 +79,29 @@ def test_private_head_gate_changes_only_decoder_sharing() -> None:
     assert value["final_holdout_outcomes_read"] is False
 
 
+def test_private_head_gate_preregisters_integrity_hardening() -> None:
+    value = protocol()
+    integrity = value["integrity_hardening"]
+    assert integrity["tensorflow_op_determinism_required"] is True
+    assert integrity["deterministic_tf_data_order_required"] is True
+    assert integrity[
+        "per_batch_finite_prediction_loss_gradient_assertions_required"
+    ] is True
+    assert integrity["factor_cache_expected_state_hash_validation_required"] is True
+    assert integrity["best_model_weights_persisted_and_checksummed"] is True
+    assert integrity[
+        "raw_training_and_validation_predictions_persisted_and_checksummed"
+    ] is True
+    replay = integrity["same_seed_replay"]
+    assert replay["state_id"] == "GNEW_EOBS__OUTER1__INNER1"
+    assert len(replay["candidates"]) == 2
+    assert replay["cross_hardware_byte_identity_claimed"] is False
+    access = integrity["file_access_attestation"]
+    assert access["inner_screen_scope"] == "controlled_process_only"
+    assert access["os_level_complete_file_open_audit_performed"] is False
+    assert access["outer_evaluation_requires_syscall_or_os_audit_manifest"] is True
+
+
 def test_two_private_decoder_candidates_are_preregistered() -> None:
     value = protocol()
     candidates = {
@@ -112,6 +138,7 @@ def test_private_head_gate_is_second_in_the_frozen_plan() -> None:
 def test_implementation_binds_decoder_activity_and_parent_terminal_decision() -> None:
     trainer = TRAINER.read_text(encoding="utf-8")
     model_builder = MODEL_BUILDER.read_text(encoding="utf-8")
+    factor_builder = FACTOR_BUILDER.read_text(encoding="utf-8")
     runner = RUNNER.read_text(encoding="utf-8")
     freeze = FREEZE.read_text(encoding="utf-8")
     assert "decoder_policy=decoder_policy" in trainer
@@ -121,6 +148,10 @@ def test_implementation_binds_decoder_activity_and_parent_terminal_decision() ->
     assert "family_decoder_" in model_builder
     assert '"decoder_policies_active"' in runner
     assert '"outer_evaluation_allowed": False' in runner
+    assert "enable_op_determinism" in trainer
+    assert "assert_all_finite" in model_builder
+    assert "expected_state_hash" in factor_builder
+    assert "private_head_same_seed_replay.tsv" in runner
     assert "parent_trait_balance_terminal" in freeze
     for implementation in (
         "trainer",
@@ -140,6 +171,9 @@ def test_result_packager_requires_sealed_complete_phase1_outputs() -> None:
     assert "EXPECTED_STATUSES" in source
     assert "PRIVATE_HEAD_PHASE1_DECISION.json" in source
     assert "decoder_parameter_inventory.tsv" in source
+    assert "best_model_weight_manifest.tsv" in source
+    assert "validation_predictions_calibrated.npy" in source
+    assert "private_head_same_seed_replay.tsv" in source
     assert 'value.get("outer_test_outcomes_read") is not False' in source
     assert 'value.get("final_holdout_outcomes_read") is not False' in source
     assert "len(runs) != 15" in source
@@ -197,3 +231,56 @@ def test_grid_ignores_blank_outer_level_inner_folds(
     assert grid["inner_fold"].eq(1).all()
     assert grid["outer_fold"].tolist() == [1, 2, 3, 4, 5]
     assert grid["seed"].tolist() == [901, 902, 903, 904, 905]
+
+
+def test_same_seed_replay_requires_exact_artifacts_metrics_and_runtime(
+    tmp_path: Path, monkeypatch
+) -> None:
+    state_id = "GNEW_EOBS__OUTER1__INNER1"
+    candidates = [
+        "trait_private_residual_heads",
+        "family_shared_trait_private_residual_heads",
+    ]
+    monkeypatch.setattr(screen, "RUNS", Path("runs"))
+    monkeypatch.setattr(screen, "REPLAY_RUNS", Path("replays"))
+    monkeypatch.setattr(screen, "run_complete", lambda *args, **kwargs: True)
+    artifacts = {
+        "best_model_weight_manifest.tsv": "weights",
+        "validation_predictions_raw.npy": "predictions",
+    }
+    metadata = {
+        "artifacts": artifacts,
+        "validation_macro_normalized_rmse": 0.7,
+        "validation_macro_pearson": 0.6,
+        "validation_macro_calibration_error": 0.1,
+        "runtime_thread_configuration_sha256": "runtime",
+    }
+    for candidate in candidates:
+        for base in (Path("runs"), Path("replays")):
+            path = tmp_path / base / state_id / candidate / "run_metadata.json"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(metadata), encoding="utf-8")
+    value = protocol()
+    value["integrity_hardening"]["same_seed_replay"][
+        "required_exact_artifacts"
+    ] = list(artifacts)
+    grid = pd.DataFrame(
+        [
+            {
+                "state_id": state_id,
+                "scenario": "GNEW_EOBS",
+                "outer_fold": 1,
+                "inner_fold": 1,
+                "seed": 901,
+            }
+        ]
+    )
+
+    replay = screen.run_same_seed_replays(
+        tmp_path, tmp_path, Path("python"), grid, value, {}
+    )
+
+    assert len(replay) == 2
+    assert replay["status"].eq("PASS").all()
+    assert replay["required_artifacts_exact"].all()
+    assert replay["maximum_metric_absolute_delta"].eq(0.0).all()

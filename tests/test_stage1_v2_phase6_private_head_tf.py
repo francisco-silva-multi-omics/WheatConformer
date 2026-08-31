@@ -8,8 +8,13 @@ tf = pytest.importorskip("tensorflow")
 
 from server_training_pipeline.train_stage1_v2_phase6_remediation_tf import (  # noqa: E402
     PrivateDecoderHierarchicalReactionNorm,
+    persist_component_replay_artifacts,
 )
-from server_training_pipeline.train_stage1_v2_phase6_tf import FactorBlock  # noqa: E402
+from server_training_pipeline.train_stage1_v2_phase6_tf import (  # noqa: E402
+    FactorBlock,
+    _load_factor,
+    _save_factor,
+)
 
 
 def factor(name: str, axis: str) -> FactorBlock:
@@ -96,3 +101,36 @@ def test_family_candidate_contains_family_and_trait_residuals() -> None:
     assert family
     assert model.family_count == 1
     assert all(np.array_equal(value.numpy(), np.zeros(value.shape)) for value in family)
+
+
+def test_factor_cache_rejects_an_unexpected_state_hash(tmp_path) -> None:
+    path = tmp_path / "factor.npz"
+    value = factor("g", "genotype")
+    value.state_hash = "state-a"
+    _save_factor(path, value)
+
+    loaded = _load_factor(
+        path, expected_name="g", expected_state_hash="state-a"
+    )
+    assert loaded.state_hash == "state-a"
+    with pytest.raises(ValueError, match="Factor cache state mismatch"):
+        _load_factor(path, expected_name="g", expected_state_hash="state-b")
+
+
+def test_replay_artifacts_persist_weights_predictions_and_identifiers(tmp_path) -> None:
+    model = build_model("trait_private_residual")
+    prediction = model(inputs(), training=False).numpy()
+    artifacts = persist_component_replay_artifacts(
+        tmp_path,
+        model,
+        np.asarray(["train-a", "train-b"]),
+        np.asarray(["valid-a", "valid-b"]),
+        prediction,
+        prediction,
+    )
+    assert "best_model_weight_manifest.tsv" in artifacts
+    assert "training_predictions_raw.npy" in artifacts
+    assert "validation_predictions_raw.npy" in artifacts
+    assert "component_replay_manifest.tsv" in artifacts
+    assert any(name.startswith("best_model_weights/") for name in artifacts)
+    assert all((tmp_path / name).is_file() for name in artifacts)

@@ -168,6 +168,38 @@ def main() -> None:
             protocol["phase_1_scope"]["new_candidate_fit_count"]
         )
         == 10,
+        "same_seed_replay_count_2": int(
+            protocol["phase_1_scope"]["same_seed_replay_fit_count"]
+        )
+        == 2,
+        "tensorflow_determinism_required": protocol["integrity_hardening"][
+            "tensorflow_op_determinism_required"
+        ]
+        is True,
+        "finite_assertions_required": protocol["integrity_hardening"][
+            "per_batch_finite_prediction_loss_gradient_assertions_required"
+        ]
+        is True,
+        "cache_expected_state_validation_required": protocol[
+            "integrity_hardening"
+        ]["factor_cache_expected_state_hash_validation_required"]
+        is True,
+        "checkpoint_and_predictions_required": protocol["integrity_hardening"][
+            "best_model_weights_persisted_and_checksummed"
+        ]
+        is True
+        and protocol["integrity_hardening"][
+            "raw_training_and_validation_predictions_persisted_and_checksummed"
+        ]
+        is True
+        and protocol["integrity_hardening"][
+            "calibrated_validation_predictions_persisted_and_checksummed"
+        ]
+        is True,
+        "outer_os_file_audit_preregistered": protocol["integrity_hardening"][
+            "file_access_attestation"
+        ]["outer_evaluation_requires_syscall_or_os_audit_manifest"]
+        is True,
         "projection_product_separate": protocol["product_policy"][
             "projection_compatible_product"
         ]
@@ -200,6 +232,7 @@ def main() -> None:
         "new_candidates": new_candidates,
         "state_count": 5,
         "new_model_fit_count": 10,
+        "same_seed_replay_fit_count": 2,
         "outer_evaluation_allowed": False,
         "outer_test_metrics_read": False,
         "outer_test_outcomes_read": False,

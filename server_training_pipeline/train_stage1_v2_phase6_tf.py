@@ -44,7 +44,7 @@ PHASE1_ROOT = Path("model_kernels/stage1_v2_phase6_phase1_v2")
 EXECUTION_PROTOCOL = Path(
     "server_training_pipeline/stage1_v2_phase6_execution_protocol_v2.json"
 )
-FACTOR_CACHE_VERSION = "stage1_v2_phase6_factor_cache_v2"
+FACTOR_CACHE_VERSION = "stage1_v2_phase6_factor_cache_v3_expected_state"
 MISSING_DOSAGE = 255
 GUARD_REPLAY_ENV = "STAGE1_V2_PHASE1_GUARD_REPLAY"
 GUARD_REPLAY_PROTOCOL = "stage1_v2_phase6_phase1_guard_replay_v1"
@@ -277,22 +277,30 @@ def _cache_path(root: Path, state_id: str, label: str, rank: int) -> Path:
 
 def _save_factor(path: Path, factor: FactorBlock) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix(".tmp.npz")
-    np.savez(
-        temporary,
-        cache_version=np.asarray([FACTOR_CACHE_VERSION]),
-        name=np.asarray([factor.name]),
-        axis=np.asarray([factor.axis]),
-        entity_ids=factor.entity_ids.astype(str),
-        values=factor.values.astype(np.float32),
-        available=factor.available.astype(np.bool_),
-        eligible_traits=np.asarray(factor.eligible_traits, dtype=str),
-        state_hash=np.asarray([factor.state_hash]),
-    )
-    temporary.replace(path)
+    temporary = path.with_name(f"{path.name}.{os.getpid()}.tmp.npz")
+    try:
+        np.savez(
+            temporary,
+            cache_version=np.asarray([FACTOR_CACHE_VERSION]),
+            name=np.asarray([factor.name]),
+            axis=np.asarray([factor.axis]),
+            entity_ids=factor.entity_ids.astype(str),
+            values=factor.values.astype(np.float32),
+            available=factor.available.astype(np.bool_),
+            eligible_traits=np.asarray(factor.eligible_traits, dtype=str),
+            state_hash=np.asarray([factor.state_hash]),
+        )
+        temporary.replace(path)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
-def _load_factor(path: Path) -> FactorBlock:
+def _load_factor(
+    path: Path,
+    *,
+    expected_name: str,
+    expected_state_hash: str,
+) -> FactorBlock:
     cached = np.load(path, allow_pickle=False)
     if str(cached["cache_version"][0]) != FACTOR_CACHE_VERSION:
         raise ValueError(f"Stale factor cache: {path}")
@@ -306,6 +314,16 @@ def _load_factor(path: Path) -> FactorBlock:
         state_hash=str(cached["state_hash"][0]),
     )
     factor.validate()
+    if factor.name != expected_name:
+        raise ValueError(
+            f"Factor cache component mismatch: path={path}; "
+            f"observed={factor.name}; expected={expected_name}"
+        )
+    if factor.state_hash != expected_state_hash:
+        raise ValueError(
+            f"Factor cache state mismatch: path={path}; "
+            f"observed={factor.state_hash}; expected={expected_state_hash}"
+        )
     return factor
 
 
@@ -314,16 +332,25 @@ def _cached_factor(
     state_id: str,
     label: str,
     rank: int,
+    expected_state_hash: str,
     builder,
 ) -> FactorBlock:
     path = _cache_path(root, state_id, label, rank)
     if path.is_file():
         try:
-            return _load_factor(path)
+            return _load_factor(
+                path,
+                expected_name=label,
+                expected_state_hash=expected_state_hash,
+            )
         except (KeyError, ValueError):
             pass
     factor = builder()
     factor.validate()
+    if factor.name != label or factor.state_hash != expected_state_hash:
+        raise ValueError(
+            f"Built factor does not match its expected state: {state_id}/{label}"
+        )
     _save_factor(path, factor)
     return factor
 
@@ -367,7 +394,7 @@ def build_ka_factor(root: Path, state_id: str, rank: int) -> FactorBlock:
             state_hash=spec.state_hash,
         )
 
-    return _cached_factor(root, state_id, "K_A", rank, builder)
+    return _cached_factor(root, state_id, "K_A", rank, spec.state_hash, builder)
 
 
 def centered_marker_random_features(
@@ -472,7 +499,7 @@ def build_marker_factor(root: Path, state_id: str, component: str, rank: int) ->
             state_hash=spec.state_hash,
         )
 
-    return _cached_factor(root, state_id, component, rank, builder)
+    return _cached_factor(root, state_id, component, rank, spec.state_hash, builder)
 
 
 def build_h_seeds_factor(root: Path, state_id: str, rank: int) -> FactorBlock:
@@ -548,7 +575,7 @@ def build_h_seeds_factor(root: Path, state_id: str, rank: int) -> FactorBlock:
             state_hash=h_spec.state_hash,
         )
 
-    return _cached_factor(root, state_id, "H_SEEDS", rank, builder)
+    return _cached_factor(root, state_id, "H_SEEDS", rank, h_spec.state_hash, builder)
 
 
 def _environment_axis(root: Path, state_id: str) -> pd.DataFrame:
@@ -556,9 +583,13 @@ def _environment_axis(root: Path, state_id: str) -> pd.DataFrame:
 
 
 def build_identity_geo_factors(root: Path, state_id: str, rank: int) -> tuple[FactorBlock, ...]:
+    axis = _environment_axis(root, state_id)
+    training = axis["partition"].eq("TRAINING").to_numpy()
+    identity_state_hash = identifier_signature(axis.loc[training, "environment_id"])
+    geo_levels = sorted(set(axis.loc[training, "location_key"].astype(str)))
+    geo_state_hash = identifier_signature(geo_levels)
+
     def identity_builder() -> FactorBlock:
-        axis = _environment_axis(root, state_id)
-        training = axis["partition"].eq("TRAINING").to_numpy()
         values = np.zeros((len(axis), rank), dtype=np.float32)
         rng = np.random.default_rng(stable_seed(state_id, "K_E_IDENTITY", rank))
         values[training] = rng.choice(
@@ -572,15 +603,13 @@ def build_identity_geo_factors(root: Path, state_id: str, rank: int) -> tuple[Fa
             entity_ids=axis["environment_id"].astype(str).to_numpy(),
             values=values,
             available=training,
-            state_hash=identifier_signature(axis.loc[training, "environment_id"]),
+            state_hash=identity_state_hash,
         )
 
     def geo_builder() -> FactorBlock:
-        axis = _environment_axis(root, state_id)
-        training = axis["partition"].eq("TRAINING").to_numpy()
-        training_levels = set(axis.loc[training, "location_key"].astype(str))
+        training_levels = set(geo_levels)
         available = axis["location_key"].astype(str).isin(training_levels).to_numpy()
-        levels = sorted(training_levels)
+        levels = geo_levels
         rng = np.random.default_rng(stable_seed(state_id, "K_E_EXACT_LOCATION", rank))
         level_values = rng.choice(
             [-1.0 / math.sqrt(rank), 1.0 / math.sqrt(rank)], size=(len(levels), rank)
@@ -598,11 +627,25 @@ def build_identity_geo_factors(root: Path, state_id: str, rank: int) -> tuple[Fa
             entity_ids=axis["environment_id"].astype(str).to_numpy(),
             values=values,
             available=available,
-            state_hash=identifier_signature(levels),
+            state_hash=geo_state_hash,
         )
 
-    identity = _cached_factor(root, state_id, "K_E_IDENTITY", rank, identity_builder)
-    geo = _cached_factor(root, state_id, "K_E_EXACT_LOCATION", rank, geo_builder)
+    identity = _cached_factor(
+        root,
+        state_id,
+        "K_E_IDENTITY",
+        rank,
+        identity_state_hash,
+        identity_builder,
+    )
+    geo = _cached_factor(
+        root,
+        state_id,
+        "K_E_EXACT_LOCATION",
+        rank,
+        geo_state_hash,
+        geo_builder,
+    )
     return identity, geo
 
 
@@ -678,11 +721,47 @@ def _source_values(
 def build_historical_environment(
     root: Path, state_id: str, rank: int
 ) -> tuple[tuple[FactorBlock, ...], np.ndarray, np.ndarray, np.ndarray]:
+    axis_frame = _environment_axis(root, state_id)
+    environment_ids = axis_frame["environment_id"].astype(str).to_numpy(dtype=str)
+    training = axis_frame["partition"].eq("TRAINING").to_numpy()
+    parameters = pd.read_csv(
+        root / PARITY / "environment/environment_preprocessing_parameters.tsv",
+        sep="\t",
+    )
+    parameters = parameters.loc[parameters["state_id"].eq(state_id)].copy()
+    expected_component_names: list[str] = []
+    expected_component_hashes: list[str] = []
+    for component, group in parameters.groupby("component", sort=True):
+        expected_component_names.append(str(component))
+        expected_component_hashes.append(
+            hashlib.sha256(
+                group.to_csv(index=False, lineterminator="\n").encode("utf-8")
+            ).hexdigest()
+        )
+    expected_axis_signature = identifier_signature(environment_ids)
     cache = _cache_path(root, state_id, "HISTORICAL_ENVIRONMENT", rank)
     if cache.is_file():
         saved = np.load(cache, allow_pickle=False)
-        if str(saved["cache_version"][0]) == FACTOR_CACHE_VERSION:
+        cache_matches_expected_state = (
+            str(saved["cache_version"][0]) == FACTOR_CACHE_VERSION
+            and "source_axis_signature" in saved.files
+            and str(saved["source_axis_signature"][0]) == expected_axis_signature
+            and np.array_equal(
+                saved["component_names"].astype(str),
+                np.asarray(expected_component_names, dtype=str),
+            )
+            and np.array_equal(
+                saved["component_hashes"].astype(str),
+                np.asarray(expected_component_hashes, dtype=str),
+            )
+        )
+        if cache_matches_expected_state:
             axis = saved["entity_ids"].astype(str)
+            if not np.array_equal(axis, environment_ids):
+                saved.close()
+                raise ValueError(
+                    f"Historical factor cache axis mismatch: {state_id}"
+                )
             factors = saved["factor_values"].astype(np.float32)
             availability = saved["factor_available"].astype(bool)
             starts = saved["factor_starts"].astype(int)
@@ -714,14 +793,6 @@ def build_historical_environment(
             saved.close()
             return result
         saved.close()
-    axis_frame = _environment_axis(root, state_id)
-    environment_ids = axis_frame["environment_id"].astype(str).to_numpy(dtype=str)
-    training = axis_frame["partition"].eq("TRAINING").to_numpy()
-    parameters = pd.read_csv(
-        root / PARITY / "environment/environment_preprocessing_parameters.tsv",
-        sep="\t",
-    )
-    parameters = parameters.loc[parameters["state_id"].eq(state_id)].copy()
     blocks: list[FactorBlock] = []
     stage_values: list[np.ndarray] = []
     stage_available: list[np.ndarray] = []
@@ -778,21 +849,25 @@ def build_historical_environment(
         [block.values.shape[1] for block in blocks]
     )
     cache.parent.mkdir(parents=True, exist_ok=True)
-    temporary = cache.with_suffix(".tmp.npz")
-    np.savez(
-        temporary,
-        cache_version=np.asarray([FACTOR_CACHE_VERSION]),
-        entity_ids=environment_ids,
-        component_names=np.asarray([block.name for block in blocks], dtype=str),
-        component_hashes=np.asarray([block.state_hash for block in blocks], dtype=str),
-        factor_starts=factor_starts,
-        factor_stops=factor_stops,
-        factor_values=np.concatenate([block.values for block in blocks], axis=1),
-        factor_available=np.column_stack([block.available for block in blocks]),
-        reaction_design=reaction_design,
-        reaction_available=reaction_available,
-    )
-    temporary.replace(cache)
+    temporary = cache.with_name(f"{cache.name}.{os.getpid()}.tmp.npz")
+    try:
+        np.savez(
+            temporary,
+            cache_version=np.asarray([FACTOR_CACHE_VERSION]),
+            source_axis_signature=np.asarray([expected_axis_signature]),
+            entity_ids=environment_ids,
+            component_names=np.asarray([block.name for block in blocks], dtype=str),
+            component_hashes=np.asarray([block.state_hash for block in blocks], dtype=str),
+            factor_starts=factor_starts,
+            factor_stops=factor_stops,
+            factor_values=np.concatenate([block.values for block in blocks], axis=1),
+            factor_available=np.column_stack([block.available for block in blocks]),
+            reaction_design=reaction_design,
+            reaction_available=reaction_available,
+        )
+        temporary.replace(cache)
+    finally:
+        temporary.unlink(missing_ok=True)
     return tuple(blocks), reaction_design, reaction_available, environment_ids
 
 

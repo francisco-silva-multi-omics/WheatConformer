@@ -7,6 +7,7 @@ STATE="$DATA/audit/v2/stage1_v2_phase6_private_head_screen_server_cpu_v1"
 PID_FILE="$STATE/screen.pid"
 LATEST="$STATE/latest_log.txt"
 RUNS="$DATA/trained_models/stage1_v2_phase6_private_head_screen_v1_runs"
+REPLAY_RUNS="$DATA/trained_models/stage1_v2_phase6_private_head_screen_v1_same_seed_replay_runs"
 STATUS="$DATA/model_kernels/stage1_v2_phase6_private_head_screen_v1/phase_1/private_head_status.json"
 
 if [[ -s "$PID_FILE" ]]; then
@@ -34,7 +35,7 @@ for path in pathlib.Path(sys.argv[1]).glob("*/*/run_metadata.json"):
         continue
     if (
         value.get("status") == "PASS"
-        and value.get("protocol_version") == "stage1_v2_phase6_private_heads_tf_v1"
+        and value.get("protocol_version") == "stage1_v2_phase6_private_heads_tf_v2_integrity_hardened"
         and value.get("decoder_variable_count", 0) > 0
         and value.get("outer_test_metrics_read") is False
         and value.get("final_holdout_outcomes_read") is False
@@ -48,6 +49,13 @@ else
 fi
 echo "certified_new_runs=$COMPLETE/10"
 echo "reference_reuses=5/5"
+
+if [[ -d "$REPLAY_RUNS" ]]; then
+  REPLAYS="$(find "$REPLAY_RUNS" -name run_metadata.json -type f | wc -l | tr -d ' ')"
+else
+  REPLAYS=0
+fi
+echo "same_seed_replay_runs=$REPLAYS/2"
 
 if [[ -f "$STATUS" ]]; then
   "$PYTHON" - "$STATUS" <<'PY'

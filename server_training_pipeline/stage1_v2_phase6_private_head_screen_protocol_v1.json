@@ -120,7 +120,42 @@
     "state_count": 5,
     "reference_reuse_count": 5,
     "new_candidate_fit_count": 10,
-    "candidate_result_count": 15
+    "candidate_result_count": 15,
+    "same_seed_replay_fit_count": 2,
+    "same_seed_replay_state_id": "GNEW_EOBS__OUTER1__INNER1"
+  },
+  "integrity_hardening": {
+    "tensorflow_op_determinism_required": true,
+    "deterministic_tf_data_order_required": true,
+    "per_batch_finite_prediction_loss_gradient_assertions_required": true,
+    "factor_cache_expected_state_hash_validation_required": true,
+    "best_model_weights_persisted_and_checksummed": true,
+    "raw_training_and_validation_predictions_persisted_and_checksummed": true,
+    "calibrated_validation_predictions_persisted_and_checksummed": true,
+    "same_seed_replay": {
+      "state_id": "GNEW_EOBS__OUTER1__INNER1",
+      "candidates": [
+        "trait_private_residual_heads",
+        "family_shared_trait_private_residual_heads"
+      ],
+      "required_exact_artifacts": [
+        "best_model_weight_manifest.tsv",
+        "component_replay_manifest.tsv",
+        "training_observation_ids.npy",
+        "validation_observation_ids.npy",
+        "training_predictions_raw.npy",
+        "validation_predictions_raw.npy",
+        "validation_predictions_calibrated.npy"
+      ],
+      "same_runtime_and_thread_configuration_required": true,
+      "cross_hardware_byte_identity_claimed": false
+    },
+    "file_access_attestation": {
+      "inner_screen_scope": "controlled_process_only",
+      "os_level_complete_file_open_audit_performed": false,
+      "outer_evaluation_requires_syscall_or_os_audit_manifest": true,
+      "unrelated_process_file_access_excluded_from_claim": true
+    }
   },
   "candidates": {
     "current_huber_authoritative_row_mass": {
