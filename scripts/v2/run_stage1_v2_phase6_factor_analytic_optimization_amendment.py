@@ -22,10 +22,10 @@ from scripts.v2.run_stage1_v2_phase6_phase1 import validate_runtime
 
 PROTOCOL = Path(
     "server_training_pipeline/"
-    "stage1_v2_phase6_factor_analytic_optimization_amendment_protocol_v1.json"
+    "stage1_v2_phase6_factor_analytic_optimization_amendment_protocol_v2.json"
 )
 LOCK = Path(
-    "audit/v2/stage1_v2_phase6_factor_analytic_optimization_amendment_v1/"
+    "audit/v2/stage1_v2_phase6_factor_analytic_optimization_amendment_v2/"
     "FA_OPTIMIZATION_AMENDMENT_LOCK.json"
 )
 SOURCE_RUNS = Path(
@@ -33,26 +33,26 @@ SOURCE_RUNS = Path(
 )
 RUNS = Path(
     "trained_models/"
-    "stage1_v2_phase6_factor_analytic_optimization_amendment_v1_runs"
+    "stage1_v2_phase6_factor_analytic_optimization_amendment_v2_runs"
 )
 REPLAY_RUNS = Path(
     "trained_models/"
-    "stage1_v2_phase6_factor_analytic_optimization_amendment_v1_same_seed_replay_runs"
+    "stage1_v2_phase6_factor_analytic_optimization_amendment_v2_same_seed_replay_runs"
 )
 OUTPUT = Path(
     "model_kernels/"
-    "stage1_v2_phase6_factor_analytic_optimization_amendment_v1/phase_1"
+    "stage1_v2_phase6_factor_analytic_optimization_amendment_v2/phase_1"
 )
 TRAINER_MODULE = (
     "server_training_pipeline."
     "train_stage1_v2_phase6_factor_analytic_optimization_amendment_tf"
 )
 RUN_PROTOCOL = (
-    "stage1_v2_phase6_normalized_direction_factor_analytic_optimization_tf_v1"
+    "stage1_v2_phase6_normalized_direction_factor_analytic_optimization_tf_v2"
 )
 REFERENCE = "current_huber_authoritative_row_mass"
 SOURCE_REFERENCE = "hierarchy_test_weight_environment_oof_huber_v2"
-LOCK_STATUS = "PASS_FROZEN_STAGE1_V2_PHASE6_FA_OPTIMIZATION_AMENDMENT_V1"
+LOCK_STATUS = "PASS_FROZEN_STAGE1_V2_PHASE6_FA_OPTIMIZATION_AMENDMENT_V2"
 
 
 def read_json(path: Path) -> dict[str, Any]:
@@ -197,6 +197,9 @@ def execute_run(
     environment["PYTHONHASHSEED"] = str(seed)
     environment["TF_DETERMINISTIC_OPS"] = "1"
     environment["TF_CUDNN_DETERMINISTIC"] = "1"
+    environment["STAGE1_V2_DISABLE_COMPONENT_RECOVERY"] = (
+        "1" if output_override is not None else "0"
+    )
     environment["PYTHONPATH"] = str(code_root) + (
         os.pathsep + environment["PYTHONPATH"]
         if environment.get("PYTHONPATH")
@@ -653,6 +656,12 @@ def main() -> None:
     )
 
     candidate_runs = runs.loc[~runs["candidate"].eq(REFERENCE)]
+    recovered_fit_count = int(
+        candidate_runs["component_fit_recovered_from_v1"].eq(True).sum()
+    )
+    fresh_fit_count = int(
+        candidate_runs["component_model_training_performed_under_v2"].eq(True).sum()
+    )
     candidate_traits = traits.loc[~traits["candidate"].eq(REFERENCE)]
     candidate_guards = paired_guards.loc[~paired_guards["candidate"].eq(REFERENCE)]
     expected_traits = set(protocol["objective_policy"]["training_likelihood_traits"])
@@ -663,8 +672,16 @@ def main() -> None:
         "state_count_5": grid["state_id"].nunique() == 5,
         "result_count_15": len(runs) == 15,
         "reference_reuse_count_5": int(runs["candidate"].eq(REFERENCE).sum()) == 5,
-        "new_fit_count_10": len(candidate_runs) == 10
-        and candidate_runs["model_training_performed"].eq(True).all(),
+        "candidate_result_count_10": len(candidate_runs) == 10,
+        "component_fit_source_accounting_exact": (
+            recovered_fit_count + fresh_fit_count == 10
+        )
+        and candidate_runs["component_fit_source"].isin(
+            ["validated_v1_postfit_artifacts", "fresh_v2_training"]
+        ).all(),
+        "calibration_and_reporting_recomputed_under_v2": candidate_runs[
+            "calibration_and_reporting_recomputed_under_v2"
+        ].eq(True).all(),
         "FA_ranks_exact": set(
             candidate_runs["factor_analytic_rank"].dropna().astype(int)
         )
@@ -763,7 +780,10 @@ def main() -> None:
         "reference_candidate": REFERENCE,
         "state_count": 5,
         "reference_reuse_count": 5,
-        "new_model_fit_count": 10,
+        "candidate_result_count": 10,
+        "recovered_v1_component_fit_count": recovered_fit_count,
+        "fresh_v2_component_fit_count": fresh_fit_count,
+        "new_model_fit_count": fresh_fit_count,
         "same_seed_replay_fit_count": 2,
         "same_seed_replay_exact": bool(replay["status"].eq("PASS").all()),
         "primary_macro_traits": protocol["objective_policy"][

@@ -15,6 +15,11 @@ ROOT = Path(__file__).resolve().parents[1]
 PROTOCOL = (
     ROOT
     / "server_training_pipeline"
+    / "stage1_v2_phase6_factor_analytic_optimization_amendment_protocol_v2.json"
+)
+SOURCE_V1_PROTOCOL = (
+    ROOT
+    / "server_training_pipeline"
     / "stage1_v2_phase6_factor_analytic_optimization_amendment_protocol_v1.json"
 )
 PARENT = (
@@ -88,6 +93,7 @@ def test_amendment_preserves_all_non_objective_parent_contracts() -> None:
     assert value["test_weight_environment_oof_calibration"] == parent[
         "test_weight_environment_oof_calibration"
     ]
+    assert value["calibration_candidates"] == parent["calibration_candidates"]
     assert value["phase_1_acceptance"] == parent["phase_1_acceptance"]
     assert value["primary_traits"] == parent["primary_traits"]
     assert value["exploratory_traits"] == parent["exploratory_traits"]
@@ -152,6 +158,8 @@ def test_implementation_persists_activity_and_seals_outer_data() -> None:
     freeze = FREEZE.read_text(encoding="utf-8")
     packager = PACKAGER.read_text(encoding="utf-8")
     assert "component_activity_history.tsv" in trainer
+    assert "component_fit_recovery_provenance.json" in trainer
+    assert "STAGE1_V2_DISABLE_COMPONENT_RECOVERY" in trainer
     assert 'record_type="initialization"' in trainer
     assert "primary_macro_nrmse" in trainer
     assert "Not every amended FA tensor received a gradient" in trainer
@@ -164,6 +172,33 @@ def test_implementation_persists_activity_and_seals_outer_data() -> None:
     assert value["outer_test_outcomes_read"] is False
     assert value["final_holdout_outcomes_read"] is False
     assert value["future_predictions_allowed"] is False
+
+
+def test_v2_recovery_contract_preserves_the_failed_v1_implementation() -> None:
+    value = protocol()
+    source_v1 = json.loads(SOURCE_V1_PROTOCOL.read_text(encoding="utf-8"))
+    recovery = value["postfit_recovery_policy"]
+    assert value["protocol_version"].endswith("_v2")
+    assert "calibration_candidates" not in source_v1
+    assert recovery["source_code_commit"] == (
+        "b95a0519c73d630bf2af49611eb49238581dd76c"
+    )
+    assert recovery["source_failure_class"] == (
+        "missing_inherited_calibration_candidate_registry_after_component_fit"
+    )
+    assert recovery["source_run_metadata_required"] is False
+    assert recovery["incomplete_source_policy"] == "retrain_from_scratch"
+    assert recovery["invalid_source_policy"] == "fail_screen_integrity"
+    assert recovery["same_seed_replay_policy"] == (
+        "fresh_training_with_recovery_disabled"
+    )
+    assert set(recovery["recompute_under_v2"]) == {
+        "training_only_positive_calibration",
+        "training_only_TEST_WEIGHT_environment_oof_huber_calibration",
+        "calibrated_validation_predictions",
+        "validation_metrics_and_guards",
+        "run_metadata_and_artifact_hashes",
+    }
 
 
 def test_reference_and_candidates_use_the_same_six_trait_macro() -> None:

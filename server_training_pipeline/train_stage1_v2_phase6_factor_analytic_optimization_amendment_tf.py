@@ -7,6 +7,7 @@ import json
 import math
 import os
 import random
+import shutil
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -33,7 +34,7 @@ from .train_stage1_v2_phase6_tf import (
 
 PROTOCOL = Path(
     "server_training_pipeline/"
-    "stage1_v2_phase6_factor_analytic_optimization_amendment_protocol_v1.json"
+    "stage1_v2_phase6_factor_analytic_optimization_amendment_protocol_v2.json"
 )
 TRAINER = Path(
     "server_training_pipeline/"
@@ -44,7 +45,7 @@ PARENT_DECISION = Path(
     "FACTOR_ANALYTIC_PHASE1_DECISION.json"
 )
 RUN_PROTOCOL = (
-    "stage1_v2_phase6_normalized_direction_factor_analytic_optimization_tf_v1"
+    "stage1_v2_phase6_normalized_direction_factor_analytic_optimization_tf_v2"
 )
 
 
@@ -56,7 +57,7 @@ def load_protocol(root: Path) -> dict[str, Any]:
     code_root = Path(os.environ.get("WHEATCONFORMER_CODE_ROOT", root)).resolve()
     protocol = read_json(code_root / PROTOCOL)
     if protocol.get("protocol_version") != (
-        "stage1_v2_phase6_factor_analytic_optimization_amendment_v1"
+        "stage1_v2_phase6_factor_analytic_optimization_amendment_v2"
     ):
         raise ValueError("Unexpected FA optimization-amendment protocol")
     objective = protocol["objective_policy"]
@@ -94,6 +95,14 @@ def load_protocol(root: Path) -> dict[str, Any]:
     }
     if ranks != {2, 4}:
         raise ValueError(f"Unexpected bounded FA ranks: {sorted(ranks)}")
+    parent_protocol = read_json(
+        code_root
+        / "server_training_pipeline/stage1_v2_phase6_factor_analytic_screen_protocol_v1.json"
+    )
+    if protocol.get("calibration_candidates") != parent_protocol.get(
+        "calibration_candidates"
+    ):
+        raise ValueError("Inherited calibration candidate registry changed")
     parent = read_json(root / PARENT_DECISION)
     if parent.get("status") != protocol["parent_factor_analytic_status"]:
         raise ValueError("The terminal V1 FA decision is not the frozen parent")
@@ -281,6 +290,263 @@ def _activity_row(
     }
 
 
+def _factor_inventory(
+    genotype,
+    environment,
+    projection_design: np.ndarray,
+    projection_available: np.ndarray,
+    projection_ids: np.ndarray,
+) -> pd.DataFrame:
+    return pd.DataFrame(
+        [
+            {
+                "component_model": "historical_plus_normalized_direction_FA",
+                "component": block.name,
+                "axis": block.axis,
+                "entities": len(block.entity_ids),
+                "available_entities": int(block.available.sum()),
+                "rank": int(block.values.shape[1]),
+                "state_hash": block.state_hash,
+            }
+            for block in (*genotype, *environment)
+        ]
+        + [
+            {
+                "component_model": "historical_plus_normalized_direction_FA",
+                "component": "E_PROJECTION_CORE_V1_STANDARDIZED_FEATURES",
+                "axis": "environment",
+                "entities": len(projection_ids),
+                "available_entities": int(projection_available.sum()),
+                "rank": int(projection_design.shape[1]),
+                "state_hash": hashlib.sha256(
+                    np.asarray(projection_design, dtype="<f4").tobytes(order="C")
+                ).hexdigest(),
+            }
+        ]
+    )
+
+
+def _validated_recovered_component_fit(
+    *,
+    root: Path,
+    state_id: str,
+    candidate: str,
+    protocol: dict[str, Any],
+    candidate_contract: dict[str, Any],
+    replay_artifact_dir: Path,
+    training: pd.DataFrame,
+    validation: pd.DataFrame,
+    genotype,
+    environment,
+    genotype_columns: Sequence[str],
+    projection_design: np.ndarray,
+    projection_available: np.ndarray,
+    projection_ids: np.ndarray,
+    hierarchy_support: pd.DataFrame,
+    trait_names: Sequence[str],
+) -> legacy.FactorAnalyticFit | None:
+    if os.environ.get("STAGE1_V2_DISABLE_COMPONENT_RECOVERY") == "1":
+        return None
+    contract = protocol["postfit_recovery_policy"]
+    source = root / str(contract["source_run_root"]) / state_id / candidate
+    required = [str(name) for name in contract["reusable_artifacts"]]
+    present = [(source / name).is_file() for name in required]
+    if not any(present):
+        return None
+    if not all(present):
+        missing = [name for name, exists in zip(required, present) if not exists]
+        print(
+            json.dumps(
+                {
+                    "record_type": "component_fit_recovery_skipped",
+                    "state_id": state_id,
+                    "candidate": candidate,
+                    "reason": "incomplete_source_postfit_artifacts",
+                    "missing": missing,
+                }
+            ),
+            flush=True,
+        )
+        return None
+
+    expected_training_ids = training["phase4_adjusted_row_id"].astype(str).to_numpy()
+    expected_validation_ids = validation["phase4_adjusted_row_id"].astype(str).to_numpy()
+    training_ids = np.load(source / "training_observation_ids.npy", allow_pickle=False).astype(str)
+    validation_ids = np.load(source / "validation_observation_ids.npy", allow_pickle=False).astype(str)
+    if not np.array_equal(training_ids, expected_training_ids):
+        raise ValueError(f"Recovered training identifiers differ: {state_id} {candidate}")
+    if not np.array_equal(validation_ids, expected_validation_ids):
+        raise ValueError(f"Recovered validation identifiers differ: {state_id} {candidate}")
+    training_prediction = np.load(
+        source / "training_predictions_raw.npy", allow_pickle=False
+    )
+    validation_prediction = np.load(
+        source / "validation_predictions_raw.npy", allow_pickle=False
+    )
+    if training_prediction.shape != (len(training),) or not np.isfinite(
+        training_prediction
+    ).all():
+        raise ValueError("Recovered training predictions are invalid")
+    if validation_prediction.shape != (len(validation),) or not np.isfinite(
+        validation_prediction
+    ).all():
+        raise ValueError("Recovered validation predictions are invalid")
+
+    weight_manifest = pd.read_csv(source / "best_model_weight_manifest.tsv", sep="\t")
+    required_weight_columns = {
+        "variable_name",
+        "shape",
+        "path",
+        "sha256",
+        "parameter_count",
+    }
+    if not required_weight_columns.issubset(weight_manifest.columns):
+        raise ValueError("Recovered weight manifest schema is incomplete")
+    expected_rank = int(candidate_contract["factor_analytic_rank"])
+    expected_fa_shapes = {
+        "covariate_linked_fa_genotype_coefficients": (
+            int(genotype[0].values.shape[1]),
+            expected_rank,
+        ),
+        "covariate_linked_fa_environment_coefficients": (153, expected_rank),
+        "covariate_linked_fa_trait_loadings": (expected_rank, len(trait_names)),
+    }
+    observed_fa_shapes: dict[str, tuple[int, ...]] = {}
+    copied_paths: list[Path] = []
+    for row in weight_manifest.itertuples(index=False):
+        relative = Path(str(row.path))
+        if relative.is_absolute() or ".." in relative.parts:
+            raise ValueError(f"Unsafe recovered weight path: {relative}")
+        path = source / relative
+        if not path.is_file() or sha256_file(path) != str(row.sha256):
+            raise ValueError(f"Recovered weight checksum failed: {relative}")
+        name = str(row.variable_name).split(":", 1)[0]
+        for expected_name, expected_shape in expected_fa_shapes.items():
+            if name.endswith(expected_name):
+                array = np.load(path, allow_pickle=False)
+                if tuple(array.shape) != expected_shape or not np.isfinite(array).all():
+                    raise ValueError(f"Recovered FA weight is invalid: {expected_name}")
+                observed_fa_shapes[expected_name] = tuple(array.shape)
+        copied_paths.append(relative)
+    if observed_fa_shapes != expected_fa_shapes:
+        raise ValueError(
+            f"Recovered FA tensors disagree with the current state: {observed_fa_shapes}"
+        )
+
+    replay = pd.read_csv(source / "component_replay_manifest.tsv", sep="\t")
+    if set(replay["role"].astype(str)) != {"training", "validation"} or len(replay) != 2:
+        raise ValueError("Recovered replay manifest roles are invalid")
+    for row in replay.itertuples(index=False):
+        id_path = source / str(row.identifier_path)
+        prediction_path = source / str(row.prediction_path)
+        if sha256_file(id_path) != str(row.identifier_sha256):
+            raise ValueError("Recovered replay identifier checksum failed")
+        if sha256_file(prediction_path) != str(row.prediction_sha256):
+            raise ValueError("Recovered replay prediction checksum failed")
+        expected_rows = len(training) if str(row.role) == "training" else len(validation)
+        if int(row.rows) != expected_rows:
+            raise ValueError("Recovered replay row count differs from the current state")
+
+    activity = pd.read_csv(source / "component_activity_history.tsv", sep="\t")
+    record_types = activity["record_type"].astype(str)
+    if int(record_types.eq("initialization").sum()) != 1:
+        raise ValueError("Recovered activity has no unique initialization")
+    if int(record_types.eq("selected_checkpoint").sum()) != 1:
+        raise ValueError("Recovered activity has no unique selected checkpoint")
+    if not record_types.eq("training_epoch").any():
+        raise ValueError("Recovered activity contains no training epochs")
+    activity_summary = _activity_summary(activity, protocol)
+    if activity_summary["FA_optimization_path_certified"] is not True:
+        raise ValueError("Recovered component optimization path is uncertified")
+
+    replay_artifact_dir.mkdir(parents=True, exist_ok=True)
+    copied = [
+        Path("best_model_weight_manifest.tsv"),
+        Path("component_replay_manifest.tsv"),
+        Path("component_activity_history.tsv"),
+        Path("training_observation_ids.npy"),
+        Path("validation_observation_ids.npy"),
+        Path("training_predictions_raw.npy"),
+        Path("validation_predictions_raw.npy"),
+        *copied_paths,
+    ]
+    replay_artifacts: dict[str, str] = {}
+    for relative in copied:
+        destination = replay_artifact_dir / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source / relative, destination)
+        replay_artifacts[relative.as_posix()] = sha256_file(destination)
+
+    selected = activity.loc[record_types.eq("selected_checkpoint")].iloc[0]
+    epochs_completed = int(
+        pd.to_numeric(
+            activity.loc[record_types.eq("training_epoch"), "epoch"], errors="raise"
+        ).max()
+    )
+    active_training = training[genotype_columns[0]].ge(0).to_numpy()
+    active_training &= training["fa_environment_index"].ge(0).to_numpy()
+    active_training &= projection_available[
+        np.maximum(training["fa_environment_index"].to_numpy(dtype=int), 0)
+    ]
+    active_validation = validation[genotype_columns[0]].ge(0).to_numpy()
+    active_validation &= validation["fa_environment_index"].ge(0).to_numpy()
+    active_validation &= projection_available[
+        np.maximum(validation["fa_environment_index"].to_numpy(dtype=int), 0)
+    ]
+    provenance = {
+        "status": "PASS",
+        "protocol_version": contract["protocol_version"],
+        "state_id": state_id,
+        "candidate": candidate,
+        "source_implementation_version": contract["source_implementation_version"],
+        "source_code_commit": contract["source_code_commit"],
+        "source_failure_class": contract["source_failure_class"],
+        "source_run_directory": str(source),
+        "component_weights_and_raw_predictions_reused_without_change": True,
+        "training_and_validation_identifiers_revalidated_under_v2": True,
+        "calibration_metrics_guards_and_metadata_recomputed_under_v2": True,
+        "outer_test_metrics_read": False,
+        "outer_test_outcomes_read": False,
+        "final_holdout_outcomes_read": False,
+        "recovered_artifacts": dict(sorted(replay_artifacts.items())),
+    }
+    provenance_path = replay_artifact_dir / "component_fit_recovery_provenance.json"
+    legacy.write_json(provenance_path, provenance)
+    replay_artifacts[provenance_path.name] = sha256_file(provenance_path)
+    print(
+        json.dumps(
+            {
+                "record_type": "component_fit_recovered",
+                "state_id": state_id,
+                "candidate": candidate,
+                "epochs_completed": epochs_completed,
+            }
+        ),
+        flush=True,
+    )
+    return legacy.FactorAnalyticFit(
+        training_prediction=np.asarray(training_prediction),
+        validation_prediction=np.asarray(validation_prediction),
+        best_metric=float(selected["validation_primary6_macro_normalized_rmse"]),
+        epochs_completed=epochs_completed,
+        epoch_history=activity,
+        factor_inventory=_factor_inventory(
+            genotype,
+            environment,
+            projection_design,
+            projection_available,
+            projection_ids,
+        ),
+        hierarchy_support=hierarchy_support,
+        fa_rank=expected_rank,
+        fa_variable_count=3,
+        fa_parameter_count=int(sum(np.prod(shape) for shape in expected_fa_shapes.values())),
+        fa_active_training_rows=int(active_training.sum()),
+        fa_active_validation_rows=int(active_validation.sum()),
+        replay_artifacts=replay_artifacts,
+    )
+
+
 def fit_normalized_direction_component(
     *,
     root: Path,
@@ -347,6 +613,32 @@ def fit_normalized_direction_component(
         raise ValueError("FA amendment training likelihood lost a retained trait")
     if set(validation["trait"].astype(str)) != expected_traits:
         raise ValueError("FA amendment validation reporting lost a retained trait")
+
+    recovered = _validated_recovered_component_fit(
+        root=root,
+        state_id=state_id,
+        candidate=str(candidate_contract.get("candidate_name", ""))
+        or next(
+            name
+            for name, value in protocol["candidates"].items()
+            if value == candidate_contract
+        ),
+        protocol=protocol,
+        candidate_contract=candidate_contract,
+        replay_artifact_dir=replay_artifact_dir,
+        training=training,
+        validation=validation,
+        genotype=genotype,
+        environment=environment,
+        genotype_columns=genotype_columns,
+        projection_design=projection_design,
+        projection_available=projection_available,
+        projection_ids=projection_ids,
+        hierarchy_support=hierarchy_support,
+        trait_names=trait_names,
+    )
+    if recovered is not None:
+        return recovered
 
     random.seed(seed)
     np.random.seed(seed)
@@ -583,32 +875,12 @@ def fit_normalized_direction_component(
         validation_prediction,
     )
     replay_artifacts[activity_path.name] = sha256_file(activity_path)
-    inventory = pd.DataFrame(
-        [
-            {
-                "component_model": "historical_plus_normalized_direction_FA",
-                "component": block.name,
-                "axis": block.axis,
-                "entities": len(block.entity_ids),
-                "available_entities": int(block.available.sum()),
-                "rank": int(block.values.shape[1]),
-                "state_hash": block.state_hash,
-            }
-            for block in (*genotype, *environment)
-        ]
-        + [
-            {
-                "component_model": "historical_plus_normalized_direction_FA",
-                "component": "E_PROJECTION_CORE_V1_STANDARDIZED_FEATURES",
-                "axis": "environment",
-                "entities": len(projection_ids),
-                "available_entities": int(projection_available.sum()),
-                "rank": int(projection_design.shape[1]),
-                "state_hash": hashlib.sha256(
-                    np.asarray(projection_design, dtype="<f4").tobytes(order="C")
-                ).hexdigest(),
-            }
-        ]
+    inventory = _factor_inventory(
+        genotype,
+        environment,
+        projection_design,
+        projection_available,
+        projection_ids,
     )
     active_training = training[genotype_columns[0]].ge(0).to_numpy()
     active_training &= training["fa_environment_index"].ge(0).to_numpy()
@@ -771,6 +1043,9 @@ def train_amendment_run(
     )
     activity = pd.read_csv(out_dir / "component_activity_history.tsv", sep="\t")
     activity_summary = _activity_summary(activity, protocol)
+    component_fit_recovered = (
+        out_dir / "component_fit_recovery_provenance.json"
+    ).is_file()
     test_weight = trait_metrics.loc[
         trait_metrics["trait_name_canonical"].eq("TEST_WEIGHT")
     ]
@@ -792,6 +1067,17 @@ def train_amendment_run(
             "TEST_WEIGHT_validation_rows": int(test_weight.iloc[0]["rows"]),
             "TEST_WEIGHT_reporting_retained": True,
             "TEST_WEIGHT_calibration_retained": True,
+            "component_fit_recovered_from_v1": component_fit_recovered,
+            "component_fit_source": (
+                "validated_v1_postfit_artifacts"
+                if component_fit_recovered
+                else "fresh_v2_training"
+            ),
+            "component_model_training_performed_under_v2": (
+                not component_fit_recovered
+            ),
+            "model_training_performed": not component_fit_recovered,
+            "calibration_and_reporting_recomputed_under_v2": True,
             "normalized_direction_parameterization": True,
             "only_mutable_component": "covariate_linked_factor_analytic_optimization",
             "genotype_direction_L2_penalty": False,

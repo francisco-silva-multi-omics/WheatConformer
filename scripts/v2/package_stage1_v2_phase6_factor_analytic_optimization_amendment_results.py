@@ -13,26 +13,26 @@ import pandas as pd
 
 SUMMARY = Path(
     "model_kernels/"
-    "stage1_v2_phase6_factor_analytic_optimization_amendment_v1/phase_1"
+    "stage1_v2_phase6_factor_analytic_optimization_amendment_v2/phase_1"
 )
 RUNS = Path(
     "trained_models/"
-    "stage1_v2_phase6_factor_analytic_optimization_amendment_v1_runs"
+    "stage1_v2_phase6_factor_analytic_optimization_amendment_v2_runs"
 )
 REPLAY_RUNS = Path(
     "trained_models/"
-    "stage1_v2_phase6_factor_analytic_optimization_amendment_v1_same_seed_replay_runs"
+    "stage1_v2_phase6_factor_analytic_optimization_amendment_v2_same_seed_replay_runs"
 )
 SOURCE_RUNS = Path(
     "trained_models/stage1_v2_phase6_hierarchy_calibration_amendment_v2_runs"
 )
 SOURCE_REFERENCE = "hierarchy_test_weight_environment_oof_huber_v2"
 AUDIT = Path(
-    "audit/v2/stage1_v2_phase6_factor_analytic_optimization_amendment_v1"
+    "audit/v2/stage1_v2_phase6_factor_analytic_optimization_amendment_v2"
 )
 DEFAULT_OUTPUT = Path(
     "exports/"
-    "stage1_v2_phase6_factor_analytic_optimization_amendment_phase1_results_v1.tar.gz"
+    "stage1_v2_phase6_factor_analytic_optimization_amendment_phase1_results_v2.tar.gz"
 )
 EXPECTED_STATUSES = {
     "PASS_STAGE1_V2_PHASE6_FA_OPTIMIZATION_AMENDMENT_CANDIDATE_SELECTED",
@@ -72,6 +72,7 @@ RUN_REQUIRED = [
 ]
 CODE_FILES = [
     "server_training_pipeline/stage1_v2_phase6_factor_analytic_optimization_amendment_protocol_v1.json",
+    "server_training_pipeline/stage1_v2_phase6_factor_analytic_optimization_amendment_protocol_v2.json",
     "server_training_pipeline/train_stage1_v2_phase6_factor_analytic_optimization_amendment_tf.py",
     "scripts/v2/freeze_stage1_v2_phase6_factor_analytic_optimization_amendment.py",
     "scripts/v2/run_stage1_v2_phase6_factor_analytic_optimization_amendment.py",
@@ -139,7 +140,7 @@ def validate(root: Path) -> dict[str, Any]:
             raise FileNotFoundError(f"Incomplete FA amendment run {directory}: {absent}")
         metadata = read_json(directory / "run_metadata.json")
         if metadata.get("protocol_version") != (
-            "stage1_v2_phase6_normalized_direction_factor_analytic_optimization_tf_v1"
+            "stage1_v2_phase6_normalized_direction_factor_analytic_optimization_tf_v2"
         ):
             raise ValueError(f"Unexpected FA amendment run protocol: {directory}")
         if not all(
@@ -184,6 +185,9 @@ def collect_files(root: Path, code_root: Path) -> list[tuple[Path, Path]]:
         directory = root / RUNS / str(row.state_id) / str(row.candidate)
         for name in RUN_REQUIRED:
             add(directory / name, (directory / name).relative_to(root))
+        recovery = directory / "component_fit_recovery_provenance.json"
+        if recovery.is_file():
+            add(recovery, recovery.relative_to(root))
     replay_contract = [
         "run_metadata.json",
         "component_activity_history.tsv",
@@ -253,7 +257,7 @@ def main() -> None:
     result = {
         "status": "PASS",
         "protocol_version": (
-            "stage1_v2_phase6_factor_analytic_optimization_amendment_results_export_v1"
+            "stage1_v2_phase6_factor_analytic_optimization_amendment_results_export_v2"
         ),
         "archive": str(output),
         "archive_bytes": output.stat().st_size,
@@ -263,7 +267,7 @@ def main() -> None:
         "code_commit": commit,
         **overview,
     }
-    overview_path = output.parent / "fa_optimization_amendment_export_overview.json"
+    overview_path = output.parent / "fa_optimization_amendment_v2_export_overview.json"
     overview_path.write_text(
         json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )

@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -10,6 +11,10 @@ import pandas as pd
 
 
 PROTOCOL = Path(
+    "server_training_pipeline/"
+    "stage1_v2_phase6_factor_analytic_optimization_amendment_protocol_v2.json"
+)
+SOURCE_V1_PROTOCOL = Path(
     "server_training_pipeline/"
     "stage1_v2_phase6_factor_analytic_optimization_amendment_protocol_v1.json"
 )
@@ -50,7 +55,7 @@ RUNNER = Path(
     "run_stage1_v2_phase6_factor_analytic_optimization_amendment.py"
 )
 OUTPUT = Path(
-    "audit/v2/stage1_v2_phase6_factor_analytic_optimization_amendment_v1"
+    "audit/v2/stage1_v2_phase6_factor_analytic_optimization_amendment_v2"
 )
 
 
@@ -73,6 +78,13 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def git_file_sha256(code_root: Path, commit: str, path: Path) -> str:
+    content = subprocess.check_output(
+        ["git", "-C", str(code_root), "show", f"{commit}:{path.as_posix()}"],
+    )
+    return hashlib.sha256(content).hexdigest()
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Freeze the Stage-1 v2 FA optimization amendment"
@@ -84,6 +96,7 @@ def main() -> None:
     code_root = (args.code_root or root).resolve()
     paths = {
         "protocol": code_root / PROTOCOL,
+        "source_v1_protocol": code_root / SOURCE_V1_PROTOCOL,
         "parent_factor_analytic_protocol": code_root / PARENT_PROTOCOL,
         "parent_factor_analytic_decision": root / PARENT_DECISION,
         "post_hierarchy_plan": code_root / POST_HIERARCHY_PLAN,
@@ -109,6 +122,7 @@ def main() -> None:
     objective = protocol["objective_policy"]
     architecture = protocol["architecture_policy"]
     activity = protocol["activity_certification"]
+    recovery = protocol["postfit_recovery_policy"]
     primary_macro = set(objective["primary_macro_traits"])
     training_traits = set(objective["training_likelihood_traits"])
     demoted = set(objective["demoted_from_primary_macro"])
@@ -130,7 +144,7 @@ def main() -> None:
     ]
     checks = {
         "protocol_identity": protocol.get("protocol_version")
-        == "stage1_v2_phase6_factor_analytic_optimization_amendment_v1",
+        == "stage1_v2_phase6_factor_analytic_optimization_amendment_v2",
         "stage1_v2": protocol.get("stage1_version") == "Stage-1 v2",
         "parent_V1_terminal_no_advance": parent_decision.get("status")
         == "PASS_STAGE1_V2_PHASE6_FACTOR_ANALYTIC_PHASE1_COMPLETE_NO_ADVANCE"
@@ -215,6 +229,51 @@ def main() -> None:
             "test_weight_environment_oof_calibration"
         ]
         == parent_protocol["test_weight_environment_oof_calibration"],
+        "inherited_calibration_candidate_registry_exact": protocol[
+            "calibration_candidates"
+        ]
+        == parent_protocol["calibration_candidates"],
+        "source_v1_failure_contract_exact": recovery.get(
+            "source_failure_class"
+        )
+        == "missing_inherited_calibration_candidate_registry_after_component_fit"
+        and "calibration_candidates"
+        not in read_json(paths["source_v1_protocol"]),
+        "source_v1_protocol_identity": sha256_file(paths["source_v1_protocol"])
+        == recovery.get("source_protocol_sha256"),
+        "source_v1_trainer_identity": git_file_sha256(
+            code_root,
+            str(recovery["source_code_commit"]),
+            TRAINER,
+        )
+        == recovery.get("source_trainer_sha256"),
+        "postfit_recovery_is_bounded": set(recovery["reusable_artifacts"])
+        == {
+            "best_model_weight_manifest.tsv",
+            "component_replay_manifest.tsv",
+            "component_activity_history.tsv",
+            "training_observation_ids.npy",
+            "validation_observation_ids.npy",
+            "training_predictions_raw.npy",
+            "validation_predictions_raw.npy",
+        }
+        and recovery.get("source_run_metadata_required") is False
+        and recovery.get("incomplete_source_policy") == "retrain_from_scratch"
+        and recovery.get("invalid_source_policy") == "fail_screen_integrity",
+        "v2_recomputes_calibration_and_reporting": set(
+            recovery["recompute_under_v2"]
+        )
+        == {
+            "training_only_positive_calibration",
+            "training_only_TEST_WEIGHT_environment_oof_huber_calibration",
+            "calibrated_validation_predictions",
+            "validation_metrics_and_guards",
+            "run_metadata_and_artifact_hashes",
+        },
+        "same_seed_replay_forces_fresh_training": recovery.get(
+            "same_seed_replay_policy"
+        )
+        == "fresh_training_with_recovery_disabled",
         "acceptance_thresholds_exact": protocol["phase_1_acceptance"]
         == parent_protocol["phase_1_acceptance"],
         "trait_guards_exact": protocol["primary_traits"]
@@ -303,12 +362,12 @@ def main() -> None:
     )
     result = {
         "status": (
-            "PASS_FROZEN_STAGE1_V2_PHASE6_FA_OPTIMIZATION_AMENDMENT_V1"
+            "PASS_FROZEN_STAGE1_V2_PHASE6_FA_OPTIMIZATION_AMENDMENT_V2"
             if not failed
             else "FAIL_STAGE1_V2_PHASE6_FA_OPTIMIZATION_AMENDMENT_FREEZE"
         ),
         "protocol_version": (
-            "stage1_v2_phase6_factor_analytic_optimization_amendment_freeze_v1"
+            "stage1_v2_phase6_factor_analytic_optimization_amendment_freeze_v2"
         ),
         "selection_data": (
             "terminal_parent_inner_decision_and_future_inner_validation_only"
@@ -322,6 +381,9 @@ def main() -> None:
         "TEST_WEIGHT_retained_outside_primary_macro": True,
         "state_count": 5,
         "new_model_fit_count": 10,
+        "source_v1_component_fit_recovery_allowed_after_validation": True,
+        "fresh_v2_retraining_required_for_incomplete_sources": True,
+        "invalid_source_artifacts_fail_integrity": True,
         "same_seed_replay_fit_count": 2,
         "outer_evaluation_allowed": False,
         "outer_test_metrics_read": False,
