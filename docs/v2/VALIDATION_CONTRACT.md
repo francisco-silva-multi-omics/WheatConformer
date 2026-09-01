@@ -509,3 +509,26 @@ slopes. Only advancing architectures may enter all-125-state confirmation.
 Outer evaluation remains prohibited until the inner decision and one historical
 plus one projection-compatible specification are frozen. The final holdout
 remains sealed.
+
+## Phenology-readiness amendment
+
+The FA optimization decision is frozen as terminal no-advance while retaining
+the Huber-calibrated authoritative-row-mass reference. A phenology model cannot
+train until `E_PROJECTION_DAILY_HORIZON_V2` passes. Its daily endpoint is chosen
+from fixed endpoints 179, 209, 239, 269 and 299 using a 99% coverage rule over
+valid nonphenotypic harvest anchors. Global DTH/DTM quantiles and phenotype
+outcomes are prohibited as horizon evidence.
+
+Harvest metadata must be reconciled to one row per environment before
+coverage is calculated. Conflicting sowing or harvest dates are ineligible.
+Extension requests must be restricted to the exact checksummed 11,161-member
+Stage-1 v2 environment axis; source-map environments outside that axis cannot
+enter the request contract or its completion counts.
+
+The extension release must certify authoritative CDS ERA5-Land data, an
+independent Open-Meteo diagnostic, physical units and timestamps, matching
+historical/future derivations, explicit masks and 150 split-bound states with
+training-only imputation, scaling and factorization. Fold-local phenology uses
+cross-fitted inner-training DTH/DTM predictions; validation phenology outcomes
+cannot be model inputs. Phase 1 remains five `GNEW_EOBS` states and does not
+authorize outer or final-holdout access.

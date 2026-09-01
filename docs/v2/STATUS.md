@@ -732,6 +732,35 @@ Status: `PASS_READY_FOR_STAGE1_V2_PHASE6_INNER_MODEL_SELECTION`.
 The next permitted action is the preregistered five-inner-fold phase-1 screen.
 Outer evaluation is not yet authorized.
 
+## Stage-1 v2 Phase-6 FA terminal disposition and phenology readiness
+
+The normalized-direction factor-analytic amendment is terminal
+`NO_ADVANCE`. Both ranks were active and exactly replayable, but neither met
+the frozen gain, fold-win, trait and information-subset guards. The 25-state FA
+confirmation and outer evaluation remain prohibited. The retained reference is
+`current_huber_authoritative_row_mass`.
+
+The next gate is phenotype-safe phenology random regression. Before model
+fitting, a phenotype-blind horizon audit uses only sowing and nonphenotypic
+harvest metadata. The endpoint rule is the smallest preregistered 30-day
+endpoint covering at least 99% of valid harvest anchors. Observed DTH/DTM,
+inner-validation metrics, outer outcomes and future SSP values are forbidden
+for this decision. The current +179 archive is not assumed sufficient and
+`+240` is not an authorized endpoint. Any required daily extension must be
+fetched, normalized, certified for historical/future parity and rebound with
+training-only transformations across all 150 states before the five-state
+phenology screen can start.
+
+The phenotype-blind audit selected the preregistered `+269` endpoint. The
+existing `+179` horizon covers 71.5812% of eligible nonphenotypic harvest
+anchors; `+269` covers 99.0537%. The extension contract is restricted to the
+exact 11,161-environment certified Stage-1 v2 axis and contains 10,441 mapped
+environments and 6,720 unique daily requests for days `+180..+269`. Duplicate
+weather-manifest rows are reconciled to one audited row per environment, and
+conflicting dates are ineligible. The raw CDS ERA5-Land and independent
+Open-Meteo fetch is resumable and active; phenology training remains blocked
+until archive, normalization, parity and split-bound certifications pass.
+
 The executable Phase-1 implementation is now defined as a resumable 120-run
 grid: eight preregistered candidates by three frozen capacity configurations
 over `GNEW_EOBS` outer fold 1 and inner folds 1-5. The trainer consumes the

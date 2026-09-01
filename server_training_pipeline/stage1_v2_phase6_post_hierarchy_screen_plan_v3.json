@@ -1,0 +1,83 @@
+{
+  "protocol_version": "stage1_v2_phase6_post_hierarchy_screen_plan_v3",
+  "stage1_version": "Stage-1 v2",
+  "operation": "terminal_FA_disposition_and_phenology_readiness_activation",
+  "parent_plan": "server_training_pipeline/stage1_v2_phase6_post_hierarchy_screen_plan_v2.json",
+  "selection_data": "terminal_inner_validation_decisions_and_phenotype_blind_environment_metadata_only",
+  "retained_reference": "current_huber_authoritative_row_mass",
+  "outer_test_metrics_read": false,
+  "outer_test_outcomes_read": false,
+  "final_holdout_outcomes_read": false,
+  "ordered_gates": [
+    {
+      "order": 1,
+      "name": "trait_balanced_loss",
+      "status": "TERMINAL_NO_ADVANCE"
+    },
+    {
+      "order": 2,
+      "name": "trait_family_private_heads",
+      "status": "TERMINAL_NO_ADVANCE"
+    },
+    {
+      "order": 3,
+      "name": "covariate_linked_factor_analytic_decomposition",
+      "status": "TERMINAL_ACTIVE_COMPONENT_NO_ADVANCE",
+      "confirmation_allowed": false,
+      "outer_evaluation_allowed": false
+    },
+    {
+      "order": 4,
+      "name": "phenotype_safe_phenology_random_regression",
+      "status": "ACTIVE_READINESS_GATE",
+      "training_allowed": false,
+      "blocking_requirement": "E_PROJECTION_DAILY_HORIZON_V2"
+    },
+    {
+      "order": 5,
+      "name": "daily_environment_encoder",
+      "status": "DEFERRED_REQUIRES_DAILY_HISTORICAL_FUTURE_PARITY"
+    },
+    {
+      "order": 6,
+      "name": "bounded_sinn_residual",
+      "status": "DEFERRED_UNTIL_STATISTICAL_CORE_FROZEN"
+    },
+    {
+      "order": 7,
+      "name": "empirical_bayes_observed_environment_adapter",
+      "status": "DEFERRED_UNTIL_PROJECTION_CORE_FROZEN"
+    },
+    {
+      "order": 8,
+      "name": "marker_residual",
+      "status": "DEFERRED_UNTIL_SPLIT_LOCAL_PANEL_QC_CERTIFIED"
+    },
+    {
+      "order": 9,
+      "name": "locked_pheno_sinn_factorial_ablation",
+      "status": "NOT_ENTERED_NO_FA_SURVIVOR",
+      "future_entry_requires_new_preregistered_FA_backbone": true
+    },
+    {
+      "order": 10,
+      "name": "nonnegative_cross_fitted_stacking",
+      "status": "DEFERRED_UNTIL_ALL_BASE_MODELS_TERMINAL"
+    }
+  ],
+  "phenology_gate": {
+    "phase_1_scenario": "GNEW_EOBS",
+    "outer_folds": [1, 2, 3, 4, 5],
+    "inner_fold": 1,
+    "state_count": 5,
+    "fold_local_or_cross_fitted_phenology_required": true,
+    "observed_validation_heading_or_maturity_forbidden": true,
+    "daily_horizon_release_required_before_training": "E_PROJECTION_DAILY_HORIZON_V2",
+    "outer_evaluation_allowed": false
+  },
+  "product_policy": {
+    "historical_known_environment": "retained_Huber_hierarchy_reference",
+    "projection_compatible": "K_A_plus_prospective_phenology_plus_certified_daily_projection_features_and_masks",
+    "future_predictions_allowed": false
+  }
+}

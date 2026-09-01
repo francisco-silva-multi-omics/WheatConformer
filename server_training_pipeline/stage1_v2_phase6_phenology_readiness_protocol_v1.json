@@ -1,0 +1,77 @@
+{
+  "protocol_version": "stage1_v2_phase6_phenology_readiness_v1",
+  "stage1_version": "Stage-1 v2",
+  "operation": "phenotype_blind_daily_horizon_selection_and_extension_contract",
+  "post_hierarchy_plan": "server_training_pipeline/stage1_v2_phase6_post_hierarchy_screen_plan_v3.json",
+  "parent_FA_status": "PASS_STAGE1_V2_PHASE6_FA_OPTIMIZATION_AMENDMENT_COMPLETE_NO_ADVANCE",
+  "retained_reference": "current_huber_authoritative_row_mass",
+  "selection_data": "terminal_FA_decision_status_plus_nonphenotypic_sowing_and_harvest_metadata_only",
+  "horizon_policy": {
+    "current_inclusive_endpoint_day": 179,
+    "extension_start_day": 180,
+    "candidate_inclusive_endpoint_days": [179, 209, 239, 269, 299],
+    "minimum_valid_nonphenotypic_harvest_coverage": 0.99,
+    "minimum_valid_season_days": 30,
+    "maximum_valid_season_days": 400,
+    "harvest_anchor_precedence": ["harvest_finish_date", "harvest_start_date"],
+    "endpoint_selection_rule": "smallest_preregistered_endpoint_covering_at_least_99_percent_of_valid_nonphenotypic_harvest_anchors",
+    "global_DTH_or_DTM_quantiles_allowed": false,
+    "phenotype_values_allowed": false
+  },
+  "extension_contract": {
+    "release_id": "E_PROJECTION_DAILY_HORIZON_V2",
+    "authoritative_provider": "CDS_ERA5_Land",
+    "independent_diagnostic_provider": "Open_Meteo_ERA5",
+    "existing_days_reused": [-30, 179],
+    "extension_days_begin": 180,
+    "new_windows_must_be_complete_30_day_blocks": true,
+    "required_daily_variables": [
+      "tasmin_c",
+      "tasmean_c",
+      "tasmax_c",
+      "precipitation_mm_day",
+      "solar_radiation_mj_m2_day",
+      "relative_humidity_percent",
+      "wind_speed_m_s",
+      "surface_pressure_pa"
+    ],
+    "historical_and_future_derivation_must_match": true,
+    "member_resolved_CMIP6_must_remain_resolved": true,
+    "future_SSP_values_allowed_during_horizon_selection": false,
+    "future_predictions_allowed": false
+  },
+  "required_certification_before_phenology_training": [
+    "authoritative_CDS_extension_archive_complete_and_checksummed",
+    "Open_Meteo_cross_provider_extension_diagnostic_complete",
+    "daily_units_and_physical_ranges_certified",
+    "no_duplicate_nonmonotonic_or_missing_daily_timestamps",
+    "historical_and_future_feature_schema_parity",
+    "150_split_bound_states_rebuilt_with_training_only_imputation_scaling_and_factorization",
+    "explicit_missing_input_masks_certified",
+    "held_out_environments_transformed_with_frozen_training_parameters",
+    "fold_local_phenology_crossfit_contract_frozen"
+  ],
+  "prospective_phenology_contract": {
+    "targets": ["DAYS_TO_HEADING", "DAYS_TO_MATURITY"],
+    "training_target_rows": "inner_training_rows_only",
+    "training_predictions": "environment_grouped_cross_fitted_predictions_only",
+    "validation_predictions": "fit_on_complete_inner_training_partition_then_transform_validation",
+    "validation_target_values_allowed_as_inputs": false,
+    "outer_test_target_values_allowed": false,
+    "predictor_preprocessing": "inner_training_only",
+    "unknown_or_unsupported_environment_policy": "exact_Huber_reference_fallback",
+    "phase_1_state_count": 5,
+    "phase_1_scenario": "GNEW_EOBS",
+    "phase_1_inner_fold": 1,
+    "outer_evaluation_allowed": false
+  },
+  "protected_access": {
+    "phenotype_values_read_for_horizon_selection": false,
+    "inner_validation_metric_values_used_for_horizon_selection": false,
+    "outer_test_metrics_read": false,
+    "outer_test_outcomes_read": false,
+    "final_holdout_outcomes_read": false,
+    "future_SSP_values_read": false,
+    "future_predictions_generated": 0
+  }
+}
