@@ -757,9 +757,17 @@ anchors; `+269` covers 99.0537%. The extension contract is restricted to the
 exact 11,161-environment certified Stage-1 v2 axis and contains 10,441 mapped
 environments and 6,720 unique daily requests for days `+180..+269`. Duplicate
 weather-manifest rows are reconciled to one audited row per environment, and
-conflicting dates are ineligible. The raw CDS ERA5-Land and independent
-Open-Meteo fetch is resumable and active; phenology training remains blocked
-until archive, normalization, parity and split-bound certifications pass.
+conflicting dates are ineligible. The reuse-first amendment certifies 3,804
+extension requests and 342,360 daily rows from the checksummed continuous
+1981-2010 CDS archive. Ten requests at six coastal/off-land sites are
+structurally unavailable in ERA5-Land and receive explicit missing-weather
+masks. Only 2,906 requests, primarily from 2011-2023, require new CDS
+retrieval. The existing 7,094-request Open-Meteo/CDS cross-provider PASS is
+reused; no new Open-Meteo extension fetch is required. Superseded
+content-addressed cache files are preserved but cannot enter completion counts
+unless their request identifiers occur in the active manifest. Phenology
+training remains blocked until archive, normalization, parity and split-bound
+certifications pass.
 
 The executable Phase-1 implementation is now defined as a resumable 120-run
 grid: eight preregistered candidates by three frozen capacity configurations

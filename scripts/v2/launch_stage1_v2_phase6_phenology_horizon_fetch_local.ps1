@@ -2,7 +2,6 @@ param(
     [string]$Root = "E:\ensayos_genotipoXambiente",
     [string]$Python = "E:\ensayos_genotipoXambiente\.audit-venv\Scripts\python.exe",
     [int]$CdsWorkers = 4,
-    [int]$OpenMeteoWorkers = 8,
     [int]$Limit = 0
 )
 
@@ -17,13 +16,6 @@ $commands = @(
         Arguments = @(
             "-m", "scripts.v2.fetch_stage1_v2_phase6_phenology_horizon_extension",
             "fetch-cds", "--root", $Root, "--workers", "$CdsWorkers", "--limit", "$Limit"
-        )
-    },
-    @{
-        Name = "openmeteo"
-        Arguments = @(
-            "-m", "scripts.v2.fetch_stage1_v2_phase6_phenology_horizon_extension",
-            "fetch-openmeteo", "--root", $Root, "--workers", "$OpenMeteoWorkers", "--limit", "$Limit"
         )
     }
 )
@@ -42,5 +34,6 @@ foreach ($command in $commands) {
 }
 
 $logDir | Set-Content -Encoding UTF8 (Join-Path $Root "audit\v2\stage1_v2_phase6_phenology_readiness_v1\latest_fetch_log_dir.txt")
-Write-Host "Started resumable phenology horizon fetches"
+Write-Host "Started reuse-first CDS phenology horizon fetch"
+Write-Host "No new Open-Meteo fetch is required; the frozen 7,094-request cross-provider audit is reused"
 Write-Host "Logs: $logDir"

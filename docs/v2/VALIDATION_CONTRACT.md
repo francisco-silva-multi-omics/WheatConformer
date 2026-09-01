@@ -525,6 +525,17 @@ Extension requests must be restricted to the exact checksummed 11,161-member
 Stage-1 v2 environment axis; source-map environments outside that axis cannot
 enter the request contract or its completion counts.
 
+Requests wholly contained in 1981-2010 at an exact certified site may reuse
+the checksummed continuous CDS daily reference only when every requested day
+has complete finite climate values inside the frozen physical domains. A
+structurally unavailable ERA5-Land site receives an explicit missing-weather
+mask rather than silent imputation or a redundant same-point fetch. New CDS
+retrieval is permitted only for the uncovered date set. The existing
+7,094-request cross-provider
+PASS remains the Open-Meteo diagnostic contract; no complete second-provider
+extension download is required. Superseded content-addressed downloads remain
+preserved, but only active-manifest identifiers count toward readiness.
+
 The extension release must certify authoritative CDS ERA5-Land data, an
 independent Open-Meteo diagnostic, physical units and timestamps, matching
 historical/future derivations, explicit masks and 150 split-bound states with

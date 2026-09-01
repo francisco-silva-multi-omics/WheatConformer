@@ -45,6 +45,12 @@ CERTIFIED_ENVIRONMENT_AXIS = Path(
     "environment/v2/e_projection_core_v1_split_bound_historical_v1/states/"
     "GNEW_EOBS__OUTER1__INNER1/environment_entities.tsv"
 )
+BIAS_REFERENCE_DAILY = Path(
+    "environment/v2/e_projection_core_v1_historical_daily/cds_bias_reference"
+)
+CROSS_PROVIDER_PROVENANCE = Path(
+    "audit/v2/phase6a_cross_provider_audit_v1/cross_provider_provenance.json"
+)
 FA_RELEASE = Path("audit/v2/stage1_v2_phase6_fa_terminal_no_advance_v1")
 OUTPUT = Path("audit/v2/stage1_v2_phase6_phenology_readiness_v1")
 
@@ -160,8 +166,11 @@ def harvest_horizon_audit(
 
 
 def extension_inventories(
-    environment_map: pd.DataFrame, endpoint: int, extension_start: int
-) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    environment_map: pd.DataFrame,
+    endpoint: int,
+    extension_start: int,
+    reference_daily: pd.DataFrame | None = None,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     local = environment_map.copy()
     local["latitude"] = pd.to_numeric(local["latitude"], errors="coerce")
     local["longitude"] = pd.to_numeric(local["longitude"], errors="coerce")
@@ -213,8 +222,126 @@ def extension_inventories(
     daily["required_daily_variables"] = ";".join(DAILY_VARIABLES)
     daily["source_archive_status"] = "READY_PHENOLOGY_HORIZON_EXTENSION"
     daily["request_status"] = "READY_TO_FETCH"
-    cds = build_cds_request_inventory(daily)
-    return mapping, daily, cds
+    if reference_daily is None:
+        daily["source_route"] = "FETCH_CDS_EXTENSION"
+        reuse = daily.iloc[0:0].copy()
+        masked = daily.iloc[0:0].copy()
+    else:
+        reference = reference_daily.copy()
+        daily["_latitude_key"] = pd.to_numeric(daily["latitude"]).round(5)
+        daily["_longitude_key"] = pd.to_numeric(daily["longitude"]).round(5)
+        reference["_latitude_key"] = pd.to_numeric(reference["latitude"]).round(5)
+        reference["_longitude_key"] = pd.to_numeric(reference["longitude"]).round(5)
+        reference_columns = [
+            "_latitude_key",
+            "_longitude_key",
+            "reference_site_id",
+            "reference_request_id",
+            "reference_start",
+            "reference_end",
+            "reference_daily_path",
+            "reference_daily_sha256",
+            "reference_metadata_path",
+            "reference_metadata_sha256",
+            "reference_required_climate_complete_days",
+            "reference_required_climate_incomplete_days",
+        ]
+        daily = daily.merge(
+            reference[reference_columns],
+            on=["_latitude_key", "_longitude_key"],
+            how="left",
+            validate="many_to_one",
+        )
+        start = pd.to_datetime(daily["request_start_date"], errors="raise")
+        end = pd.to_datetime(daily["request_end_date"], errors="raise")
+        reference_start = pd.to_datetime(daily["reference_start"], errors="coerce")
+        reference_end = pd.to_datetime(daily["reference_end"], errors="coerce")
+        date_covered = start.ge(reference_start) & end.le(reference_end)
+        reference_complete = (
+            pd.to_numeric(
+                daily["reference_required_climate_incomplete_days"], errors="coerce"
+            ).eq(0)
+            & pd.to_numeric(
+                daily["reference_required_climate_complete_days"], errors="coerce"
+            ).gt(0)
+        )
+        reusable = date_covered & reference_complete
+        structurally_unavailable = date_covered & ~reference_complete
+        daily["source_route"] = np.select(
+            [reusable, structurally_unavailable],
+            [
+                "REUSE_CERTIFIED_CDS_1981_2010",
+                "MASKED_NO_VALID_CDS_LAND_REFERENCE",
+            ],
+            default="FETCH_CDS_EXTENSION",
+        )
+        reuse = daily.loc[reusable].copy()
+        masked = daily.loc[structurally_unavailable].copy()
+        daily[reference_columns[2:]] = daily[reference_columns[2:]].astype(object)
+        daily.loc[~date_covered, reference_columns[2:]] = ""
+        daily = daily.drop(columns=["_latitude_key", "_longitude_key"])
+        reuse = reuse.drop(columns=["_latitude_key", "_longitude_key"])
+        masked = masked.drop(columns=["_latitude_key", "_longitude_key"])
+    fetch_daily = daily.loc[daily["source_route"].eq("FETCH_CDS_EXTENSION")]
+    if len(fetch_daily):
+        cds = build_cds_request_inventory(fetch_daily)
+    else:
+        cds = pd.DataFrame(
+            columns=[
+                "request_id",
+                "source_request_id",
+                "dataset",
+                "latitude",
+                "longitude",
+                "request_start_date",
+                "request_end_date",
+                "variable",
+                "data_format",
+                "mapped_environment_count",
+                "request_payload_json",
+                "request_status",
+            ]
+        )
+    return mapping, daily, reuse, masked, cds
+
+
+def load_bias_reference_daily(root: Path, directory: Path) -> pd.DataFrame:
+    rows = []
+    for metadata_path in sorted(directory.rglob("*.json")):
+        record = read_json(metadata_path)
+        if record.get("status") != "PASS":
+            continue
+        output_path = resolve(root, Path(str(record["output_path"])))
+        if not output_path.is_file():
+            raise FileNotFoundError(f"Certified CDS reference is absent: {output_path}")
+        if sha256_file(output_path) != record["output_sha256"]:
+            raise ValueError(f"Certified CDS reference checksum changed: {output_path}")
+        rows.append(
+            {
+                "latitude": record["latitude"],
+                "longitude": record["longitude"],
+                "reference_site_id": record["site_id"],
+                "reference_request_id": record["request_id"],
+                "reference_start": record["internal_start"],
+                "reference_end": record["internal_end"],
+                "reference_daily_path": record["output_path"],
+                "reference_daily_sha256": record["output_sha256"],
+                "reference_metadata_path": metadata_path.relative_to(root).as_posix(),
+                "reference_metadata_sha256": sha256_file(metadata_path),
+                "reference_required_climate_complete_days": record[
+                    "required_climate_complete_days"
+                ],
+                "reference_required_climate_incomplete_days": record[
+                    "required_climate_incomplete_days"
+                ],
+            }
+        )
+    reference = pd.DataFrame(rows)
+    if len(reference) != 907 or not reference["reference_site_id"].is_unique:
+        raise ValueError("Continuous CDS reference does not contain 907 unique sites")
+    if reference[["latitude", "longitude"]].duplicated().any():
+        raise ValueError("Continuous CDS reference coordinates are not unique")
+    return reference
 
 
 def main() -> None:
@@ -244,6 +371,7 @@ def main() -> None:
         "projection_release": resolve(root, PROJECTION_RELEASE),
         "split_release": resolve(root, SPLIT_RELEASE),
         "certified_environment_axis": resolve(root, CERTIFIED_ENVIRONMENT_AXIS),
+        "cross_provider_provenance": resolve(root, CROSS_PROVIDER_PROVENANCE),
     }
     missing = [str(path) for path in paths.values() if not path.is_file()]
     if missing:
@@ -265,6 +393,8 @@ def main() -> None:
     axis_ids = environment_axis["environment_id"].astype(str)
     environment_map_ids = environment_map["environment_id"].astype(str)
     environment_map = environment_map.loc[environment_map_ids.isin(set(axis_ids))].copy()
+    reference_daily = load_bias_reference_daily(root, resolve(root, BIAS_REFERENCE_DAILY))
+    cross_provider = read_json(paths["cross_provider_provenance"])
 
     audit, coverage, endpoint = harvest_horizon_audit(
         weather, protocol["horizon_policy"]
@@ -277,11 +407,14 @@ def main() -> None:
     mapping = pd.DataFrame()
     daily = pd.DataFrame()
     cds = pd.DataFrame()
+    reuse = pd.DataFrame()
+    masked = pd.DataFrame()
     if endpoint is not None and extension_required:
-        mapping, daily, cds = extension_inventories(
+        mapping, daily, reuse, masked, cds = extension_inventories(
             environment_map,
             endpoint,
             int(protocol["horizon_policy"]["extension_start_day"]),
+            reference_daily,
         )
 
     candidate_rows = fa_table.loc[
@@ -348,6 +481,17 @@ def main() -> None:
         "extension_source_map_matches_certified_axis": len(environment_map) == 11161
         and environment_map["environment_id"].is_unique
         and set(environment_map["environment_id"]) == set(axis_ids),
+        "continuous_CDS_reference_907_sites": len(reference_daily) == 907,
+        "extension_routes_exhaustive": not extension_required
+        or len(reuse) + len(masked) + len(cds) == len(daily),
+        "cross_provider_prior_certification_pass": cross_provider.get("status")
+        == "PASS"
+        and int(cross_provider.get("matched_request_count", 0)) == 7094
+        and int(cross_provider.get("flagged_variable_count", -1)) == 0,
+        "new_Open_Meteo_extension_fetch_not_required": protocol[
+            "extension_contract"
+        ]["cross_provider_policy"]["new_Open_Meteo_extension_fetch_required"]
+        is False,
         "no_future_or_protected_outcome_access": all(
             protocol["protected_access"][key] is False
             for key in (
@@ -411,6 +555,8 @@ def main() -> None:
     if extension_required:
         mapping_path = extension / "environment_daily_extension_map.tsv"
         daily_path = extension / "daily_request_inventory.tsv"
+        reuse_path = extension / "certified_CDS_reference_reuse_inventory.tsv"
+        masked_path = extension / "masked_CDS_reference_inventory.tsv"
         cds_path = extension / "cds_era5_land_request_inventory.tsv"
         mapping.to_csv(
             mapping_path,
@@ -424,6 +570,18 @@ def main() -> None:
             index=False,
             lineterminator="\n",
         )
+        reuse.to_csv(
+            reuse_path,
+            sep="\t",
+            index=False,
+            lineterminator="\n",
+        )
+        masked.to_csv(
+            masked_path,
+            sep="\t",
+            index=False,
+            lineterminator="\n",
+        )
         cds.to_csv(
             cds_path,
             sep="\t",
@@ -432,7 +590,7 @@ def main() -> None:
         )
         extension_contract = {
             "status": "PASS",
-            "protocol_version": "stage1_v2_phase6_phenology_daily_horizon_extension_v1",
+            "protocol_version": "stage1_v2_phase6_phenology_daily_horizon_extension_v2_reuse_first",
             "selection_data": "stage1_v2_environment_identifiers_coordinates_and_sowing_metadata_only",
             "inclusive_extension_days": [
                 int(protocol["horizon_policy"]["extension_start_day"]),
@@ -440,6 +598,17 @@ def main() -> None:
             ],
             "environment_count": len(mapping),
             "request_count": len(daily),
+            "certified_CDS_reference_reuse_request_count": len(reuse),
+            "masked_no_valid_CDS_land_reference_request_count": len(masked),
+            "new_CDS_fetch_request_count": len(cds),
+            "new_Open_Meteo_fetch_request_count": 0,
+            "cross_provider_certification_path": paths[
+                "cross_provider_provenance"
+            ].relative_to(root).as_posix(),
+            "cross_provider_certification_sha256": sha256_file(
+                paths["cross_provider_provenance"]
+            ),
+            "superseded_extension_cache_policy": "preserve_content_addressed_files_but_use_only_active_manifest_request_ids",
             "phenotype_values_read": False,
             "inner_validation_metrics_read": False,
             "outer_test_metrics_read": False,
@@ -450,6 +619,8 @@ def main() -> None:
             "artifacts": {
                 mapping_path.name: sha256_file(mapping_path),
                 daily_path.name: sha256_file(daily_path),
+                reuse_path.name: sha256_file(reuse_path),
+                masked_path.name: sha256_file(masked_path),
                 cds_path.name: sha256_file(cds_path),
             },
         }
@@ -489,6 +660,10 @@ def main() -> None:
             else None
         ),
         "extension_request_count": len(daily),
+        "extension_reused_CDS_request_count": len(reuse),
+        "extension_masked_no_valid_CDS_land_request_count": len(masked),
+        "extension_new_CDS_fetch_request_count": len(cds),
+        "extension_new_Open_Meteo_fetch_request_count": 0,
         "extension_environment_count": len(mapping),
         "phenology_phase1_state_count": int(
             protocol["prospective_phenology_contract"]["phase_1_state_count"]
@@ -518,6 +693,9 @@ def main() -> None:
             "split_release": sha256_file(paths["split_release"]),
             "certified_environment_axis": sha256_file(
                 paths["certified_environment_axis"]
+            ),
+            "cross_provider_provenance": sha256_file(
+                paths["cross_provider_provenance"]
             ),
         },
     }

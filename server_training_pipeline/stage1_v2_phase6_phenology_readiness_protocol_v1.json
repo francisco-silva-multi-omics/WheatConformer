@@ -23,6 +23,18 @@
     "authoritative_provider": "CDS_ERA5_Land",
     "independent_diagnostic_provider": "Open_Meteo_ERA5",
     "existing_days_reused": [-30, 179],
+    "continuous_CDS_reference_reuse": {
+      "period": ["1981-01-01", "2010-12-31"],
+      "eligibility": "exact_certified_site_and_complete_requested_date_interval",
+      "source": "environment/v2/e_projection_core_v1_historical_daily/cds_bias_reference",
+      "new_fetch_policy": "only_requests_not_fully_covered_by_the_certified_continuous_reference"
+    },
+    "cross_provider_policy": {
+      "existing_certification": "audit/v2/phase6a_cross_provider_audit_v1/cross_provider_provenance.json",
+      "matched_request_count": 7094,
+      "new_Open_Meteo_extension_fetch_required": false,
+      "reason": "the_provider_and_normalization_pipeline_are_already_certified_on_all_original_trial_windows"
+    },
     "extension_days_begin": 180,
     "new_windows_must_be_complete_30_day_blocks": true,
     "required_daily_variables": [
@@ -41,8 +53,8 @@
     "future_predictions_allowed": false
   },
   "required_certification_before_phenology_training": [
-    "authoritative_CDS_extension_archive_complete_and_checksummed",
-    "Open_Meteo_cross_provider_extension_diagnostic_complete",
+    "authoritative_CDS_reference_reuse_and_uncovered_extension_archive_complete_and_checksummed",
+    "existing_Open_Meteo_cross_provider_certification_bound_and_unchanged",
     "daily_units_and_physical_ranges_certified",
     "no_duplicate_nonmonotonic_or_missing_daily_timestamps",
     "historical_and_future_feature_schema_parity",

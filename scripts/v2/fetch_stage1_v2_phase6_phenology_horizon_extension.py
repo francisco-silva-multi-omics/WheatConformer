@@ -13,7 +13,6 @@ from server_training_pipeline.phase6a_environment_source_recovery import (
     cds_api_payload,
     credential_present,
     read_json,
-    run_fetch,
     sha256_file,
     write_json_atomic,
     write_tsv,
@@ -24,9 +23,6 @@ CONTRACT = Path(
     "audit/v2/stage1_v2_phase6_phenology_readiness_v1/horizon_extension_contract"
 )
 CDS_CACHE = Path("environment/v2/e_projection_daily_horizon_v2_cds_extension_v1")
-OPENMETEO_CACHE = Path(
-    "environment/v2/e_projection_daily_horizon_v2_openmeteo_extension_v1"
-)
 MAXIMUM_CDS_WORKERS = 20
 
 
@@ -218,31 +214,17 @@ def fetch_cds(
     return provenance
 
 
-def fetch_openmeteo(
-    root: Path,
-    contract_dir: Path,
-    cache: Path,
-    limit: int,
-    workers: int,
-) -> dict[str, Any]:
-    return run_fetch(
-        root=root,
-        contract_dir=contract_dir,
-        cache=cache,
-        limit=limit,
-        workers=workers,
-        timeout=120,
-        retries=5,
+def status(root: Path, contract_dir: Path, cds_cache: Path) -> dict:
+    contract, reuse_inventory = _validate_contract(
+        contract_dir, "certified_CDS_reference_reuse_inventory.tsv"
     )
-
-
-def status(root: Path, contract_dir: Path, cds_cache: Path, openmeteo_cache: Path) -> dict:
     _, cds_inventory = _validate_contract(
         contract_dir, "cds_era5_land_request_inventory.tsv"
     )
-    _, openmeteo_inventory = _validate_contract(
-        contract_dir, "daily_request_inventory.tsv"
+    _, masked_inventory = _validate_contract(
+        contract_dir, "masked_CDS_reference_inventory.tsv"
     )
+    _, all_inventory = _validate_contract(contract_dir, "daily_request_inventory.tsv")
 
     def resolved(path: Path, statuses: set[str]) -> int:
         if not path.is_file():
@@ -261,47 +243,53 @@ def status(root: Path, contract_dir: Path, cds_cache: Path, openmeteo_cache: Pat
         )
 
     cds = pd.read_csv(cds_inventory, sep="\t", dtype=str)
-    openmeteo = pd.read_csv(openmeteo_inventory, sep="\t", dtype=str)
+    reuse = pd.read_csv(reuse_inventory, sep="\t", dtype=str)
+    masked = pd.read_csv(masked_inventory, sep="\t", dtype=str)
+    all_requests = pd.read_csv(all_inventory, sep="\t", dtype=str)
     cds_ids = set(cds["request_id"])
-    openmeteo_ids = set(openmeteo["request_id"])
+    cds_resolved = max(
+        resolved(
+            cds_cache / "cds_era5_land_fetch_index.tsv",
+            {"FETCHED_RAW", "CACHED"},
+        ),
+        cached_requests(cds_cache, cds_ids),
+    )
 
     result = {
         "status": "PASS",
-        "protocol_version": "stage1_v2_phase6_phenology_daily_horizon_extension_status_v1",
-        "CDS_resolved": max(
-            resolved(
-                cds_cache / "cds_era5_land_fetch_index.tsv",
-                {"FETCHED_RAW", "CACHED"},
-            ),
-            cached_requests(cds_cache, cds_ids),
-        ),
-        "CDS_total": len(cds),
-        "OpenMeteo_resolved": max(
-            resolved(
-                openmeteo_cache / "daily_request_fetch_index.tsv", {"FETCHED", "CACHED"}
-            ),
-            cached_requests(openmeteo_cache, openmeteo_ids),
-        ),
-        "OpenMeteo_total": len(openmeteo),
+        "protocol_version": "stage1_v2_phase6_phenology_daily_horizon_extension_status_v2_reuse_first",
+        "extension_request_count": len(all_requests),
+        "certified_CDS_reference_reuse_count": len(reuse),
+        "explicit_missing_weather_mask_count": len(masked),
+        "new_CDS_fetch_resolved": cds_resolved,
+        "new_CDS_fetch_total": len(cds),
+        "new_OpenMeteo_fetch_total": 0,
+        "cross_provider_certification_reused": contract.get(
+            "cross_provider_certification_sha256"
+        )
+        is not None,
         "phenotype_values_read": False,
         "outer_test_outcomes_read": False,
         "final_holdout_outcomes_read": False,
         "future_predictions_generated": 0,
     }
-    result["raw_archives_complete"] = (
-        result["CDS_resolved"] == result["CDS_total"]
-        and result["OpenMeteo_resolved"] == result["OpenMeteo_total"]
+    result["required_raw_archives_complete"] = (
+        len(reuse) + result["new_CDS_fetch_resolved"]
+        == len(all_requests) - len(masked)
+    )
+    result["extension_source_resolution_complete"] = (
+        len(reuse) + len(masked) + result["new_CDS_fetch_resolved"]
+        == len(all_requests)
     )
     return result
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Fetch the phenology daily-horizon extension")
-    parser.add_argument("command", choices=["fetch-cds", "fetch-openmeteo", "status"])
+    parser.add_argument("command", choices=["fetch-cds", "status"])
     parser.add_argument("--root", type=Path, default=Path.cwd())
     parser.add_argument("--contract-dir", type=Path, default=CONTRACT)
     parser.add_argument("--cds-cache", type=Path, default=CDS_CACHE)
-    parser.add_argument("--openmeteo-cache", type=Path, default=OPENMETEO_CACHE)
     parser.add_argument("--limit", type=int, default=0)
     parser.add_argument("--workers", type=int, default=8)
     return parser.parse_args()
@@ -316,15 +304,10 @@ def main() -> None:
 
     contract = resolve(args.contract_dir)
     cds_cache = resolve(args.cds_cache)
-    openmeteo_cache = resolve(args.openmeteo_cache)
     if args.command == "fetch-cds":
         result = fetch_cds(contract, cds_cache, args.limit, args.workers)
-    elif args.command == "fetch-openmeteo":
-        result = fetch_openmeteo(
-            root, contract, openmeteo_cache, args.limit, args.workers
-        )
     else:
-        result = status(root, contract, cds_cache, openmeteo_cache)
+        result = status(root, contract, cds_cache)
     print(json.dumps(result, indent=2, sort_keys=True))
 
 
